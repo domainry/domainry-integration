@@ -3,13 +3,13 @@ module github.com/domainry/domainry-integration
 go 1.26.0
 
 require (
-	github.com/domainry/domainry-integration-sdk v0.0.0
-	github.com/domainry/domainry-orm v0.1.25-0.20260829222221-e316e284305e
+	github.com/domainry/domainry-integration-sdk v0.1.0
+	github.com/domainry/domainry-orm v0.1.25
 	modernc.org/sqlite v1.57.0
 )
 
 require (
-	github.com/domainry/domainry-connector-sdk v0.0.0
+	github.com/domainry/domainry-connector-sdk v0.1.0-dev.12
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
@@ -20,9 +20,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/domainry/domainry-integration-sdk => ../domainry-integration-sdk
-
-replace github.com/domainry/domainry-connector-sdk => ../domainry-connector-sdk
-
-replace github.com/domainry/domainry-orm => ../domainry-orm

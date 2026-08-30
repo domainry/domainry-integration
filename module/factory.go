@@ -6,7 +6,7 @@ import (
 
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
-	integrationpersistence "github.com/domainry/domainry-integration/internal/persistence"
+	integrationpersistence "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/integration"
 )
 
 type Factory struct{}

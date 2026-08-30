@@ -1,4 +1,4 @@
-package persistence
+package integration
 
 import (
 	"fmt"
