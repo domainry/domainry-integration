@@ -20,7 +20,7 @@ func NewCatalogStore(database modulehost.Database, dialect modulehost.Dialect) *
 }
 
 func (s *CatalogStore) ListConnectorDefinitions(ctx context.Context) ([]integrationsdk.ConnectorDefinition, error) {
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "connector_definitions").
+	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_connector_definitions").
 		Columns("resource_key", "name", "payload_json").
 		Where(ormbuilder.IsNull("disabled_at")).
 		OrderBy(ormbuilder.Ascending("resource_key")).Build()

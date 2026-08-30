@@ -4,7 +4,7 @@
 configuration, inbound webhook/event processing, event mapping, Provider task
 state, Provider invocation evidence, and Web Push subscription/readiness state.
 
-Runtime owns only its local `runtime_publication_outbox` handoff because that
+Runtime owns only its local `_publication_outbox` handoff because that
 row must commit atomically with Runtime Record, Action and Workflow facts.
 Web Push endpoint, `p256dh`, and auth material never enter that Runtime handoff;
 Integration resolves the public `subscription_id` immediately before Provider

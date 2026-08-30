@@ -149,7 +149,7 @@ func (s *DeliveryStore) connection(ctx context.Context, request integrationsdk.D
 	if request.ConnectionKey != "" {
 		predicates = append(predicates, ormbuilder.Equal("connection_key", request.ConnectionKey))
 	}
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "integration_connections").Columns("connection_key", "workspace_id", "connector_key", "provider_key", "status", "config_json", "secret_refs_json").Where(ormbuilder.And(predicates...)).OrderBy(ormbuilder.Ascending("connection_key")).Limit(2).Build()
+	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_connections").Columns("connection_key", "workspace_id", "connector_key", "provider_key", "status", "config_json", "secret_refs_json").Where(ormbuilder.And(predicates...)).OrderBy(ormbuilder.Ascending("connection_key")).Limit(2).Build()
 	if err != nil {
 		return deliveryConnection{}, err
 	}
@@ -185,14 +185,14 @@ func (s *DeliveryStore) connection(ctx context.Context, request integrationsdk.D
 func (s *DeliveryStore) prepareInvocation(ctx context.Context, id string, request integrationsdk.DeliveryRequest, connection deliveryConnection) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	metadata, _ := json.Marshal(map[string]any{"message_id": request.MessageID, "deduplication_key": request.DeduplicationKey, "payload": json.RawMessage(request.Payload)})
-	lookup, lookupArgs, err := ormbuilder.NewSelectBuilder(s.dialect, "integration_invocations").Columns("status").Where(ormbuilder.Equal("id", id)).Build()
+	lookup, lookupArgs, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status").Where(ormbuilder.Equal("id", id)).Build()
 	if err != nil {
 		return err
 	}
 	var current string
 	err = s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&current)
 	if err == nil {
-		update, args, buildErr := ormbuilder.NewUpdateBuilder(s.dialect, "integration_invocations").Set("status", "running").Set("error", nil).Set("updated_at", now).Where(ormbuilder.Equal("id", id)).Build()
+		update, args, buildErr := ormbuilder.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("updated_at", now).Where(ormbuilder.Equal("id", id)).Build()
 		if buildErr != nil {
 			return buildErr
 		}
@@ -202,7 +202,7 @@ func (s *DeliveryStore) prepareInvocation(ctx context.Context, id string, reques
 	if err != sql.ErrNoRows {
 		return err
 	}
-	query, args, err := ormbuilder.NewInsertBuilder(s.dialect, "integration_invocations").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at").Values(id, request.WorkspaceID, request.ConnectorKey, connection.ProviderKey, connection.Key, request.Operation, "running", int64(0), request.MessageID, nil, nil, nil, nil, nil, nil, string(metadata), now, now).Build()
+	query, args, err := ormbuilder.NewInsertBuilder(s.dialect, "_integration_invocations").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at").Values(id, request.WorkspaceID, request.ConnectorKey, connection.ProviderKey, connection.Key, request.Operation, "running", int64(0), request.MessageID, nil, nil, nil, nil, nil, nil, string(metadata), now, now).Build()
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,7 @@ func (s *DeliveryStore) prepareInvocation(ctx context.Context, id string, reques
 }
 
 func (s *DeliveryStore) finishInvocation(ctx context.Context, id string, status integrationsdk.DeliveryStatus, responseRef, errorText string) error {
-	query, args, err := ormbuilder.NewUpdateBuilder(s.dialect, "integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(ormbuilder.Equal("id", id)).Build()
+	query, args, err := ormbuilder.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(ormbuilder.Equal("id", id)).Build()
 	if err != nil {
 		return err
 	}
@@ -220,7 +220,7 @@ func (s *DeliveryStore) finishInvocation(ctx context.Context, id string, status 
 }
 
 func (s *DeliveryStore) receipt(ctx context.Context, messageID, id string) (integrationsdk.DeliveryReceipt, bool, error) {
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "integration_invocations").Columns("status", "response_ref", "error").Where(ormbuilder.Equal("id", id)).Build()
+	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status", "response_ref", "error").Where(ormbuilder.Equal("id", id)).Build()
 	if err != nil {
 		return integrationsdk.DeliveryReceipt{}, false, err
 	}

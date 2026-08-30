@@ -37,7 +37,7 @@ func TestRequirementsStorePreservesManagedConnectionState(t *testing.T) {
 	if err := store.SynchronizeConnections(t.Context(), []integrationsdk.ConnectionRequirement{requirement}); err != nil {
 		t.Fatal(err)
 	}
-	update, args, err := ormbuilder.NewUpdateBuilder(dialect, "integration_connections").Set("name", "Managed").Set("status", "inactive").Set("config_json", `{"region":"managed","timeout":30}`).Set("secret_refs_json", `{"token":"secret:managed"}`).Set("created_by", "operator").Where(ormbuilder.Equal("connection_key", "primary")).Build()
+	update, args, err := ormbuilder.NewUpdateBuilder(dialect, "_integration_connections").Set("name", "Managed").Set("status", "inactive").Set("config_json", `{"region":"managed","timeout":30}`).Set("secret_refs_json", `{"token":"secret:managed"}`).Set("created_by", "operator").Where(ormbuilder.Equal("connection_key", "primary")).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestRequirementsStorePreservesManagedConnectionState(t *testing.T) {
 		t.Fatal(err)
 	}
 	var name, status, configJSON, secretsJSON, createdBy string
-	if err := database.QueryRowContext(t.Context(), "SELECT name,status,config_json,secret_refs_json,created_by FROM integration_connections WHERE connection_key=?", "primary").Scan(&name, &status, &configJSON, &secretsJSON, &createdBy); err != nil {
+	if err := database.QueryRowContext(t.Context(), "SELECT name,status,config_json,secret_refs_json,created_by FROM _integration_connections WHERE connection_key=?", "primary").Scan(&name, &status, &configJSON, &secretsJSON, &createdBy); err != nil {
 		t.Fatal(err)
 	}
 	if name != "Manifest" || status != "inactive" || secretsJSON != `{"token":"secret:managed"}` || createdBy != "operator" {

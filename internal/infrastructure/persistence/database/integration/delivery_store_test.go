@@ -66,7 +66,7 @@ func TestModuleDeliveryResolvesWebPushMaterialInsideIntegrationOwner(t *testing.
 			}
 		}
 	}
-	insert, args, err := ormbuilder.NewInsertBuilder(dialect, "integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("push-connection", "push", "workspace-a", "notification", "web_push", "Push", "active", `{}`, `{}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+	insert, args, err := ormbuilder.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("push-connection", "push", "workspace-a", "notification", "web_push", "Push", "active", `{}`, `{}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestModuleDeliveryResolvesWebPushMaterialInsideIntegrationOwner(t *testing.
 		t.Fatalf("provider payload=%#v", provider.payload)
 	}
 	var persisted string
-	if err := database.QueryRowContext(t.Context(), "SELECT metadata_json FROM integration_invocations WHERE request_ref = ?", "push-message").Scan(&persisted); err != nil {
+	if err := database.QueryRowContext(t.Context(), "SELECT metadata_json FROM _integration_invocations WHERE request_ref = ?", "push-message").Scan(&persisted); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(persisted, "push.example") || strings.Contains(persisted, "p256dh") || strings.Contains(persisted, "auth") {
@@ -132,7 +132,7 @@ func TestModuleDeliveryPersistsInvocationAndDeduplicatesProviderCall(t *testing.
 			}
 		}
 	}
-	insert, args, err := ormbuilder.NewInsertBuilder(dialect, "integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("connection-1", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+	insert, args, err := ormbuilder.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("connection-1", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,14 +29,14 @@ func TestWebPushReadinessUsesIntegrationOwnedConnectionAndSecretState(t *testing
 			}
 		}
 	}
-	connection, args, err := ormbuilder.NewInsertBuilder(dialect, "integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("push-connection", "push", "workspace-a", "notification", "web_push", "Push", "verified", `{"vapid_public_key":"public-vapid-key"}`, `{"vapid_private_key":"secret:vapid-private"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+	connection, args, err := ormbuilder.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("push-connection", "push", "workspace-a", "notification", "web_push", "Push", "verified", `{"vapid_public_key":"public-vapid-key"}`, `{"vapid_private_key":"secret:vapid-private"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.ExecContext(t.Context(), connection, args...); err != nil {
 		t.Fatal(err)
 	}
-	secret, args, err := ormbuilder.NewInsertBuilder(dialect, "integration_secrets").Columns("id", "secret_key", "workspace_id", "kind", "status", "description", "value_ref", "fingerprint", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_tested_at", "last_test_status", "last_test_error").Values("secret-1", "vapid-private", "workspace-a", "private_key", "active", nil, nil, nil, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", nil, "", "", "", "", "", "").Build()
+	secret, args, err := ormbuilder.NewInsertBuilder(dialect, "_integration_secrets").Columns("id", "secret_key", "workspace_id", "kind", "status", "description", "value_ref", "fingerprint", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_tested_at", "last_test_status", "last_test_error").Values("secret-1", "vapid-private", "workspace-a", "private_key", "active", nil, nil, nil, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", nil, "", "", "", "", "", "").Build()
 	if err != nil {
 		t.Fatal(err)
 	}

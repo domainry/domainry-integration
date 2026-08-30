@@ -73,7 +73,7 @@ func syncProviderConnector(ctx context.Context, database modulehost.Database, di
 	}
 	hash := sha256.Sum256(payload)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	lookup, args, err := ormbuilder.NewSelectBuilder(dialect, "connector_definitions").Columns("id").Where(ormbuilder.Equal("resource_key", key)).Build()
+	lookup, args, err := ormbuilder.NewSelectBuilder(dialect, "_integration_connector_definitions").Columns("id").Where(ormbuilder.Equal("resource_key", key)).Build()
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func syncProviderConnector(ctx context.Context, database modulehost.Database, di
 	err = database.QueryRowContext(ctx, lookup, args...).Scan(&id)
 	if err == sql.ErrNoRows {
 		id = "connector:" + key
-		insert, insertArgs, buildErr := ormbuilder.NewInsertBuilder(dialect, "connector_definitions").Columns("id", "resource_key", "object_key", "name", "payload_json", "schema_version", "schema_hash", "source_kind", "source_id", "disabled_at", "created_at", "updated_at").Values(id, key, "", key, string(payload), "1", hex.EncodeToString(hash[:]), "provider", strings.Join(revisions, ","), nil, now, now).Build()
+		insert, insertArgs, buildErr := ormbuilder.NewInsertBuilder(dialect, "_integration_connector_definitions").Columns("id", "resource_key", "object_key", "name", "payload_json", "schema_version", "schema_hash", "source_kind", "source_id", "disabled_at", "created_at", "updated_at").Values(id, key, "", key, string(payload), "1", hex.EncodeToString(hash[:]), "provider", strings.Join(revisions, ","), nil, now, now).Build()
 		if buildErr != nil {
 			return buildErr
 		}
@@ -93,7 +93,7 @@ func syncProviderConnector(ctx context.Context, database modulehost.Database, di
 	if err != nil {
 		return fmt.Errorf("lookup Integration connector %s: %w", key, err)
 	}
-	update, updateArgs, err := ormbuilder.NewUpdateBuilder(dialect, "connector_definitions").Set("name", key).Set("payload_json", string(payload)).Set("schema_hash", hex.EncodeToString(hash[:])).Set("source_kind", "provider").Set("source_id", strings.Join(revisions, ",")).Set("disabled_at", nil).Set("updated_at", now).Where(ormbuilder.Equal("id", id)).Build()
+	update, updateArgs, err := ormbuilder.NewUpdateBuilder(dialect, "_integration_connector_definitions").Set("name", key).Set("payload_json", string(payload)).Set("schema_hash", hex.EncodeToString(hash[:])).Set("source_kind", "provider").Set("source_id", strings.Join(revisions, ",")).Set("disabled_at", nil).Set("updated_at", now).Where(ormbuilder.Equal("id", id)).Build()
 	if err != nil {
 		return err
 	}

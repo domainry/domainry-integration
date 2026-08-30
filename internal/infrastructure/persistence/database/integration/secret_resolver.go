@@ -45,7 +45,7 @@ func (s *SecretResolver) resolveReference(ctx context.Context, workspaceID, refe
 		return "", fmt.Errorf("secret reference is invalid")
 	}
 	secretKey := strings.TrimSpace(strings.TrimPrefix(reference, "secret:"))
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "integration_secrets").Columns("status", "value_ref", "expires_at").Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("secret_key", secretKey))).Build()
+	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status", "value_ref", "expires_at").Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("secret_key", secretKey))).Build()
 	if err != nil {
 		return "", err
 	}
@@ -69,7 +69,7 @@ func (s *SecretResolver) resolveReference(ctx context.Context, workspaceID, refe
 	if !strings.HasPrefix(valueRef.String, "material:") {
 		return "", fmt.Errorf("secret %q has no material", secretKey)
 	}
-	materialQuery, materialArgs, err := ormbuilder.NewSelectBuilder(s.dialect, "integration_secret_materials").Columns("ciphertext").Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("secret_key", secretKey))).Build()
+	materialQuery, materialArgs, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_secret_materials").Columns("ciphertext").Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("secret_key", secretKey))).Build()
 	if err != nil {
 		return "", err
 	}

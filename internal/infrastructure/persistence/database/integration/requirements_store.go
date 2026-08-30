@@ -57,7 +57,7 @@ func (s *RequirementsStore) SynchronizeConnections(ctx context.Context, requirem
 }
 
 func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requirement integrationsdk.ConnectionRequirement, provider connector.Adapter, providerAvailable bool, config map[string]any) error {
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "integration_connections").
+	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_connections").
 		Columns("id", "name", "status", "config_json", "secret_refs_json", "created_by").
 		Where(ormbuilder.And(ormbuilder.Equal("workspace_id", requirement.WorkspaceID), ormbuilder.Equal("connection_key", requirement.Key))).Limit(1).Build()
 	if err != nil {
@@ -97,7 +97,7 @@ func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requireme
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if lookupErr == nil {
-		update, updateArgs, buildErr := ormbuilder.NewUpdateBuilder(s.dialect, "integration_connections").
+		update, updateArgs, buildErr := ormbuilder.NewUpdateBuilder(s.dialect, "_integration_connections").
 			Set("connector_key", requirement.ConnectorKey).Set("provider_key", requirement.ProviderKey).
 			Set("name", requirement.Name).Set("status", requirement.Status).Set("config_json", string(payload)).Set("updated_at", now).
 			Where(ormbuilder.Equal("id", id)).Build()
@@ -111,7 +111,7 @@ func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requireme
 	}
 	hash := sha256.Sum256([]byte(requirement.WorkspaceID + "\x00" + requirement.Key))
 	id = "manifest_" + hex.EncodeToString(hash[:16])
-	insert, insertArgs, err := ormbuilder.NewInsertBuilder(s.dialect, "integration_connections").
+	insert, insertArgs, err := ormbuilder.NewInsertBuilder(s.dialect, "_integration_connections").
 		Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
 		Values(id, requirement.Key, requirement.WorkspaceID, requirement.ConnectorKey, requirement.ProviderKey, requirement.Name, requirement.Status, string(payload), `{}`, "manifest", now, now).Build()
 	if err != nil {

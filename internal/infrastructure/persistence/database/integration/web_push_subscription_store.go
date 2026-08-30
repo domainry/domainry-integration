@@ -29,7 +29,7 @@ func (s *WebPushSubscriptionStore) Readiness(ctx context.Context, workspaceID st
 	if workspaceID == "" {
 		return integrationsdk.WebPushReadiness{}, fmt.Errorf("Integration Web Push workspace is required")
 	}
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "integration_connections").
+	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_connections").
 		Columns("connection_key", "status", "config_json", "secret_refs_json").
 		Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("connector_key", "notification"), ormbuilder.Equal("provider_key", "web_push"))).
 		OrderBy(ormbuilder.Ascending("connection_key")).Limit(1).Build()
@@ -61,7 +61,7 @@ func (s *WebPushSubscriptionStore) Readiness(ctx context.Context, workspaceID st
 		result.Reason = "private_key_unbound"
 		return result, nil
 	}
-	secretQuery, secretArgs, err := ormbuilder.NewSelectBuilder(s.dialect, "integration_secrets").Columns("status").Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("secret_key", secretKey))).Limit(1).Build()
+	secretQuery, secretArgs, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status").Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("secret_key", secretKey))).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.WebPushReadiness{}, fmt.Errorf("build Integration Web Push secret readiness: %w", err)
 	}
@@ -81,7 +81,7 @@ func (s *WebPushSubscriptionStore) Readiness(ctx context.Context, workspaceID st
 }
 
 func (s *WebPushSubscriptionStore) List(ctx context.Context, workspaceID, userID string) ([]integrationsdk.WebPushSubscription, error) {
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "web_push_subscriptions").
+	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_web_push_subscriptions").
 		Columns("id", "workspace_id", "user_id", "endpoint_hash", "status", "expires_at", "created_at", "updated_at", "revoked_at").
 		Where(ormbuilder.And(ormbuilder.Equal("workspace_id", strings.TrimSpace(workspaceID)), ormbuilder.Equal("user_id", strings.TrimSpace(userID)))).OrderBy(ormbuilder.Descending("created_at")).Build()
 	if err != nil {
@@ -125,7 +125,7 @@ func (s *WebPushSubscriptionStore) Upsert(ctx context.Context, workspaceID, user
 		return integrationsdk.WebPushSubscription{}, fmt.Errorf("Integration Web Push subscription was not found")
 	}
 	if found {
-		statement, args, err := ormbuilder.NewUpdateBuilder(s.dialect, "web_push_subscriptions").Set("endpoint_hash", endpointHash).Set("endpoint", endpoint).Set("p256dh", strings.TrimSpace(input.P256DH)).Set("auth_secret", strings.TrimSpace(input.Auth)).Set("status", "active").Set("expires_at", input.ExpiresAt).Set("updated_at", now).Set("revoked_at", "").Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("id", id), ormbuilder.Equal("user_id", userID))).Build()
+		statement, args, err := ormbuilder.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint_hash", endpointHash).Set("endpoint", endpoint).Set("p256dh", strings.TrimSpace(input.P256DH)).Set("auth_secret", strings.TrimSpace(input.Auth)).Set("status", "active").Set("expires_at", input.ExpiresAt).Set("updated_at", now).Set("revoked_at", "").Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("id", id), ormbuilder.Equal("user_id", userID))).Build()
 		if err != nil {
 			return integrationsdk.WebPushSubscription{}, err
 		}
@@ -133,7 +133,7 @@ func (s *WebPushSubscriptionStore) Upsert(ctx context.Context, workspaceID, user
 			return integrationsdk.WebPushSubscription{}, err
 		}
 	} else {
-		statement, args, err := ormbuilder.NewInsertBuilder(s.dialect, "web_push_subscriptions").Columns("id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").Values(id, workspaceID, userID, endpointHash, endpoint, strings.TrimSpace(input.P256DH), strings.TrimSpace(input.Auth), "active", input.ExpiresAt, now, now, "").Build()
+		statement, args, err := ormbuilder.NewInsertBuilder(s.dialect, "_integration_web_push_subscriptions").Columns("id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").Values(id, workspaceID, userID, endpointHash, endpoint, strings.TrimSpace(input.P256DH), strings.TrimSpace(input.Auth), "active", input.ExpiresAt, now, now, "").Build()
 		if err != nil {
 			return integrationsdk.WebPushSubscription{}, err
 		}
@@ -157,7 +157,7 @@ func (s *WebPushSubscriptionStore) Revoke(ctx context.Context, workspaceID, user
 		return value.public(), nil
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	statement, args, err := ormbuilder.NewUpdateBuilder(s.dialect, "web_push_subscriptions").Set("endpoint", "").Set("p256dh", "").Set("auth_secret", "").Set("status", "revoked").Set("updated_at", now).Set("revoked_at", now).Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("id", id), ormbuilder.Equal("user_id", userID))).Build()
+	statement, args, err := ormbuilder.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint", "").Set("p256dh", "").Set("auth_secret", "").Set("status", "revoked").Set("updated_at", now).Set("revoked_at", now).Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("id", id), ormbuilder.Equal("user_id", userID))).Build()
 	if err != nil {
 		return integrationsdk.WebPushSubscription{}, err
 	}
@@ -170,7 +170,7 @@ func (s *WebPushSubscriptionStore) Revoke(ctx context.Context, workspaceID, user
 
 func (s *WebPushSubscriptionStore) CleanupExpired(ctx context.Context, workspaceID string) (int, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	statement, args, err := ormbuilder.NewUpdateBuilder(s.dialect, "web_push_subscriptions").Set("endpoint", "").Set("p256dh", "").Set("auth_secret", "").Set("status", "expired").Set("updated_at", now).Where(ormbuilder.And(ormbuilder.Equal("workspace_id", strings.TrimSpace(workspaceID)), ormbuilder.Equal("status", "active"), ormbuilder.NotEqual("expires_at", ""), ormbuilder.LessThan("expires_at", now))).Build()
+	statement, args, err := ormbuilder.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint", "").Set("p256dh", "").Set("auth_secret", "").Set("status", "expired").Set("updated_at", now).Where(ormbuilder.And(ormbuilder.Equal("workspace_id", strings.TrimSpace(workspaceID)), ormbuilder.Equal("status", "active"), ormbuilder.NotEqual("expires_at", ""), ormbuilder.LessThan("expires_at", now))).Build()
 	if err != nil {
 		return 0, err
 	}
@@ -189,7 +189,7 @@ type webPushMaterial struct {
 
 func (v webPushMaterial) public() integrationsdk.WebPushSubscription { return v.WebPushSubscription }
 func (s *WebPushSubscriptionStore) material(ctx context.Context, workspaceID, id string) (webPushMaterial, bool, error) {
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "web_push_subscriptions").Columns("id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("id", id))).Limit(1).Build()
+	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_web_push_subscriptions").Columns("id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").Where(ormbuilder.And(ormbuilder.Equal("workspace_id", workspaceID), ormbuilder.Equal("id", id))).Limit(1).Build()
 	if err != nil {
 		return webPushMaterial{}, false, err
 	}
