@@ -7,8 +7,8 @@ import (
 
 	connector "github.com/domainry/domainry-connector-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
-	ormbuilder "github.com/domainry/domainry-orm/builder"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
+	ormbuilder "github.com/domainry/domainry-orm/query"
 	_ "modernc.org/sqlite"
 )
 

@@ -13,7 +13,7 @@ import (
 
 	connector "github.com/domainry/domainry-connector-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
-	ormbuilder "github.com/domainry/domainry-orm/builder"
+	ormbuilder "github.com/domainry/domainry-orm/query"
 )
 
 // SyncProviderCatalog projects source-owned Provider descriptors into the
