@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/domainry/domainry-integration-sdk v0.1.0
-	github.com/domainry/domainry-orm v0.1.27
+	github.com/domainry/domainry-orm v0.1.29
 	modernc.org/sqlite v1.57.0
 )
 
