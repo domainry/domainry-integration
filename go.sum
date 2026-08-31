@@ -1,7 +1,7 @@
-github.com/domainry/domainry-connector-sdk v0.1.0-dev.12 h1:tIsk0HmlLKe4bfvyAMNJCtqpo0HyUugHPVUKfw+GVOo=
-github.com/domainry/domainry-connector-sdk v0.1.0-dev.12/go.mod h1:y3YMg09XmWCuxyIeYb1d4xC4AkFmqGWbrm+OaumeyY8=
-github.com/domainry/domainry-integration-sdk v0.1.0 h1:zetrYOffWQ18G29nvGo/h9FqSLWoAskWbU/FQzyAANE=
-github.com/domainry/domainry-integration-sdk v0.1.0/go.mod h1:svSNfEj720Yzt7JMj/xvUwfrz7ltoCn7JD3RGEmtYjI=
+github.com/domainry/domainry-connector-sdk v0.1.0-dev.13 h1:n70Q4glFP/Cu52lhNSoMBLmnjIIC9N5Fu6VAXkAAt6M=
+github.com/domainry/domainry-connector-sdk v0.1.0-dev.13/go.mod h1:y3YMg09XmWCuxyIeYb1d4xC4AkFmqGWbrm+OaumeyY8=
+github.com/domainry/domainry-integration-sdk v0.1.2 h1:JiuejzZ6szz1bA58VDKxohMglytCDHcoa9DJRQLiH90=
+github.com/domainry/domainry-integration-sdk v0.1.2/go.mod h1:oUt0i2OwWKHBsi0aTGysWPIxpQEKNLveX8kYFLAdIyE=
 github.com/domainry/domainry-orm v0.1.29 h1:cJLNjxCDmqQfY3//5l25T51tbrPUw30cO3aandF5VCw=
 github.com/domainry/domainry-orm v0.1.29/go.mod h1:NKMojLuridkYCS4i5L7BO7LMTMsf/uOkWQ9OQ+9Vdn4=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
