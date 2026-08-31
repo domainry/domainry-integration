@@ -32,17 +32,18 @@ func (s *RequirementsStore) SynchronizeConnections(ctx context.Context, requirem
 			return err
 		}
 		provider, found := s.providers.Provider(strings.TrimSpace(requirement.ConnectorKey), strings.TrimSpace(requirement.ProviderKey))
+		if !found {
+			return fmt.Errorf("Integration provider %s/%s required by connection %q is unavailable", requirement.ConnectorKey, requirement.ProviderKey, requirement.Key)
+		}
 		var config map[string]any
 		if err := json.Unmarshal(requirement.Config, &config); err != nil {
 			return fmt.Errorf("decode Integration connection %q config: %w", requirement.Key, err)
 		}
-		if found {
-			withDefaults, err := connector.ApplyConfigDefaults(provider.Descriptor().ConfigFields, config)
-			if err != nil {
-				return fmt.Errorf("apply Integration connection %q defaults: %w", requirement.Key, err)
-			}
-			config = withDefaults
+		withDefaults, err := connector.ApplyConfigDefaults(provider.Descriptor().ConfigFields, config)
+		if err != nil {
+			return fmt.Errorf("apply Integration connection %q defaults: %w", requirement.Key, err)
 		}
+		config = withDefaults
 		if err := s.synchronizeConnection(ctx, requirement, provider, found, config); err != nil {
 			return err
 		}
@@ -85,6 +86,20 @@ func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requireme
 	if !validConnectionStatus(requirement.Status) {
 		return fmt.Errorf("Integration connection %q has invalid status %q", requirement.Key, requirement.Status)
 	}
+	secretRefs := map[string]string{}
+	if strings.TrimSpace(secretRefsJSON) != "" {
+		if err := json.Unmarshal([]byte(secretRefsJSON), &secretRefs); err != nil {
+			return fmt.Errorf("decode Integration connection %q secret references: %w", requirement.Key, err)
+		}
+	}
+	normalized, err := normalizeProviderConnection(provider, connector.Connection{
+		Key: requirement.Key, WorkspaceID: requirement.WorkspaceID, ConnectorKey: requirement.ConnectorKey,
+		ProviderKey: requirement.ProviderKey, Name: requirement.Name, Status: requirement.Status, Config: config, SecretRefs: secretRefs,
+	}, requirement.Status == "active" || requirement.Status == "inactive")
+	if err != nil {
+		return fmt.Errorf("validate Integration connection %q: %w", requirement.Key, err)
+	}
+	config = normalized.Config
 	payload, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("encode Integration connection %q config: %w", requirement.Key, err)

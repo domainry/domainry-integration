@@ -12,6 +12,17 @@ type Catalog interface {
 
 type Requirements interface {
 	SynchronizeConnections(context.Context, []integrationmodel.ConnectionRequirement) error
+	SynchronizeEventMappings(context.Context, []integrationmodel.EventMappingRequirement) error
+}
+
+type Operations interface {
+	Call(context.Context, integrationmodel.ProviderCallRequest) (integrationmodel.ProviderCallResult, error)
+	ListInvocations(context.Context, integrationmodel.InvocationQuery) ([]integrationmodel.Invocation, error)
+	GetInvocation(context.Context, string, string) (integrationmodel.Invocation, error)
+	AcceptWebhook(context.Context, integrationmodel.WebhookRequest) (integrationmodel.WebhookReceipt, error)
+	ListEvents(context.Context, integrationmodel.EventQuery) ([]integrationmodel.Event, error)
+	GetEvent(context.Context, string, string) (integrationmodel.Event, error)
+	ReplayEvent(context.Context, string, string) (integrationmodel.Event, error)
 }
 
 type Delivery interface {

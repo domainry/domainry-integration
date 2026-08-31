@@ -63,18 +63,25 @@ func syncProviderConnector(ctx context.Context, database modulehost.Database, di
 	for _, operation := range operationKeys {
 		operationValues = append(operationValues, operations[operation])
 	}
-	payload, err := json.Marshal(map[string]any{"key": key, "type": "connector", "name": key, "source": "integration-provider", "lifecycle_status": "active", "providers": providers, "operations": operationValues})
-	if err != nil {
-		return fmt.Errorf("encode Integration connector %s: %w", key, err)
-	}
-	hash := sha256.Sum256(payload)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	lookup, args, err := query.NewSelectBuilder(dialect, "_integration_connector_definitions").Columns("id").Where(query.Equal("resource_key", key)).Build()
+	lookup, args, err := query.NewSelectBuilder(dialect, "_integration_connector_definitions").Columns("id", "payload_json", "source_kind").Where(query.Equal("resource_key", key)).Build()
 	if err != nil {
 		return err
 	}
-	var id string
-	err = database.QueryRowContext(ctx, lookup, args...).Scan(&id)
+	var id, existingPayload, existingSource string
+	err = database.QueryRowContext(ctx, lookup, args...).Scan(&id, &existingPayload, &existingSource)
+	definition := map[string]any{"key": key, "type": "connector", "name": key, "source": "integration-provider", "lifecycle_status": "active"}
+	if err == nil && strings.TrimSpace(existingPayload) != "" {
+		if decodeErr := json.Unmarshal([]byte(existingPayload), &definition); decodeErr != nil {
+			return fmt.Errorf("decode Connectors-owned definition %s before Provider overlay: %w", key, decodeErr)
+		}
+	}
+	definition["providers"], definition["operations"] = providers, operationValues
+	payload, encodeErr := json.Marshal(definition)
+	if encodeErr != nil {
+		return fmt.Errorf("encode Integration connector %s: %w", key, encodeErr)
+	}
+	hash := sha256.Sum256(payload)
 	if err == sql.ErrNoRows {
 		id = "connector:" + key
 		insert, insertArgs, buildErr := query.NewInsertBuilder(dialect, "_integration_connector_definitions").Columns("id", "resource_key", "object_key", "name", "payload_json", "schema_version", "schema_hash", "source_kind", "source_id", "disabled_at", "created_at", "updated_at").Values(id, key, "", key, string(payload), "1", hex.EncodeToString(hash[:]), "provider", strings.Join(revisions, ","), nil, now, now).Build()
@@ -89,7 +96,15 @@ func syncProviderConnector(ctx context.Context, database modulehost.Database, di
 	if err != nil {
 		return fmt.Errorf("lookup Integration connector %s: %w", key, err)
 	}
-	update, updateArgs, err := query.NewUpdateBuilder(dialect, "_integration_connector_definitions").Set("name", key).Set("payload_json", string(payload)).Set("schema_hash", hex.EncodeToString(hash[:])).Set("source_kind", "provider").Set("source_id", strings.Join(revisions, ",")).Set("disabled_at", nil).Set("updated_at", now).Where(query.Equal("id", id)).Build()
+	sourceKind := "provider"
+	if existingSource == "connectors" || strings.Contains(existingSource, "connectors") {
+		sourceKind = "connectors+provider"
+	}
+	name := strings.TrimSpace(fmt.Sprint(definition["name"]))
+	if name == "" || name == "<nil>" {
+		name = key
+	}
+	update, updateArgs, err := query.NewUpdateBuilder(dialect, "_integration_connector_definitions").Set("name", name).Set("payload_json", string(payload)).Set("schema_hash", hex.EncodeToString(hash[:])).Set("source_kind", sourceKind).Set("source_id", strings.Join(revisions, ",")).Set("disabled_at", nil).Set("updated_at", now).Where(query.Equal("id", id)).Build()
 	if err != nil {
 		return err
 	}

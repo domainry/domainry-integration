@@ -2,7 +2,9 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -16,6 +18,64 @@ type SecretResolver struct {
 	database modulehost.Database
 	dialect  modulehost.Dialect
 	cipher   modulehost.SecretMaterialCipher
+}
+
+func (s *SecretResolver) ApplySecretUpdates(ctx context.Context, workspaceID string, references, updates map[string]string) error {
+	for fieldKey, plaintext := range updates {
+		reference := strings.TrimSpace(references[fieldKey])
+		if !strings.HasPrefix(reference, "secret:") {
+			return fmt.Errorf("Integration Provider cannot update non-material secret reference %q", fieldKey)
+		}
+		secretKey := strings.TrimSpace(strings.TrimPrefix(reference, "secret:"))
+		if secretKey == "" || s.cipher == nil {
+			return fmt.Errorf("Integration Provider secret update %q has no writable material", fieldKey)
+		}
+		ciphertext, err := s.cipher.EncryptSecretMaterial(ctx, workspaceID, secretKey, plaintext)
+		if err != nil {
+			return fmt.Errorf("encrypt Integration Provider secret update %q: %w", fieldKey, err)
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		lookup, args, err := query.NewSelectBuilder(s.dialect, "_integration_secret_materials").Columns("id").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", secretKey))).Build()
+		if err != nil {
+			return err
+		}
+		var id string
+		lookupErr := s.database.QueryRowContext(ctx, lookup, args...).Scan(&id)
+		switch lookupErr {
+		case nil:
+			statement, values, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", ciphertext).Set("updated_at", now).Where(query.Equal("id", id)).Build()
+			if buildErr != nil {
+				return buildErr
+			}
+			if _, err := s.database.ExecContext(ctx, statement, values...); err != nil {
+				return err
+			}
+		case sql.ErrNoRows:
+			digest := sha256.Sum256([]byte(workspaceID + "\x00" + secretKey))
+			statement, values, buildErr := query.NewInsertBuilder(s.dialect, "_integration_secret_materials").Columns("id", "workspace_id", "secret_key", "ciphertext", "created_at", "updated_at").Values("secret_material_"+hex.EncodeToString(digest[:16]), workspaceID, secretKey, ciphertext, now, now).Build()
+			if buildErr != nil {
+				return buildErr
+			}
+			if _, err := s.database.ExecContext(ctx, statement, values...); err != nil {
+				return err
+			}
+		default:
+			return lookupErr
+		}
+		fingerprint := sha256.Sum256([]byte(plaintext))
+		statement, values, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("status", "active").Set("value_ref", "material:"+secretKey).Set("fingerprint", hex.EncodeToString(fingerprint[:])).Set("rotated_at", now).Set("updated_at", now).Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", secretKey))).Build()
+		if err != nil {
+			return err
+		}
+		result, err := s.database.ExecContext(ctx, statement, values...)
+		if err != nil {
+			return err
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return fmt.Errorf("Integration Provider secret update target %q was not found", secretKey)
+		}
+	}
+	return nil
 }
 
 func NewSecretResolver(database modulehost.Database, dialect modulehost.Dialect, cipher modulehost.SecretMaterialCipher) *SecretResolver {

@@ -12,20 +12,35 @@ import (
 )
 
 type Binding struct {
-	mode     integrationsdk.DeploymentMode
-	service  *integrationapplication.Service
-	surfaces []modulehttp.Surface
+	mode       integrationsdk.DeploymentMode
+	service    *integrationapplication.Service
+	management integrationsdk.Management
+	workers    integrationsdk.LocalWorkers
+	surfaces   []modulehttp.Surface
 }
 
-func NewBinding(mode integrationsdk.DeploymentMode, service *integrationapplication.Service) *Binding {
-	return &Binding{mode: mode, service: service}
+func NewBinding(mode integrationsdk.DeploymentMode, service *integrationapplication.Service, management integrationsdk.Management, workers ...integrationsdk.LocalWorkers) *Binding {
+	binding := &Binding{mode: mode, service: service, management: management}
+	if len(workers) != 0 {
+		binding.workers = workers[0]
+	}
+	return binding
 }
 func (b *Binding) Descriptor() integrationsdk.Descriptor {
-	return integrationsdk.Descriptor{ProtocolVersion: integrationsdk.ProtocolVersionV1, Mode: b.mode, Capabilities: []string{"catalog.read", "requirements.connections.sync", "delivery.accept", "delivery.query", "web_push_subscriptions.manage"}}
+	capabilities := []string{"catalog.read", "requirements.connections.sync", "delivery.accept", "delivery.query", "web_push_subscriptions.manage", "management.connections", "management.secrets", "management.api_keys", "management.external_identities", "management.webhook_subscriptions", "operations.call", "operations.invocations.query", "inbound.webhooks.accept", "inbound.events.query"}
+	if b.workers != nil {
+		capabilities = append(capabilities, "local_workers")
+	}
+	return integrationsdk.Descriptor{ProtocolVersion: integrationsdk.ProtocolVersionV1, Mode: b.mode, Capabilities: capabilities}
 }
 func (b *Binding) Catalog() integrationsdk.Catalog           { return catalogBinding{b} }
 func (b *Binding) Requirements() integrationsdk.Requirements { return requirementsBinding{b} }
 func (b *Binding) Delivery() integrationsdk.Delivery         { return deliveryBinding{b} }
+func (b *Binding) Management() integrationsdk.Management     { return b.management }
+func (b *Binding) Operations() integrationsdk.Operations     { return operationsBinding{b} }
+func (b *Binding) LocalWorkers() (integrationsdk.LocalWorkers, bool) {
+	return b.workers, b.workers != nil
+}
 func (b *Binding) WebPushSubscriptions() integrationsdk.WebPushSubscriptions {
 	return webPushBinding{b}
 }
@@ -52,6 +67,13 @@ func (b requirementsBinding) SynchronizeConnections(ctx context.Context, values 
 		return err
 	}
 	return b.service.SynchronizeConnections(ctx, v)
+}
+func (b requirementsBinding) SynchronizeEventMappings(ctx context.Context, values []integrationsdk.EventMappingRequirement) error {
+	v, err := convert[[]integrationmodel.EventMappingRequirement](values, nil)
+	if err != nil {
+		return err
+	}
+	return b.service.SynchronizeEventMappings(ctx, v)
 }
 
 type deliveryBinding struct{ *Binding }
@@ -95,6 +117,53 @@ func (b webPushBinding) CleanupExpired(ctx context.Context, workspace string) (i
 	return b.service.CleanupExpiredWebPush(ctx, workspace)
 }
 
+type operationsBinding struct{ *Binding }
+
+func (b operationsBinding) Call(ctx context.Context, request integrationsdk.ProviderCallRequest) (integrationsdk.ProviderCallResult, error) {
+	v, err := convert[integrationmodel.ProviderCallRequest](request, nil)
+	if err != nil {
+		return integrationsdk.ProviderCallResult{}, err
+	}
+	result, err := b.service.Call(ctx, v)
+	return convert[integrationsdk.ProviderCallResult](result, err)
+}
+func (b operationsBinding) ListInvocations(ctx context.Context, query integrationsdk.InvocationQuery) ([]integrationsdk.Invocation, error) {
+	v, err := convert[integrationmodel.InvocationQuery](query, nil)
+	if err != nil {
+		return nil, err
+	}
+	result, err := b.service.ListInvocations(ctx, v)
+	return convert[[]integrationsdk.Invocation](result, err)
+}
+func (b operationsBinding) GetInvocation(ctx context.Context, workspaceID, id string) (integrationsdk.Invocation, error) {
+	result, err := b.service.GetInvocation(ctx, workspaceID, id)
+	return convert[integrationsdk.Invocation](result, err)
+}
+func (b operationsBinding) AcceptWebhook(ctx context.Context, request integrationsdk.WebhookRequest) (integrationsdk.WebhookReceipt, error) {
+	v, err := convert[integrationmodel.WebhookRequest](request, nil)
+	if err != nil {
+		return integrationsdk.WebhookReceipt{}, err
+	}
+	result, err := b.service.AcceptWebhook(ctx, v)
+	return convert[integrationsdk.WebhookReceipt](result, err)
+}
+func (b operationsBinding) ListEvents(ctx context.Context, query integrationsdk.EventQuery) ([]integrationsdk.Event, error) {
+	v, err := convert[integrationmodel.EventQuery](query, nil)
+	if err != nil {
+		return nil, err
+	}
+	result, err := b.service.ListEvents(ctx, v)
+	return convert[[]integrationsdk.Event](result, err)
+}
+func (b operationsBinding) GetEvent(ctx context.Context, workspaceID, id string) (integrationsdk.Event, error) {
+	result, err := b.service.GetEvent(ctx, workspaceID, id)
+	return convert[integrationsdk.Event](result, err)
+}
+func (b operationsBinding) ReplayEvent(ctx context.Context, workspaceID, id string) (integrationsdk.Event, error) {
+	result, err := b.service.ReplayEvent(ctx, workspaceID, id)
+	return convert[integrationsdk.Event](result, err)
+}
+
 func convert[T any](value any, sourceErr error) (T, error) {
 	var zero T
 	if sourceErr != nil {
@@ -112,4 +181,7 @@ func convert[T any](value any, sourceErr error) (T, error) {
 
 var _ integrationsdk.Binding = (*Binding)(nil)
 var _ integrationsdk.WebPushBinding = (*Binding)(nil)
+var _ integrationsdk.ManagementBinding = (*Binding)(nil)
+var _ integrationsdk.OperationsBinding = (*Binding)(nil)
+var _ integrationsdk.LocalWorkerBinding = (*Binding)(nil)
 var _ modulehttp.Provider = (*Binding)(nil)

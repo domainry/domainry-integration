@@ -18,23 +18,37 @@ func NewHandler(binding integrationsdk.Binding, serviceToken string) (http.Handl
 	if !ok {
 		return nil, fmt.Errorf("Integration SaaS Web Push binding is required")
 	}
+	management, ok := binding.(integrationsdk.ManagementBinding)
+	if !ok || management.Management() == nil {
+		return nil, fmt.Errorf("Integration SaaS Management binding is required")
+	}
+	operations, ok := binding.(integrationsdk.OperationsBinding)
+	if !ok || operations.Operations() == nil {
+		return nil, fmt.Errorf("Integration SaaS Operations binding is required")
+	}
 	token := strings.TrimSpace(serviceToken)
 	if token == "" {
 		return nil, fmt.Errorf("Integration SaaS service token is required")
 	}
-	h := &handler{binding: binding, webPush: webPush.WebPushSubscriptions(), token: token, mux: http.NewServeMux()}
+	h := &handler{binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(), operations: operations.Operations(), token: token, mux: http.NewServeMux()}
 	h.register()
 	return h, nil
 }
 
 type handler struct {
-	binding integrationsdk.Binding
-	webPush integrationsdk.WebPushSubscriptions
-	token   string
-	mux     *http.ServeMux
+	binding    integrationsdk.Binding
+	webPush    integrationsdk.WebPushSubscriptions
+	management integrationsdk.Management
+	operations integrationsdk.Operations
+	token      string
+	mux        *http.ServeMux
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/public/webhooks/") {
+		h.mux.ServeHTTP(w, r)
+		return
+	}
 	provided := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 	if subtle.ConstantTimeCompare([]byte(provided), []byte(h.token)) != 1 || strings.TrimSpace(r.Header.Get("X-Domainry-Runtime-ID")) == "" {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "integration.unauthorized"})
@@ -45,6 +59,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *handler) register() {
 	h.mux.HandleFunc("GET /v1/connector-definitions", h.catalog)
 	h.mux.HandleFunc("PUT /v1/application-requirements/connections", h.requirements)
+	h.mux.HandleFunc("PUT /v1/application-requirements/event-mappings", h.eventMappingRequirements)
 	h.mux.HandleFunc("POST /v1/deliveries", h.accept)
 	h.mux.HandleFunc("GET /v1/deliveries/{messageID}", h.query)
 	h.mux.HandleFunc("GET /v1/web-push/readiness", h.readiness)
@@ -52,6 +67,21 @@ func (h *handler) register() {
 	h.mux.HandleFunc("PUT /v1/web-push-subscriptions/{subscriptionID}", h.upsertWebPush)
 	h.mux.HandleFunc("POST /v1/web-push-subscriptions/{subscriptionID}/revoke", h.revokeWebPush)
 	h.mux.HandleFunc("POST /v1/web-push-subscriptions/cleanup-expired", h.cleanupWebPush)
+	h.registerManagement()
+	h.registerOperations()
+}
+func (h *handler) eventMappingRequirements(w http.ResponseWriter, r *http.Request) {
+	var v struct {
+		Items []integrationsdk.EventMappingRequirement `json:"items"`
+	}
+	if !decode(w, r, &v) {
+		return
+	}
+	if err := h.binding.Requirements().SynchronizeEventMappings(r.Context(), v.Items); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 func (h *handler) catalog(w http.ResponseWriter, r *http.Request) {
 	v, e := h.binding.Catalog().ListConnectorDefinitions(r.Context())

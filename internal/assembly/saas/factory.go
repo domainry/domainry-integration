@@ -41,23 +41,37 @@ func (f *Factory) OpenSaaS(ctx context.Context, application integrationsdk.Appli
 		_ = binding.Close(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("Integration SaaS Binding does not expose Web Push")
 	}
+	management, ok := binding.(integrationsdk.ManagementBinding)
+	if !ok || management.Management() == nil {
+		_ = binding.Close(context.WithoutCancel(ctx))
+		return nil, fmt.Errorf("Integration SaaS Binding does not expose Management")
+	}
+	operations, ok := binding.(integrationsdk.OperationsBinding)
+	if !ok || operations.Operations() == nil {
+		_ = binding.Close(context.WithoutCancel(ctx))
+		return nil, fmt.Errorf("Integration SaaS Binding does not expose Operations")
+	}
 	surface, err := integrationhttp.NewSurface(binding)
 	if err != nil {
 		_ = binding.Close(context.WithoutCancel(ctx))
 		return nil, err
 	}
-	return &bindingWithHTTPSurface{Binding: binding, webPush: webPush.WebPushSubscriptions(), surfaces: []modulehttp.Surface{surface}}, nil
+	return &bindingWithHTTPSurface{Binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(), operations: operations.Operations(), surfaces: []modulehttp.Surface{surface}}, nil
 }
 
 type bindingWithHTTPSurface struct {
 	integrationsdk.Binding
-	webPush  integrationsdk.WebPushSubscriptions
-	surfaces []modulehttp.Surface
+	webPush    integrationsdk.WebPushSubscriptions
+	management integrationsdk.Management
+	operations integrationsdk.Operations
+	surfaces   []modulehttp.Surface
 }
 
 func (b *bindingWithHTTPSurface) WebPushSubscriptions() integrationsdk.WebPushSubscriptions {
 	return b.webPush
 }
+func (b *bindingWithHTTPSurface) Management() integrationsdk.Management { return b.management }
+func (b *bindingWithHTTPSurface) Operations() integrationsdk.Operations { return b.operations }
 func (b *bindingWithHTTPSurface) HTTPSurfaces() []modulehttp.Surface {
 	return append([]modulehttp.Surface(nil), b.surfaces...)
 }
@@ -65,4 +79,6 @@ func (b *bindingWithHTTPSurface) HTTPSurfaces() []modulehttp.Surface {
 var _ integrationsdk.Factory = (*Factory)(nil)
 var _ saashost.Factory = (*Factory)(nil)
 var _ integrationsdk.WebPushBinding = (*bindingWithHTTPSurface)(nil)
+var _ integrationsdk.ManagementBinding = (*bindingWithHTTPSurface)(nil)
+var _ integrationsdk.OperationsBinding = (*bindingWithHTTPSurface)(nil)
 var _ modulehttp.Provider = (*bindingWithHTTPSurface)(nil)

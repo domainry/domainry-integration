@@ -28,6 +28,10 @@ type SecretReferenceResolver interface {
 	ResolveSecretReferences(context.Context, string, map[string]string) (map[string]string, error)
 }
 
+type SecretUpdateWriter interface {
+	ApplySecretUpdates(context.Context, string, map[string]string, map[string]string) error
+}
+
 func NewDeliveryStore(database modulehost.Database, dialect modulehost.Dialect, providers modulehost.ProviderRegistry, secrets SecretReferenceResolver, webPush ...*WebPushSubscriptionStore) *DeliveryStore {
 	store := &DeliveryStore{database: database, dialect: dialect, providers: providers, secrets: secrets}
 	if len(webPush) != 0 {
@@ -82,6 +86,14 @@ func (s *DeliveryStore) Accept(ctx context.Context, request integrationmodel.Del
 		Connection: connector.Connection{Key: connection.Key, WorkspaceID: connection.WorkspaceID, ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, Status: connection.Status, Config: connection.Config, SecretRefs: connection.SecretRefs},
 		Principal:  connector.Principal{WorkspaceID: request.WorkspaceID, RequestID: request.MessageID, IsAuthenticated: true},
 	})
+	if callErr == nil && len(result.SecretUpdates) != 0 {
+		writer, ok := s.secrets.(SecretUpdateWriter)
+		if !ok {
+			callErr = fmt.Errorf("Integration secret update writer is unavailable")
+		} else if err := writer.ApplySecretUpdates(ctx, request.WorkspaceID, connection.SecretRefs, result.SecretUpdates); err != nil {
+			callErr = err
+		}
+	}
 	status, errorText := "succeeded", ""
 	if callErr != nil {
 		status, errorText = "failed", callErr.Error()

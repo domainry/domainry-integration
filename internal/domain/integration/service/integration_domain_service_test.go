@@ -15,6 +15,9 @@ func (repositories) ListConnectorDefinitions(context.Context) ([]integrationmode
 func (repositories) SynchronizeConnections(context.Context, []integrationmodel.ConnectionRequirement) error {
 	return nil
 }
+func (repositories) SynchronizeEventMappings(context.Context, []integrationmodel.EventMappingRequirement) error {
+	return nil
+}
 func (repositories) Accept(context.Context, integrationmodel.DeliveryRequest) (integrationmodel.DeliveryReceipt, error) {
 	return integrationmodel.DeliveryReceipt{}, nil
 }

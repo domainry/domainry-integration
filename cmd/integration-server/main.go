@@ -62,6 +62,11 @@ func run() error {
 	server := &http.Server{Addr: address, Handler: service.Handler, ReadHeaderTimeout: 5 * time.Second}
 	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	workerDone := service.StartWorkers(stop, time.Second, 25)
+	defer func() {
+		cancel()
+		<-workerDone
+	}()
 	go func() {
 		<-stop.Done()
 		ctx, release := context.WithTimeout(context.Background(), 10*time.Second)
@@ -86,6 +91,7 @@ func (h *standaloneHost) Dialect() modulehost.Dialect                 { return h
 func (h *standaloneHost) Migrations() modulehost.MigrationRegistrar   { return h }
 func (*standaloneHost) Providers() modulehost.ProviderRegistry        { return emptyProviders{} }
 func (*standaloneHost) SecretCipher() modulehost.SecretMaterialCipher { return unavailableCipher{} }
+func (*standaloneHost) RuntimeTriggers() integrationsdk.TriggerSink   { return unavailableTrigger{} }
 func (*standaloneHost) Driver() string                                { return "sqlite" }
 func (*standaloneHost) Schema() string                                { return "" }
 func (h *standaloneHost) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {
@@ -108,6 +114,15 @@ func (emptyProviders) Descriptors() []connector.ProviderDescriptor       { retur
 
 type unavailableCipher struct{}
 
+type unavailableTrigger struct{}
+
+func (unavailableTrigger) Trigger(context.Context, integrationsdk.TriggerRequest) (integrationsdk.RuntimeExecutionReceipt, error) {
+	return integrationsdk.RuntimeExecutionReceipt{}, errors.New("standalone Integration Runtime TriggerSink is not configured")
+}
+
+func (unavailableCipher) EncryptSecretMaterial(context.Context, string, string, string) (string, error) {
+	return "", errors.New("standalone Integration secret cipher is not configured")
+}
 func (unavailableCipher) DecryptSecretMaterial(context.Context, string, string, string) (string, error) {
 	return "", errors.New("standalone Integration secret cipher is not configured")
 }

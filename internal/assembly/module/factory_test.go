@@ -1,13 +1,19 @@
 package moduleassembly
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
 	"github.com/domainry/domainry-foundation/modulehttp"
+	identitysdk "github.com/domainry/domainry-identity-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
@@ -25,6 +31,13 @@ func (h *testHost) Dialect() modulehost.Dialect                 { return h.diale
 func (h *testHost) Migrations() modulehost.MigrationRegistrar   { return h.registrar }
 func (*testHost) Providers() modulehost.ProviderRegistry        { return testProviders{} }
 func (*testHost) SecretCipher() modulehost.SecretMaterialCipher { return testCipher{} }
+func (*testHost) RuntimeTriggers() integrationsdk.TriggerSink   { return testTrigger{} }
+
+type testTrigger struct{}
+
+func (testTrigger) Trigger(context.Context, integrationsdk.TriggerRequest) (integrationsdk.RuntimeExecutionReceipt, error) {
+	return integrationsdk.RuntimeExecutionReceipt{Status: "succeeded"}, nil
+}
 
 type testRegistrar struct {
 	database *sql.DB
@@ -47,11 +60,31 @@ func (r *testRegistrar) ApplyOwnedMigrations(ctx context.Context, owner string, 
 
 type testProviders struct{}
 
-func (testProviders) Provider(string, string) (connector.Adapter, bool) { return nil, false }
-func (testProviders) Descriptors() []connector.ProviderDescriptor       { return nil }
+func (testProviders) Provider(connectorKey, providerKey string) (connector.Adapter, bool) {
+	provider := testProvider{}
+	return provider, connectorKey == "crm" && providerKey == "probe"
+}
+func (testProviders) Descriptors() []connector.ProviderDescriptor {
+	return []connector.ProviderDescriptor{testProvider{}.Descriptor()}
+}
+
+type testProvider struct{}
+
+func (testProvider) Descriptor() connector.ProviderDescriptor {
+	return connector.ProviderDescriptor{ConnectorKey: "crm", ProviderKey: "probe", ProviderRevision: "1.0.0", Operations: []connector.OperationDescriptor{{
+		ConnectorKey: "crm", ProviderKey: "probe", Key: "lookup", Mode: connector.ModeCall, ContractSHA256: strings.Repeat("a", 64),
+		Reliability: connector.ReliabilityContract{Effect: connector.EffectRead, Idempotency: connector.IdempotencyContract{Strategy: connector.IdempotencyNatural}, Reconciliation: connector.ReconciliationNone, Compensation: connector.CompensationContract{Mode: connector.CompensationNone}},
+	}}}
+}
+func (testProvider) Call(context.Context, connector.CallRequest) (connector.CallResult, error) {
+	return connector.CallResult{Payload: json.RawMessage(`{}`)}, nil
+}
 
 type testCipher struct{}
 
+func (testCipher) EncryptSecretMaterial(_ context.Context, _, _ string, plaintext string) (string, error) {
+	return plaintext, nil
+}
 func (testCipher) DecryptSecretMaterial(context.Context, string, string, string) (string, error) {
 	return "", errors.New("not configured")
 }
@@ -95,11 +128,47 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 	if err := modulehttp.ValidateSurface(provider.HTTPSurfaces()[0]); err != nil {
 		t.Fatal(err)
 	}
-	if values, err := binding.Catalog().ListConnectorDefinitions(t.Context()); err != nil || len(values) != 0 {
-		t.Fatalf("catalog=%v err=%v", values, err)
+	routes := provider.HTTPSurfaces()[0].Routes()
+	if len(routes) != 38 {
+		t.Fatalf("Integration product routes=%d", len(routes))
+	}
+	for _, required := range []string{"GET /tenant-admin/integrations/connectors", "PUT /tenant-admin/integrations/connections/{connectionKey}", "GET /business/notifications/web-push/readiness"} {
+		found := false
+		for _, route := range routes {
+			if route.Pattern == required {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Integration product route %q is missing", required)
+		}
+	}
+	if values, err := binding.Catalog().ListConnectorDefinitions(t.Context()); err != nil || len(values) < 50 {
+		t.Fatalf("built-in catalog count=%d err=%v", len(values), err)
 	}
 	if err := binding.Requirements().SynchronizeConnections(t.Context(), []integrationsdk.ConnectionRequirement{{Key: "primary", WorkspaceID: "workspace-a", ConnectorKey: "crm", ProviderKey: "probe", Config: []byte(`{}`)}}); err != nil {
 		t.Fatal(err)
+	}
+	management, ok := binding.(integrationsdk.ManagementBinding)
+	if !ok || management.Management() == nil {
+		t.Fatal("binding does not expose Integration-owned Management port")
+	}
+	connection, err := management.Management().GetConnection(t.Context(), "workspace-a", "primary")
+	if err != nil || connection.ConnectorKey != "crm" {
+		t.Fatalf("connection=%#v err=%v", connection, err)
+	}
+	payload, _ := json.Marshal(integrationsdk.ConnectionInput{ConnectorKey: "crm", ProviderKey: "probe", Name: "Updated"})
+	request := httptest.NewRequest(http.MethodPut, "/tenant-admin/integrations/connections/primary", bytes.NewReader(payload))
+	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: identitysdk.Principal{Known: true, WorkspaceID: "workspace-a", UserID: "admin"}}))
+	response := httptest.NewRecorder()
+	provider.HTTPSurfaces()[0].Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("management surface status=%d body=%s", response.Code, response.Body.String())
+	}
+	connection, err = management.Management().GetConnection(t.Context(), "workspace-a", "primary")
+	if err != nil || connection.Name != "Updated" {
+		t.Fatalf("updated connection=%#v err=%v", connection, err)
 	}
 	webPush, ok := binding.(integrationsdk.WebPushBinding)
 	if !ok {

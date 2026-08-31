@@ -9,7 +9,7 @@ import (
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 )
 
-const SchemaVersion uint = 2
+const SchemaVersion uint = 3
 
 func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, error) {
 	parsed, err := ormdialect.Parse(driver)
@@ -25,6 +25,7 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 		definitionTable(renderer, "_integration_connector_definitions"),
 		definitionTable(renderer, "_integration_event_mapping_definitions"),
 		connectionsTable(renderer), providerStatesTable(renderer), apiKeysTable(renderer),
+		providerCommitsTable(renderer),
 		secretMaterialsTable(renderer), secretsTable(renderer), externalIdentitiesTable(renderer),
 		invocationsTable(renderer), eventsTable(renderer), mappingIntentsTable(renderer),
 		webhookNoncesTable(renderer), webhookSubscriptionsTable(renderer), credentialRefreshLeasesTable(renderer),
@@ -42,9 +43,14 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 	if err != nil {
 		return nil, err
 	}
+	providerCommits, _, err := providerCommitsTable(renderer).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build Integration Provider commit migration: %w", err)
+	}
 	return []modulehost.SchemaMigration{
 		{Version: 1, Name: "integration_foundation", Statements: statements},
-		{Version: SchemaVersion, Name: "integration_owner_indexes", Statements: indexes},
+		{Version: 2, Name: "integration_owner_indexes", Statements: indexes},
+		{Version: SchemaVersion, Name: "integration_provider_commits", Statements: []string{providerCommits}},
 	}, nil
 }
 
@@ -122,6 +128,10 @@ func connectionsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 
 func providerStatesTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, "_integration_connector_provider_states", key("id"), scope("workspace_id"), scope("connector_key"), scope("provider_key"), scope("connection_key"), scope("task_key"), integer("state_version"), text("payload_json"), key("status"), key("due_at"), key("last_error_code"), integer("attempt_count"), key("lease_owner"), key("lease_expires_at"), integer("fencing_token"), key("updated_at")).Unique("workspace_id", "connection_key", "task_key")
+}
+
+func providerCommitsTable(r modulehost.Dialect) *ormschema.TableBuilder {
+	return table(r, "_integration_connector_provider_commits", key("id"), scope("workspace_id"), scope("connector_key"), scope("provider_key"), scope("connection_key"), scope("task_key"), key("operation_key"), key("contract_sha256"), text("payload_json"), key("status"), integer("attempt_count"), key("due_at"), key("lease_owner"), key("lease_expires_at"), integer("fencing_token"), key("created_at"), key("updated_at")).Unique("workspace_id", "id")
 }
 
 func apiKeysTable(r modulehost.Dialect) *ormschema.TableBuilder {

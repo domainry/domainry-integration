@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
 	foundationhttp "github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
@@ -40,7 +41,7 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	if err := application.Validate(); err != nil {
 		return nil, err
 	}
-	if host == nil || host.Database() == nil || host.Dialect() == nil || host.Migrations() == nil || host.Providers() == nil || host.SecretCipher() == nil {
+	if host == nil || host.Database() == nil || host.Dialect() == nil || host.Migrations() == nil || host.Providers() == nil || host.SecretCipher() == nil || host.RuntimeTriggers() == nil {
 		return nil, fmt.Errorf("Integration Module host is incomplete")
 	}
 	migrations, err := databaseschema.SchemaMigrations(host.Migrations().Driver(), host.Migrations().Schema())
@@ -50,18 +51,30 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	if err := host.Migrations().ApplyOwnedMigrations(ctx, "integration", migrations); err != nil {
 		return nil, fmt.Errorf("apply Integration Module migrations: %w", err)
 	}
+	builtinCatalog, err := connectorscatalog.Definitions()
+	if err != nil {
+		return nil, err
+	}
+	if err := integrationpersistence.SyncBuiltinCatalog(ctx, host.Database(), host.Dialect(), builtinCatalog); err != nil {
+		return nil, fmt.Errorf("synchronize Integration built-in catalog: %w", err)
+	}
 	if err := integrationpersistence.SyncProviderCatalog(ctx, host.Database(), host.Dialect(), host.Providers().Descriptors()); err != nil {
 		return nil, fmt.Errorf("synchronize Integration provider catalog: %w", err)
 	}
 	webPush := integrationpersistence.NewWebPushSubscriptionStore(host.Database(), host.Dialect())
 	resolver := integrationpersistence.NewSecretResolver(host.Database(), host.Dialect(), host.SecretCipher())
+	delivery := integrationpersistence.NewDeliveryStore(host.Database(), host.Dialect(), host.Providers(), resolver, webPush)
+	operations := integrationpersistence.NewOperationsStore(host.Database(), host.Dialect(), delivery, host.RuntimeTriggers())
+	workers := integrationpersistence.NewWorkerStore(host.Database(), host.Dialect(), delivery, operations, application.RuntimeID)
 	domain := integrationservice.New(
 		integrationpersistence.NewCatalogStore(host.Database(), host.Dialect()),
 		integrationpersistence.NewRequirementsStore(host.Database(), host.Dialect(), host.Providers()),
-		integrationpersistence.NewDeliveryStore(host.Database(), host.Dialect(), host.Providers(), resolver, webPush),
+		delivery,
 		webPush,
+		operations,
 	)
-	binding := integrationsdkadapter.NewBinding(mode, integrationapplication.New(domain))
+	management := integrationpersistence.NewManagementStore(host.Database(), host.Dialect(), host.SecretCipher(), delivery)
+	binding := integrationsdkadapter.NewBinding(mode, integrationapplication.New(domain), management, workers)
 	if mode == integrationsdk.DeploymentModeModule {
 		surface, err := modulehttp.NewSurface(binding)
 		if err != nil {
