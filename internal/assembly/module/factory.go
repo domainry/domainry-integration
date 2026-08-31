@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	foundationhttp "github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	integrationsdkadapter "github.com/domainry/domainry-integration/internal/adapter/integrationsdk"
@@ -12,6 +13,7 @@ import (
 	integrationservice "github.com/domainry/domainry-integration/internal/domain/integration/service"
 	integrationpersistence "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/integration"
 	databaseschema "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/schema"
+	modulehttp "github.com/domainry/domainry-integration/internal/transport/http/module"
 )
 
 type Options struct{}
@@ -59,7 +61,15 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 		integrationpersistence.NewDeliveryStore(host.Database(), host.Dialect(), host.Providers(), resolver, webPush),
 		webPush,
 	)
-	return integrationsdkadapter.NewBinding(mode, integrationapplication.New(domain)), nil
+	binding := integrationsdkadapter.NewBinding(mode, integrationapplication.New(domain))
+	if mode == integrationsdk.DeploymentModeModule {
+		surface, err := modulehttp.NewSurface(binding)
+		if err != nil {
+			return nil, err
+		}
+		binding.SetHTTPSurfaces([]foundationhttp.Surface{surface})
+	}
+	return binding, nil
 }
 
 var _ modulehost.Factory = (*Factory)(nil)

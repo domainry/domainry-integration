@@ -5,14 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	integrationapplication "github.com/domainry/domainry-integration/internal/application/integration"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 )
 
 type Binding struct {
-	mode    integrationsdk.DeploymentMode
-	service *integrationapplication.Service
+	mode     integrationsdk.DeploymentMode
+	service  *integrationapplication.Service
+	surfaces []modulehttp.Surface
 }
 
 func NewBinding(mode integrationsdk.DeploymentMode, service *integrationapplication.Service) *Binding {
@@ -28,6 +30,12 @@ func (b *Binding) WebPushSubscriptions() integrationsdk.WebPushSubscriptions {
 	return webPushBinding{b}
 }
 func (*Binding) Close(context.Context) error { return nil }
+func (b *Binding) SetHTTPSurfaces(surfaces []modulehttp.Surface) {
+	b.surfaces = append([]modulehttp.Surface(nil), surfaces...)
+}
+func (b *Binding) HTTPSurfaces() []modulehttp.Surface {
+	return append([]modulehttp.Surface(nil), b.surfaces...)
+}
 
 type catalogBinding struct{ *Binding }
 
@@ -104,3 +112,4 @@ func convert[T any](value any, sourceErr error) (T, error) {
 
 var _ integrationsdk.Binding = (*Binding)(nil)
 var _ integrationsdk.WebPushBinding = (*Binding)(nil)
+var _ modulehttp.Provider = (*Binding)(nil)

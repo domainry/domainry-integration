@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	"github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
@@ -86,6 +87,13 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 	}
 	if len(host.registrar.owners) != 1 || host.registrar.owners[0] != "integration" {
 		t.Fatalf("migration owners=%v", host.registrar.owners)
+	}
+	provider, ok := binding.(modulehttp.Provider)
+	if !ok || len(provider.HTTPSurfaces()) != 1 {
+		t.Fatalf("Module HTTP surfaces=%v", provider)
+	}
+	if err := modulehttp.ValidateSurface(provider.HTTPSurfaces()[0]); err != nil {
+		t.Fatal(err)
 	}
 	if values, err := binding.Catalog().ListConnectorDefinitions(t.Context()); err != nil || len(values) != 0 {
 		t.Fatalf("catalog=%v err=%v", values, err)
