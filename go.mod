@@ -9,6 +9,11 @@ require (
 )
 
 require (
+	golang.org/x/mod v0.40.0 // indirect
+	golang.org/x/tools v0.49.0 // indirect
+)
+
+require (
 	github.com/domainry/domainry-connector-sdk v0.1.0-dev.12
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect

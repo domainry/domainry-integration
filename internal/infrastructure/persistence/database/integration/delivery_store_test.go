@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
-	integrationsdk "github.com/domainry/domainry-integration-sdk"
+	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
-	ormbuilder "github.com/domainry/domainry-orm/query"
+	"github.com/domainry/domainry-orm/query"
 	_ "modernc.org/sqlite"
 )
 
@@ -66,7 +66,7 @@ func TestModuleDeliveryResolvesWebPushMaterialInsideIntegrationOwner(t *testing.
 			}
 		}
 	}
-	insert, args, err := ormbuilder.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("push-connection", "push", "workspace-a", "notification", "web_push", "Push", "active", `{}`, `{}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("push-connection", "push", "workspace-a", "notification", "web_push", "Push", "active", `{}`, `{}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,13 +74,13 @@ func TestModuleDeliveryResolvesWebPushMaterialInsideIntegrationOwner(t *testing.
 		t.Fatal(err)
 	}
 	subscriptions := NewWebPushSubscriptionStore(database, dialect)
-	if _, err := subscriptions.Upsert(t.Context(), "workspace-a", "user-a", "browser-a", integrationsdk.WebPushSubscriptionInput{Endpoint: "https://push.example/a", P256DH: "p256dh", Auth: "auth"}); err != nil {
+	if _, err := subscriptions.Upsert(t.Context(), "workspace-a", "user-a", "browser-a", integrationmodel.WebPushSubscriptionInput{Endpoint: "https://push.example/a", P256DH: "p256dh", Auth: "auth"}); err != nil {
 		t.Fatal(err)
 	}
 	provider := &webPushDeliveryProvider{}
 	store := NewDeliveryStore(database, dialect, deliveryTestProviders{provider: provider}, emptyDeliveryTestSecrets{}, subscriptions)
-	receipt, err := store.Accept(t.Context(), integrationsdk.DeliveryRequest{MessageID: "push-message", DeduplicationKey: "push-dedup", WorkspaceID: "workspace-a", ConnectorKey: "notification", ConnectionKey: "push", Operation: "send", Payload: json.RawMessage(`{"subscription_id":"browser-a","title":"Hello"}`)})
-	if err != nil || receipt.Status != integrationsdk.DeliveryStatusSucceeded {
+	receipt, err := store.Accept(t.Context(), integrationmodel.DeliveryRequest{MessageID: "push-message", DeduplicationKey: "push-dedup", WorkspaceID: "workspace-a", ConnectorKey: "notification", ConnectionKey: "push", Operation: "send", Payload: json.RawMessage(`{"subscription_id":"browser-a","title":"Hello"}`)})
+	if err != nil || receipt.Status != "succeeded" {
 		t.Fatalf("receipt=%#v err=%v", receipt, err)
 	}
 	if provider.payload["endpoint"] != "https://push.example/a" || provider.payload["p256dh"] != "p256dh" || provider.payload["auth"] != "auth" {
@@ -132,7 +132,7 @@ func TestModuleDeliveryPersistsInvocationAndDeduplicatesProviderCall(t *testing.
 			}
 		}
 	}
-	insert, args, err := ormbuilder.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("connection-1", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("connection-1", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,10 +141,10 @@ func TestModuleDeliveryPersistsInvocationAndDeduplicatesProviderCall(t *testing.
 	}
 	provider := &deliveryTestProvider{descriptor: connector.ProviderDescriptor{ConnectorKey: "crm", ProviderKey: "probe", Operations: []connector.OperationDescriptor{{ConnectorKey: "crm", ProviderKey: "probe", Key: "upsert", Mode: connector.ModeEnqueue, ContractSHA256: strings.Repeat("a", 64)}}}}
 	store := NewDeliveryStore(database, dialect, deliveryTestProviders{provider: provider}, deliveryTestSecrets{})
-	request := integrationsdk.DeliveryRequest{MessageID: "message-1", DeduplicationKey: "record:1", WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "primary", Operation: "upsert", Payload: json.RawMessage(`{"id":"1"}`)}
+	request := integrationmodel.DeliveryRequest{MessageID: "message-1", DeduplicationKey: "record:1", WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "primary", Operation: "upsert", Payload: json.RawMessage(`{"id":"1"}`)}
 	for attempt := 0; attempt < 2; attempt++ {
 		receipt, err := store.Accept(t.Context(), request)
-		if err != nil || receipt.Status != integrationsdk.DeliveryStatusSucceeded || receipt.ResultRef != "provider-receipt-1" {
+		if err != nil || receipt.Status != "succeeded" || receipt.ResultRef != "provider-receipt-1" {
 			t.Fatalf("attempt=%d receipt=%#v err=%v", attempt, receipt, err)
 		}
 	}
@@ -152,7 +152,7 @@ func TestModuleDeliveryPersistsInvocationAndDeduplicatesProviderCall(t *testing.
 		t.Fatalf("provider calls=%d, want 1", provider.calls)
 	}
 	receipt, err := store.Query(t.Context(), request.MessageID)
-	if err != nil || receipt.InvocationID == "" || receipt.Status != integrationsdk.DeliveryStatusSucceeded {
+	if err != nil || receipt.InvocationID == "" || receipt.Status != "succeeded" {
 		t.Fatalf("query=%#v err=%v", receipt, err)
 	}
 }

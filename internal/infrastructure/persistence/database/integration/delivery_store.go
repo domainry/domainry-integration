@@ -11,9 +11,9 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
-	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
-	ormbuilder "github.com/domainry/domainry-orm/query"
+	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
+	"github.com/domainry/domainry-orm/query"
 )
 
 type DeliveryStore struct {
@@ -42,41 +42,38 @@ type deliveryConnection struct {
 	SecretRefs                                          map[string]string
 }
 
-func (s *DeliveryStore) Accept(ctx context.Context, request integrationsdk.DeliveryRequest) (integrationsdk.DeliveryReceipt, error) {
-	if err := request.Validate(); err != nil {
-		return integrationsdk.DeliveryReceipt{}, err
-	}
+func (s *DeliveryStore) Accept(ctx context.Context, request integrationmodel.DeliveryRequest) (integrationmodel.DeliveryReceipt, error) {
 	id := deliveryInvocationID(request.MessageID)
 	if receipt, found, err := s.receipt(ctx, request.MessageID, id); err != nil {
-		return integrationsdk.DeliveryReceipt{}, err
-	} else if found && receipt.Status == integrationsdk.DeliveryStatusSucceeded {
+		return integrationmodel.DeliveryReceipt{}, err
+	} else if found && receipt.Status == "succeeded" {
 		return receipt, nil
 	}
 	connection, err := s.connection(ctx, request)
 	if err != nil {
-		return integrationsdk.DeliveryReceipt{}, err
+		return integrationmodel.DeliveryReceipt{}, err
 	}
 	provider, ok := s.providers.Provider(connection.ConnectorKey, connection.ProviderKey)
 	if !ok {
-		return integrationsdk.DeliveryReceipt{}, fmt.Errorf("Integration provider %s/%s is unavailable", connection.ConnectorKey, connection.ProviderKey)
+		return integrationmodel.DeliveryReceipt{}, fmt.Errorf("Integration provider %s/%s is unavailable", connection.ConnectorKey, connection.ProviderKey)
 	}
 	operation, ok := providerOperation(provider.Descriptor(), request.Operation)
 	if !ok {
-		return integrationsdk.DeliveryReceipt{}, fmt.Errorf("Integration provider %s/%s does not implement operation %s", connection.ConnectorKey, connection.ProviderKey, request.Operation)
+		return integrationmodel.DeliveryReceipt{}, fmt.Errorf("Integration provider %s/%s does not implement operation %s", connection.ConnectorKey, connection.ProviderKey, request.Operation)
 	}
 	secrets, err := s.secrets.ResolveSecretReferences(ctx, request.WorkspaceID, connection.SecretRefs)
 	if err != nil {
-		return integrationsdk.DeliveryReceipt{}, err
+		return integrationmodel.DeliveryReceipt{}, err
 	}
 	providerPayload := request.Payload
 	if request.ConnectorKey == "notification" && request.Operation == "send" {
 		providerPayload, err = s.hydrateWebPushPayload(ctx, request.WorkspaceID, request.Payload)
 		if err != nil {
-			return integrationsdk.DeliveryReceipt{}, err
+			return integrationmodel.DeliveryReceipt{}, err
 		}
 	}
 	if err := s.prepareInvocation(ctx, id, request, connection); err != nil {
-		return integrationsdk.DeliveryReceipt{}, err
+		return integrationmodel.DeliveryReceipt{}, err
 	}
 	result, callErr := provider.Call(ctx, connector.CallRequest{
 		ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, OperationKey: request.Operation,
@@ -85,14 +82,14 @@ func (s *DeliveryStore) Accept(ctx context.Context, request integrationsdk.Deliv
 		Connection: connector.Connection{Key: connection.Key, WorkspaceID: connection.WorkspaceID, ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, Status: connection.Status, Config: connection.Config, SecretRefs: connection.SecretRefs},
 		Principal:  connector.Principal{WorkspaceID: request.WorkspaceID, RequestID: request.MessageID, IsAuthenticated: true},
 	})
-	status, errorText := integrationsdk.DeliveryStatusSucceeded, ""
+	status, errorText := "succeeded", ""
 	if callErr != nil {
-		status, errorText = integrationsdk.DeliveryStatusFailed, callErr.Error()
+		status, errorText = "failed", callErr.Error()
 	}
 	if err := s.finishInvocation(ctx, id, status, result.ResponseRef, errorText); err != nil {
-		return integrationsdk.DeliveryReceipt{}, err
+		return integrationmodel.DeliveryReceipt{}, err
 	}
-	receipt := integrationsdk.DeliveryReceipt{MessageID: request.MessageID, InvocationID: id, Status: status, ResultRef: result.ResponseRef}
+	receipt := integrationmodel.DeliveryReceipt{MessageID: request.MessageID, InvocationID: id, Status: status, ResultRef: result.ResponseRef}
 	if callErr != nil {
 		receipt.ErrorCode = "provider_call_failed"
 		return receipt, callErr
@@ -129,31 +126,31 @@ func (s *DeliveryStore) hydrateWebPushPayload(ctx context.Context, workspaceID s
 	return encoded, nil
 }
 
-func (s *DeliveryStore) Query(ctx context.Context, messageID string) (integrationsdk.DeliveryReceipt, error) {
+func (s *DeliveryStore) Query(ctx context.Context, messageID string) (integrationmodel.DeliveryReceipt, error) {
 	messageID = strings.TrimSpace(messageID)
 	if messageID == "" {
-		return integrationsdk.DeliveryReceipt{}, fmt.Errorf("Integration delivery message ID is required")
+		return integrationmodel.DeliveryReceipt{}, fmt.Errorf("Integration delivery message ID is required")
 	}
 	receipt, found, err := s.receipt(ctx, messageID, deliveryInvocationID(messageID))
 	if err != nil {
-		return integrationsdk.DeliveryReceipt{}, err
+		return integrationmodel.DeliveryReceipt{}, err
 	}
 	if !found {
-		return integrationsdk.DeliveryReceipt{}, fmt.Errorf("Integration delivery %q was not found", messageID)
+		return integrationmodel.DeliveryReceipt{}, fmt.Errorf("Integration delivery %q was not found", messageID)
 	}
 	return receipt, nil
 }
 
-func (s *DeliveryStore) connection(ctx context.Context, request integrationsdk.DeliveryRequest) (deliveryConnection, error) {
-	predicates := []ormbuilder.Predicate{ormbuilder.Equal("workspace_id", request.WorkspaceID), ormbuilder.Equal("connector_key", request.ConnectorKey), ormbuilder.Equal("status", "active")}
+func (s *DeliveryStore) connection(ctx context.Context, request integrationmodel.DeliveryRequest) (deliveryConnection, error) {
+	predicates := []query.Predicate{query.Equal("workspace_id", request.WorkspaceID), query.Equal("connector_key", request.ConnectorKey), query.Equal("status", "active")}
 	if request.ConnectionKey != "" {
-		predicates = append(predicates, ormbuilder.Equal("connection_key", request.ConnectionKey))
+		predicates = append(predicates, query.Equal("connection_key", request.ConnectionKey))
 	}
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_connections").Columns("connection_key", "workspace_id", "connector_key", "provider_key", "status", "config_json", "secret_refs_json").Where(ormbuilder.And(predicates...)).OrderBy(ormbuilder.Ascending("connection_key")).Limit(2).Build()
+	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_connections").Columns("connection_key", "workspace_id", "connector_key", "provider_key", "status", "config_json", "secret_refs_json").Where(query.And(predicates...)).OrderBy(query.Ascending("connection_key")).Limit(2).Build()
 	if err != nil {
 		return deliveryConnection{}, err
 	}
-	rows, err := s.database.QueryContext(ctx, query, args...)
+	rows, err := s.database.QueryContext(ctx, queryValue, args...)
 	if err != nil {
 		return deliveryConnection{}, fmt.Errorf("query Integration delivery connection: %w", err)
 	}
@@ -182,17 +179,17 @@ func (s *DeliveryStore) connection(ctx context.Context, request integrationsdk.D
 	return values[0], rows.Err()
 }
 
-func (s *DeliveryStore) prepareInvocation(ctx context.Context, id string, request integrationsdk.DeliveryRequest, connection deliveryConnection) error {
+func (s *DeliveryStore) prepareInvocation(ctx context.Context, id string, request integrationmodel.DeliveryRequest, connection deliveryConnection) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	metadata, _ := json.Marshal(map[string]any{"message_id": request.MessageID, "deduplication_key": request.DeduplicationKey, "payload": json.RawMessage(request.Payload)})
-	lookup, lookupArgs, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status").Where(ormbuilder.Equal("id", id)).Build()
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status").Where(query.Equal("id", id)).Build()
 	if err != nil {
 		return err
 	}
 	var current string
 	err = s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&current)
 	if err == nil {
-		update, args, buildErr := ormbuilder.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("updated_at", now).Where(ormbuilder.Equal("id", id)).Build()
+		update, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("updated_at", now).Where(query.Equal("id", id)).Build()
 		if buildErr != nil {
 			return buildErr
 		}
@@ -202,36 +199,36 @@ func (s *DeliveryStore) prepareInvocation(ctx context.Context, id string, reques
 	if err != sql.ErrNoRows {
 		return err
 	}
-	query, args, err := ormbuilder.NewInsertBuilder(s.dialect, "_integration_invocations").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at").Values(id, request.WorkspaceID, request.ConnectorKey, connection.ProviderKey, connection.Key, request.Operation, "running", int64(0), request.MessageID, nil, nil, nil, nil, nil, nil, string(metadata), now, now).Build()
+	queryValue, args, err := query.NewInsertBuilder(s.dialect, "_integration_invocations").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at").Values(id, request.WorkspaceID, request.ConnectorKey, connection.ProviderKey, connection.Key, request.Operation, "running", int64(0), request.MessageID, nil, nil, nil, nil, nil, nil, string(metadata), now, now).Build()
 	if err != nil {
 		return err
 	}
-	_, err = s.database.ExecContext(ctx, query, args...)
+	_, err = s.database.ExecContext(ctx, queryValue, args...)
 	return err
 }
 
-func (s *DeliveryStore) finishInvocation(ctx context.Context, id string, status integrationsdk.DeliveryStatus, responseRef, errorText string) error {
-	query, args, err := ormbuilder.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(ormbuilder.Equal("id", id)).Build()
+func (s *DeliveryStore) finishInvocation(ctx context.Context, id, status, responseRef, errorText string) error {
+	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.Equal("id", id)).Build()
 	if err != nil {
 		return err
 	}
-	_, err = s.database.ExecContext(ctx, query, args...)
+	_, err = s.database.ExecContext(ctx, queryValue, args...)
 	return err
 }
 
-func (s *DeliveryStore) receipt(ctx context.Context, messageID, id string) (integrationsdk.DeliveryReceipt, bool, error) {
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status", "response_ref", "error").Where(ormbuilder.Equal("id", id)).Build()
+func (s *DeliveryStore) receipt(ctx context.Context, messageID, id string) (integrationmodel.DeliveryReceipt, bool, error) {
+	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status", "response_ref", "error").Where(query.Equal("id", id)).Build()
 	if err != nil {
-		return integrationsdk.DeliveryReceipt{}, false, err
+		return integrationmodel.DeliveryReceipt{}, false, err
 	}
 	var status string
 	var responseRef, errorText sql.NullString
-	if err := s.database.QueryRowContext(ctx, query, args...).Scan(&status, &responseRef, &errorText); err == sql.ErrNoRows {
-		return integrationsdk.DeliveryReceipt{}, false, nil
+	if err := s.database.QueryRowContext(ctx, queryValue, args...).Scan(&status, &responseRef, &errorText); err == sql.ErrNoRows {
+		return integrationmodel.DeliveryReceipt{}, false, nil
 	} else if err != nil {
-		return integrationsdk.DeliveryReceipt{}, false, err
+		return integrationmodel.DeliveryReceipt{}, false, err
 	}
-	receipt := integrationsdk.DeliveryReceipt{MessageID: messageID, InvocationID: id, Status: integrationsdk.DeliveryStatus(status), ResultRef: responseRef.String}
+	receipt := integrationmodel.DeliveryReceipt{MessageID: messageID, InvocationID: id, Status: status, ResultRef: responseRef.String}
 	if errorText.String != "" {
 		receipt.ErrorCode = "provider_call_failed"
 	}
@@ -250,5 +247,3 @@ func providerOperation(descriptor connector.ProviderDescriptor, key string) (con
 	}
 	return connector.OperationDescriptor{}, false
 }
-
-var _ integrationsdk.Delivery = (*DeliveryStore)(nil)

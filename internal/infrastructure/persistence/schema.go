@@ -1,4 +1,4 @@
-package integration
+package persistence
 
 import (
 	"github.com/domainry/domainry-integration-sdk/modulehost"
@@ -7,8 +7,6 @@ import (
 
 const SchemaVersion = databaseschema.SchemaVersion
 
-// SchemaMigrations remains here as a compatibility seam for focused store
-// tests. New composition code uses the classified database/schema package.
 func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, error) {
 	return databaseschema.SchemaMigrations(driver, schema)
 }

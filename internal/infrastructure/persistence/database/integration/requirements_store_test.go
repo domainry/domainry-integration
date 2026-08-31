@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
-	integrationsdk "github.com/domainry/domainry-integration-sdk"
+	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
-	ormbuilder "github.com/domainry/domainry-orm/query"
+	"github.com/domainry/domainry-orm/query"
 	_ "modernc.org/sqlite"
 )
 
@@ -33,18 +33,18 @@ func TestRequirementsStorePreservesManagedConnectionState(t *testing.T) {
 	}
 	provider := &deliveryTestProvider{descriptor: connector.ProviderDescriptor{ConnectorKey: "crm", ProviderKey: "probe", StartupActivation: connector.StartupActivationDefaultSafe}}
 	store := NewRequirementsStore(database, dialect, deliveryTestProviders{provider: provider})
-	requirement := integrationsdk.ConnectionRequirement{Key: "primary", WorkspaceID: "default", ConnectorKey: "crm", ProviderKey: "probe", Name: "Manifest", Config: json.RawMessage(`{"region":"manifest"}`)}
-	if err := store.SynchronizeConnections(t.Context(), []integrationsdk.ConnectionRequirement{requirement}); err != nil {
+	requirement := integrationmodel.ConnectionRequirement{Key: "primary", WorkspaceID: "default", ConnectorKey: "crm", ProviderKey: "probe", Name: "Manifest", Config: json.RawMessage(`{"region":"manifest"}`)}
+	if err := store.SynchronizeConnections(t.Context(), []integrationmodel.ConnectionRequirement{requirement}); err != nil {
 		t.Fatal(err)
 	}
-	update, args, err := ormbuilder.NewUpdateBuilder(dialect, "_integration_connections").Set("name", "Managed").Set("status", "inactive").Set("config_json", `{"region":"managed","timeout":30}`).Set("secret_refs_json", `{"token":"secret:managed"}`).Set("created_by", "operator").Where(ormbuilder.Equal("connection_key", "primary")).Build()
+	update, args, err := query.NewUpdateBuilder(dialect, "_integration_connections").Set("name", "Managed").Set("status", "inactive").Set("config_json", `{"region":"managed","timeout":30}`).Set("secret_refs_json", `{"token":"secret:managed"}`).Set("created_by", "operator").Where(query.Equal("connection_key", "primary")).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.ExecContext(t.Context(), update, args...); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SynchronizeConnections(t.Context(), []integrationsdk.ConnectionRequirement{requirement}); err != nil {
+	if err := store.SynchronizeConnections(t.Context(), []integrationmodel.ConnectionRequirement{requirement}); err != nil {
 		t.Fatal(err)
 	}
 	var name, status, configJSON, secretsJSON, createdBy string

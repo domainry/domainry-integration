@@ -11,14 +11,11 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
-	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
-	ormbuilder "github.com/domainry/domainry-orm/query"
+	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
+	"github.com/domainry/domainry-orm/query"
 )
 
-// RequirementsStore materializes application declarations in Integration-owned
-// storage. It deliberately preserves configuration, secret references and
-// status already managed through the Integration control plane.
 type RequirementsStore struct {
 	database  modulehost.Database
 	dialect   modulehost.Dialect
@@ -29,12 +26,9 @@ func NewRequirementsStore(database modulehost.Database, dialect modulehost.Diale
 	return &RequirementsStore{database: database, dialect: dialect, providers: providers}
 }
 
-func (s *RequirementsStore) SynchronizeConnections(ctx context.Context, requirements []integrationsdk.ConnectionRequirement) error {
+func (s *RequirementsStore) SynchronizeConnections(ctx context.Context, requirements []integrationmodel.ConnectionRequirement) error {
 	for _, requirement := range requirements {
 		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := requirement.Validate(); err != nil {
 			return err
 		}
 		provider, found := s.providers.Provider(strings.TrimSpace(requirement.ConnectorKey), strings.TrimSpace(requirement.ProviderKey))
@@ -56,15 +50,15 @@ func (s *RequirementsStore) SynchronizeConnections(ctx context.Context, requirem
 	return nil
 }
 
-func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requirement integrationsdk.ConnectionRequirement, provider connector.Adapter, providerAvailable bool, config map[string]any) error {
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_connections").
+func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requirement integrationmodel.ConnectionRequirement, provider connector.Adapter, providerAvailable bool, config map[string]any) error {
+	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_connections").
 		Columns("id", "name", "status", "config_json", "secret_refs_json", "created_by").
-		Where(ormbuilder.And(ormbuilder.Equal("workspace_id", requirement.WorkspaceID), ormbuilder.Equal("connection_key", requirement.Key))).Limit(1).Build()
+		Where(query.And(query.Equal("workspace_id", requirement.WorkspaceID), query.Equal("connection_key", requirement.Key))).Limit(1).Build()
 	if err != nil {
 		return fmt.Errorf("build Integration connection requirement lookup: %w", err)
 	}
 	var id, name, status, configJSON, secretRefsJSON, createdBy string
-	lookupErr := s.database.QueryRowContext(ctx, query, args...).Scan(&id, &name, &status, &configJSON, &secretRefsJSON, &createdBy)
+	lookupErr := s.database.QueryRowContext(ctx, queryValue, args...).Scan(&id, &name, &status, &configJSON, &secretRefsJSON, &createdBy)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return fmt.Errorf("lookup Integration connection requirement: %w", lookupErr)
 	}
@@ -97,10 +91,10 @@ func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requireme
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if lookupErr == nil {
-		update, updateArgs, buildErr := ormbuilder.NewUpdateBuilder(s.dialect, "_integration_connections").
+		update, updateArgs, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_connections").
 			Set("connector_key", requirement.ConnectorKey).Set("provider_key", requirement.ProviderKey).
 			Set("name", requirement.Name).Set("status", requirement.Status).Set("config_json", string(payload)).Set("updated_at", now).
-			Where(ormbuilder.Equal("id", id)).Build()
+			Where(query.Equal("id", id)).Build()
 		if buildErr != nil {
 			return fmt.Errorf("build Integration connection requirement update: %w", buildErr)
 		}
@@ -111,7 +105,7 @@ func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requireme
 	}
 	hash := sha256.Sum256([]byte(requirement.WorkspaceID + "\x00" + requirement.Key))
 	id = "manifest_" + hex.EncodeToString(hash[:16])
-	insert, insertArgs, err := ormbuilder.NewInsertBuilder(s.dialect, "_integration_connections").
+	insert, insertArgs, err := query.NewInsertBuilder(s.dialect, "_integration_connections").
 		Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
 		Values(id, requirement.Key, requirement.WorkspaceID, requirement.ConnectorKey, requirement.ProviderKey, requirement.Name, requirement.Status, string(payload), `{}`, "manifest", now, now).Build()
 	if err != nil {
@@ -146,5 +140,3 @@ func defaultConnectionStatus(descriptor connector.ProviderDescriptor, config map
 	}
 	return "active"
 }
-
-var _ integrationsdk.Requirements = (*RequirementsStore)(nil)

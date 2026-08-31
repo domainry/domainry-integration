@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
-	ormbuilder "github.com/domainry/domainry-orm/query"
+	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
+	"github.com/domainry/domainry-orm/query"
 )
 
 type CatalogStore struct {
@@ -19,22 +19,22 @@ func NewCatalogStore(database modulehost.Database, dialect modulehost.Dialect) *
 	return &CatalogStore{database: database, dialect: dialect}
 }
 
-func (s *CatalogStore) ListConnectorDefinitions(ctx context.Context) ([]integrationsdk.ConnectorDefinition, error) {
-	query, args, err := ormbuilder.NewSelectBuilder(s.dialect, "_integration_connector_definitions").
+func (s *CatalogStore) ListConnectorDefinitions(ctx context.Context) ([]integrationmodel.ConnectorDefinition, error) {
+	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_connector_definitions").
 		Columns("resource_key", "name", "payload_json").
-		Where(ormbuilder.IsNull("disabled_at")).
-		OrderBy(ormbuilder.Ascending("resource_key")).Build()
+		Where(query.IsNull("disabled_at")).
+		OrderBy(query.Ascending("resource_key")).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build Integration connector catalog query: %w", err)
 	}
-	rows, err := s.database.QueryContext(ctx, query, args...)
+	rows, err := s.database.QueryContext(ctx, queryValue, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query Integration connector catalog: %w", err)
 	}
 	defer rows.Close()
-	items := make([]integrationsdk.ConnectorDefinition, 0)
+	items := make([]integrationmodel.ConnectorDefinition, 0)
 	for rows.Next() {
-		var item integrationsdk.ConnectorDefinition
+		var item integrationmodel.ConnectorDefinition
 		var payload string
 		if err := rows.Scan(&item.Key, &item.DisplayName, &payload); err != nil {
 			return nil, fmt.Errorf("scan Integration connector definition: %w", err)
@@ -50,5 +50,3 @@ func (s *CatalogStore) ListConnectorDefinitions(ctx context.Context) ([]integrat
 	}
 	return items, nil
 }
-
-var _ integrationsdk.Catalog = (*CatalogStore)(nil)
