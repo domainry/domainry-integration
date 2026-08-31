@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	"github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	"github.com/domainry/domainry-integration-sdk/remote"
@@ -67,12 +68,16 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 	defer service.Close(t.Context())
 	server := httptest.NewServer(service.Handler)
 	defer server.Close()
-	binding, err := remote.NewFactory(remote.Options{BaseURL: server.URL, Token: "service-token", HTTPClient: server.Client()}).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, nil)
+	binding, err := NewFactory(remote.NewFactory(remote.Options{BaseURL: server.URL, Token: "service-token", HTTPClient: server.Client()})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if binding.Descriptor().Mode != integrationsdk.DeploymentModeSaaS {
 		t.Fatalf("mode=%q", binding.Descriptor().Mode)
+	}
+	provider, ok := binding.(modulehttp.Provider)
+	if !ok || len(provider.HTTPSurfaces()) != 1 || len(provider.HTTPSurfaces()[0].Routes()) != 5 {
+		t.Fatalf("SaaS Integration HTTP surfaces=%v", provider)
 	}
 	if values, err := binding.Catalog().ListConnectorDefinitions(t.Context()); err != nil || len(values) != 0 {
 		t.Fatalf("catalog=%v err=%v", values, err)
