@@ -32,8 +32,12 @@ func TestIntegrationCapabilityTracksRoutesConnectorsAndValidation(t *testing.T) 
 		operations += category.OperationCount
 		projections += category.ProjectionCount
 	}
-	if operations != len(integrationRoutes()) || projections != 1 {
-		t.Fatalf("Integration operations=%d/%d projections=%d", operations, len(integrationRoutes()), projections)
+	routes, err := integrationRoutes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operations != len(routes) || projections != 1 {
+		t.Fatalf("Integration operations=%d/%d projections=%d", operations, len(routes), projections)
 	}
 	request := modulecapability.ValidationRequest{
 		ContractVersion: modulecapability.ValidationContractVersion, ModuleKey: "integration", CategoryKey: integrationConnectionsCategory,

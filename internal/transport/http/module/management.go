@@ -10,34 +10,36 @@ import (
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 )
 
-func (h *handler) registerManagement() {
-	h.mux.HandleFunc("GET /tenant-admin/integrations/catalog", h.integrationCatalog)
-	h.mux.HandleFunc("GET /tenant-admin/integrations/connectors", h.integrationCatalog)
-	h.mux.HandleFunc("GET /tenant-admin/integrations/connections", h.listConnections)
-	h.mux.HandleFunc("GET /tenant-admin/integrations/connections/{connectionKey}", h.getConnection)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/connections/{connectionKey}/validate", h.validateConnection)
-	h.mux.HandleFunc("PUT /tenant-admin/integrations/connections/{connectionKey}", h.upsertConnection)
-	h.mux.HandleFunc("DELETE /tenant-admin/integrations/connections/{connectionKey}", h.deleteConnection)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/connections/{connectionKey}/disable", h.disableConnection)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/connections/{connectionKey}/test-operation", h.testConnection)
-	h.mux.HandleFunc("GET /tenant-admin/integrations/secrets", h.listSecrets)
-	h.mux.HandleFunc("PUT /tenant-admin/integrations/secrets/{secretKey}", h.upsertSecret)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/secrets/{secretKey}/disable", h.transitionSecret("disable"))
-	h.mux.HandleFunc("POST /tenant-admin/integrations/secrets/{secretKey}/rotate", h.rotateSecret)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/secrets/{secretKey}/expire", h.transitionSecret("expire"))
-	h.mux.HandleFunc("POST /tenant-admin/integrations/secrets/{secretKey}/revoke", h.transitionSecret("revoke"))
-	h.mux.HandleFunc("GET /tenant-admin/integrations/api-keys", h.listAPIKeys)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/api-keys", h.createAPIKey)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/api-keys/{apiKey}/disable", h.disableAPIKey)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/api-keys/{apiKey}/rotate", h.rotateAPIKey)
-	h.mux.HandleFunc("GET /tenant-admin/integrations/external-identities", h.listExternalIdentities)
-	h.mux.HandleFunc("PUT /tenant-admin/integrations/external-identities/{identityKey}", h.upsertExternalIdentity)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/external-identities/{identityKey}/disable", h.disableExternalIdentity)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/external-identities/resolve", h.resolveExternalIdentity)
-	h.mux.HandleFunc("GET /tenant-admin/integrations/webhook-subscriptions", h.listWebhookSubscriptions)
-	h.mux.HandleFunc("PUT /tenant-admin/integrations/webhook-subscriptions/{subscriptionKey}", h.upsertWebhookSubscription)
-	h.mux.HandleFunc("DELETE /tenant-admin/integrations/webhook-subscriptions/{subscriptionKey}", h.deleteWebhookSubscription)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/webhook-subscriptions/{subscriptionKey}/disable", h.disableWebhookSubscription)
+func (h *handler) managementHandlers() map[string]http.HandlerFunc {
+	return map[string]http.HandlerFunc{
+		integrationsdk.ActionIntegrationCatalogRead:                 h.integrationCatalog,
+		integrationsdk.ActionIntegrationConnectorsList:              h.integrationCatalog,
+		integrationsdk.ActionIntegrationConnectionsList:             h.listConnections,
+		integrationsdk.ActionIntegrationConnectionsGet:              h.getConnection,
+		integrationsdk.ActionIntegrationConnectionsValidate:         h.validateConnection,
+		integrationsdk.ActionIntegrationConnectionsUpsert:           h.upsertConnection,
+		integrationsdk.ActionIntegrationConnectionsDelete:           h.deleteConnection,
+		integrationsdk.ActionIntegrationConnectionsDisable:          h.disableConnection,
+		integrationsdk.ActionIntegrationConnectionsTestOperation:    h.testConnection,
+		integrationsdk.ActionIntegrationSecretsList:                 h.listSecrets,
+		integrationsdk.ActionIntegrationSecretsUpsert:               h.upsertSecret,
+		integrationsdk.ActionIntegrationSecretsDisable:              h.transitionSecret("disable"),
+		integrationsdk.ActionIntegrationSecretsRotate:               h.rotateSecret,
+		integrationsdk.ActionIntegrationSecretsExpire:               h.transitionSecret("expire"),
+		integrationsdk.ActionIntegrationSecretsRevoke:               h.transitionSecret("revoke"),
+		integrationsdk.ActionIntegrationAPIKeysList:                 h.listAPIKeys,
+		integrationsdk.ActionIntegrationAPIKeysCreate:               h.createAPIKey,
+		integrationsdk.ActionIntegrationAPIKeysDisable:              h.disableAPIKey,
+		integrationsdk.ActionIntegrationAPIKeysRotate:               h.rotateAPIKey,
+		integrationsdk.ActionIntegrationExternalIdentitiesList:      h.listExternalIdentities,
+		integrationsdk.ActionIntegrationExternalIdentitiesUpsert:    h.upsertExternalIdentity,
+		integrationsdk.ActionIntegrationExternalIdentitiesDisable:   h.disableExternalIdentity,
+		integrationsdk.ActionIntegrationExternalIdentitiesResolve:   h.resolveExternalIdentity,
+		integrationsdk.ActionIntegrationWebhookSubscriptionsList:    h.listWebhookSubscriptions,
+		integrationsdk.ActionIntegrationWebhookSubscriptionsUpsert:  h.upsertWebhookSubscription,
+		integrationsdk.ActionIntegrationWebhookSubscriptionsDelete:  h.deleteWebhookSubscription,
+		integrationsdk.ActionIntegrationWebhookSubscriptionsDisable: h.disableWebhookSubscription,
+	}
 }
 
 func managementPrincipal(w http.ResponseWriter, r *http.Request) (workspaceID, actorID string, ok bool) {

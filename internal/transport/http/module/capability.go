@@ -14,19 +14,23 @@ import (
 )
 
 const (
-	integrationConnectionsCategory   = "integration.connections"
-	integrationCredentialsCategory   = "integration.credentials"
-	integrationOperationsCategory    = "integration.operations"
-	integrationSubscriptionsCategory = "integration.subscriptions"
+	integrationConnectionsCategory   = integrationsdk.CapabilityIntegrationConnections
+	integrationCredentialsCategory   = integrationsdk.CapabilityIntegrationCredentials
+	integrationOperationsCategory    = integrationsdk.CapabilityIntegrationOperations
+	integrationSubscriptionsCategory = integrationsdk.CapabilityIntegrationSubscriptions
 )
 
 func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, validator modulecapability.Validator) (*modulecapability.StaticBinding, error) {
 	definitions = append([]connectorscatalog.ConnectorSchema(nil), definitions...)
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Key < definitions[j].Key })
 	operations := integrationsdk.IntegrationHTTPSurfaceContract().OpenAPI
+	routes, err := integrationRoutes()
+	if err != nil {
+		return nil, err
+	}
 	groups := map[string][]modulehttp.Route{}
-	for _, route := range integrationRoutes() {
-		key := integrationCapabilityCategory(route.Pattern)
+	for _, route := range routes {
+		key := route.Action.CapabilityKey
 		groups[key] = append(groups[key], route)
 	}
 	definitionsByCategory := []struct {
@@ -256,20 +260,6 @@ func batchIntegrationConnectorProjections(values []modulecapability.SourceProjec
 		result = append(result, current)
 	}
 	return result
-}
-
-func integrationCapabilityCategory(pattern string) string {
-	_, path, _ := strings.Cut(pattern, " ")
-	switch {
-	case strings.Contains(path, "/secrets") || strings.Contains(path, "/api-keys") || strings.Contains(path, "/external-identities"):
-		return integrationCredentialsCategory
-	case strings.Contains(path, "/webhook-subscriptions") || strings.Contains(path, "/web-push") || strings.HasPrefix(path, "/integrations/webhooks/"):
-		return integrationSubscriptionsCategory
-	case strings.Contains(path, "/invocations") || strings.Contains(path, "/events"):
-		return integrationOperationsCategory
-	default:
-		return integrationConnectionsCategory
-	}
 }
 
 type integrationConnectionAuthoringFragment struct {

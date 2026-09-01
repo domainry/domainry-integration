@@ -3,8 +3,10 @@ package module
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,8 +16,9 @@ import (
 )
 
 type surface struct {
-	handler http.Handler
-	routes  []modulehttp.Route
+	handler    http.Handler
+	routes     []modulehttp.Route
+	operations map[string]map[string]any
 }
 
 func (*surface) ContractVersion() string      { return modulehttp.ContractVersion }
@@ -38,31 +41,50 @@ func NewSurface(binding integrationsdk.Binding) (modulehttp.Surface, error) {
 		return nil, errors.New("Integration Operations binding is unavailable")
 	}
 	h := &handler{catalog: binding.Catalog(), management: managementBinding.Management(), operations: operationsBinding.Operations(), subscriptions: webPushBinding.WebPushSubscriptions(), mux: http.NewServeMux()}
-	h.register()
-	return &surface{handler: h.mux, routes: integrationRoutes()}, nil
+	routes, err := integrationRoutes()
+	if err != nil {
+		return nil, err
+	}
+	handlers := h.handlers()
+	operations := integrationsdk.IntegrationHTTPSurfaceContract().OpenAPI
+	for _, route := range routes {
+		key := strings.TrimSpace(route.Action.Key)
+		implementation, found := handlers[key]
+		if !found {
+			return nil, fmt.Errorf("Integration Action %q has no HTTP handler", key)
+		}
+		if _, found := operations[route.Pattern()]; !found {
+			return nil, fmt.Errorf("Integration Action %q has no OpenAPI operation", key)
+		}
+		h.mux.HandleFunc(route.Pattern(), implementation)
+		delete(handlers, key)
+		delete(operations, route.Pattern())
+	}
+	if len(handlers) != 0 || len(operations) != 0 {
+		keys := make([]string, 0, len(handlers)+len(operations))
+		for key := range handlers {
+			keys = append(keys, "handler:"+key)
+		}
+		for pattern := range operations {
+			keys = append(keys, "openapi:"+pattern)
+		}
+		sort.Strings(keys)
+		return nil, fmt.Errorf("Integration implementations have no Action manifest entries: %v", keys)
+	}
+	return &surface{handler: h.mux, routes: routes, operations: integrationsdk.IntegrationHTTPSurfaceContract().OpenAPI}, nil
 }
 
-func integrationRoutes() []modulehttp.Route {
+func integrationRoutes() ([]modulehttp.Route, error) {
 	contract := integrationsdk.IntegrationHTTPSurfaceContract()
 	routes := make([]modulehttp.Route, 0, len(contract.Routes))
-	for _, route := range contract.Routes {
-		exposures := make([]modulehttp.Exposure, len(route.Exposures))
-		for index, exposure := range route.Exposures {
-			exposures[index] = modulehttp.Exposure(exposure)
+	for _, declared := range contract.Routes {
+		route, err := modulehttp.RouteFromAction(declared.Action)
+		if err != nil {
+			return nil, fmt.Errorf("project Integration Action %q: %w", declared.Action.Key, err)
 		}
-		governance := &modulehttp.Governance{
-			EffectClass:         modulehttp.EffectClass(route.EffectClass),
-			HighRiskPolicy:      modulehttp.HighRiskPolicy(route.HighRiskPolicy),
-			IdempotencyDecision: route.IdempotencyDecision,
-			AuditClass:          route.AuditClass,
-		}
-		routes = append(routes, modulehttp.Route{
-			Pattern: route.Pattern, Exposures: exposures, Authentication: modulehttp.Authentication(route.Authentication),
-			Permission: route.Permission, AnyPermissions: append([]string(nil), route.AnyPermissions...), PrincipalOnly: route.PrincipalOnly,
-			Governance: governance,
-		})
+		routes = append(routes, route)
 	}
-	return routes
+	return routes, nil
 }
 
 type handler struct {
@@ -73,19 +95,20 @@ type handler struct {
 	mux           *http.ServeMux
 }
 
-func (h *handler) register() {
-	h.registerManagement()
-	h.mux.HandleFunc("GET /business/notifications/web-push/readiness", h.readiness)
-	h.mux.HandleFunc("GET /business/notifications/web-push/subscriptions", h.list)
-	h.mux.HandleFunc("PUT /business/notifications/web-push/subscriptions/{subscriptionID}", h.upsert)
-	h.mux.HandleFunc("POST /business/notifications/web-push/subscriptions/{subscriptionID}/revoke", h.revoke)
-	h.mux.HandleFunc("POST /integrations/web-push/subscriptions/cleanup-expired", h.cleanup)
-	h.mux.HandleFunc("GET /tenant-admin/integrations/invocations", h.listInvocations)
-	h.mux.HandleFunc("GET /tenant-admin/integrations/invocations/{invocationID}", h.getInvocation)
-	h.mux.HandleFunc("GET /tenant-admin/integrations/events", h.listEvents)
-	h.mux.HandleFunc("GET /tenant-admin/integrations/events/{eventID}", h.getEvent)
-	h.mux.HandleFunc("POST /tenant-admin/integrations/events/{eventID}/replay", h.replayEvent)
-	h.mux.HandleFunc("POST /integrations/webhooks/{workspaceID}/{connectorKey}/{connectionKey}", h.webhook)
+func (h *handler) handlers() map[string]http.HandlerFunc {
+	handlers := h.managementHandlers()
+	handlers[integrationsdk.ActionIntegrationWebPushReadiness] = h.readiness
+	handlers[integrationsdk.ActionIntegrationWebPushSubscriptionsList] = h.list
+	handlers[integrationsdk.ActionIntegrationWebPushSubscriptionsUpsert] = h.upsert
+	handlers[integrationsdk.ActionIntegrationWebPushSubscriptionsRevoke] = h.revoke
+	handlers[integrationsdk.ActionIntegrationWebPushSubscriptionsCleanupExpired] = h.cleanup
+	handlers[integrationsdk.ActionIntegrationInvocationsList] = h.listInvocations
+	handlers[integrationsdk.ActionIntegrationInvocationsGet] = h.getInvocation
+	handlers[integrationsdk.ActionIntegrationEventsList] = h.listEvents
+	handlers[integrationsdk.ActionIntegrationEventsGet] = h.getEvent
+	handlers[integrationsdk.ActionIntegrationEventsReplay] = h.replayEvent
+	handlers[integrationsdk.ActionIntegrationWebhooksIngest] = h.webhook
+	return handlers
 }
 
 func (h *handler) listInvocations(w http.ResponseWriter, r *http.Request) {

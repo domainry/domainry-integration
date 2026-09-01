@@ -135,7 +135,7 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 	for _, required := range []string{"GET /tenant-admin/integrations/connectors", "PUT /tenant-admin/integrations/connections/{connectionKey}", "GET /business/notifications/web-push/readiness"} {
 		found := false
 		for _, route := range routes {
-			if route.Pattern == required {
+			if route.Pattern() == required {
 				found = true
 				break
 			}
