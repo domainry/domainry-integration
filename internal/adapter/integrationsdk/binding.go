@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	integrationapplication "github.com/domainry/domainry-integration/internal/application/integration"
@@ -17,14 +18,27 @@ type Binding struct {
 	management integrationsdk.Management
 	workers    integrationsdk.LocalWorkers
 	surfaces   []modulehttp.Surface
+	capability modulecapability.Binding
 }
 
-func NewBinding(mode integrationsdk.DeploymentMode, service *integrationapplication.Service, management integrationsdk.Management, workers ...integrationsdk.LocalWorkers) *Binding {
-	binding := &Binding{mode: mode, service: service, management: management}
+func NewBinding(mode integrationsdk.DeploymentMode, service *integrationapplication.Service, management integrationsdk.Management, capability modulecapability.Binding, workers ...integrationsdk.LocalWorkers) (*Binding, error) {
+	if capability == nil {
+		return nil, fmt.Errorf("Integration capability binding is required")
+	}
+	binding := &Binding{mode: mode, service: service, management: management, capability: capability}
 	if len(workers) != 0 {
 		binding.workers = workers[0]
 	}
-	return binding
+	return binding, nil
+}
+func (b *Binding) CapabilitySummary(ctx context.Context) (modulecapability.ModuleSummary, error) {
+	return b.capability.CapabilitySummary(ctx)
+}
+func (b *Binding) CapabilityCategory(ctx context.Context, key string) (modulecapability.CategoryDocument, error) {
+	return b.capability.CapabilityCategory(ctx, key)
+}
+func (b *Binding) ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
+	return b.capability.ValidateCapabilityCandidate(ctx, request)
 }
 func (b *Binding) Descriptor() integrationsdk.Descriptor {
 	capabilities := []string{"catalog.read", "requirements.connections.sync", "delivery.accept", "delivery.query", "web_push_subscriptions.manage", "management.connections", "management.secrets", "management.api_keys", "management.external_identities", "management.webhook_subscriptions", "operations.call", "operations.invocations.query", "inbound.webhooks.accept", "inbound.events.query"}

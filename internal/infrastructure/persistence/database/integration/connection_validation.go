@@ -10,6 +10,14 @@ import (
 	connector "github.com/domainry/domainry-connector-sdk"
 )
 
+// ValidateProviderConnectionCandidate runs the same source-owned connection
+// normalization and provider-specific validation used before persistence. It
+// is exported only so the module capability facet cannot drift from execution.
+func ValidateProviderConnectionCandidate(provider connector.Adapter, connection connector.Connection, requireReady bool) error {
+	_, err := normalizeProviderConnection(provider, connection, requireReady)
+	return err
+}
+
 func normalizeProviderConnection(provider connector.Adapter, connection connector.Connection, requireReady bool) (connector.Connection, error) {
 	if provider == nil {
 		return connection, fmt.Errorf("Integration provider %s/%s is unavailable", connection.ConnectorKey, connection.ProviderKey)

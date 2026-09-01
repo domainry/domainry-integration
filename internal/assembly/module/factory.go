@@ -9,6 +9,7 @@ import (
 	foundationhttp "github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
+	integrationcapability "github.com/domainry/domainry-integration/capability"
 	integrationsdkadapter "github.com/domainry/domainry-integration/internal/adapter/integrationsdk"
 	integrationapplication "github.com/domainry/domainry-integration/internal/application/integration"
 	integrationservice "github.com/domainry/domainry-integration/internal/domain/integration/service"
@@ -74,7 +75,15 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 		operations,
 	)
 	management := integrationpersistence.NewManagementStore(host.Database(), host.Dialect(), host.SecretCipher(), delivery)
-	binding := integrationsdkadapter.NewBinding(mode, integrationapplication.New(domain), management, workers)
+	applicationService := integrationapplication.New(domain)
+	capability, err := integrationcapability.Open(integrationcapability.Inputs{})
+	if err != nil {
+		return nil, fmt.Errorf("build Integration capability disclosure: %w", err)
+	}
+	binding, err := integrationsdkadapter.NewBinding(mode, applicationService, management, capability, workers)
+	if err != nil {
+		return nil, err
+	}
 	if mode == integrationsdk.DeploymentModeModule {
 		surface, err := modulehttp.NewSurface(binding)
 		if err != nil {

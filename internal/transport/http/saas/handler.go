@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/modulecapability"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 )
 
@@ -31,6 +32,13 @@ func NewHandler(binding integrationsdk.Binding, serviceToken string) (http.Handl
 		return nil, fmt.Errorf("Integration SaaS service token is required")
 	}
 	h := &handler{binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(), operations: operations.Operations(), token: token, mux: http.NewServeMux()}
+	capability, err := modulecapability.NewHTTPHandler(binding, func(*http.Request) error { return nil })
+	if err != nil {
+		return nil, err
+	}
+	h.mux.Handle(modulecapability.SummaryPath, capability)
+	h.mux.Handle(modulecapability.CategoriesPath, capability)
+	h.mux.Handle(modulecapability.ValidationPath, capability)
 	h.register()
 	return h, nil
 }

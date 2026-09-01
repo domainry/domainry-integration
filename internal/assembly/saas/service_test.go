@@ -3,12 +3,16 @@ package saas
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	"github.com/domainry/domainry-foundation/modulecapability"
+	"github.com/domainry/domainry-foundation/modulecapability/contracttest"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
@@ -96,12 +100,51 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 	defer service.Close(t.Context())
 	server := httptest.NewServer(service.Handler)
 	defer server.Close()
-	binding, err := NewFactory(remote.NewFactory(remote.Options{BaseURL: server.URL, Token: "service-token", HTTPClient: server.Client()})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, nil)
+	directSummary, err := service.Binding.CapabilitySummary(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := NewFactory(remote.NewFactory(remote.Options{BaseURL: server.URL, Token: "service-token", HTTPClient: server.Client(), CapabilityContractSHA256: directSummary.Identity.ContractSHA256})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if binding.Descriptor().Mode != integrationsdk.DeploymentModeSaaS {
 		t.Fatalf("mode=%q", binding.Descriptor().Mode)
+	}
+	contracttest.VerifyBinding(t, binding)
+	remoteSummary, err := binding.CapabilitySummary(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	directJSON, _ := modulecapability.CanonicalJSON(directSummary)
+	remoteJSON, _ := modulecapability.CanonicalJSON(remoteSummary)
+	if string(directJSON) != string(remoteJSON) {
+		t.Fatalf("Integration Module/SaaS capability differs")
+	}
+	if _, err := NewFactory(remote.NewFactory(remote.Options{BaseURL: server.URL, Token: "service-token", HTTPClient: server.Client(), CapabilityContractSHA256: strings.Repeat("0", 64)})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, nil); err == nil {
+		t.Fatal("Integration Remote accepted a stale capability digest")
+	}
+	projectionCount := 0
+	for _, category := range remoteSummary.Categories {
+		projectionCount += category.ProjectionCount
+	}
+	if projectionCount < 50 {
+		t.Fatalf("Integration connector projections=%d", projectionCount)
+	}
+	validation := modulecapability.ValidationRequest{
+		ContractVersion: modulecapability.ValidationContractVersion, ModuleKey: "integration", CategoryKey: "integration.connections",
+		ContractSHA256: remoteSummary.Identity.ContractSHA256, Kind: "integration.connection_requirement",
+		Candidate: modulecapability.AuthoringFragment{
+			Collection: "integrations.connections", Key: "primary",
+			Value: json.RawMessage(`{"key":"primary","connector_key":"crm","provider_key":"missing"}`),
+		},
+	}
+	directResult, directErr := service.Binding.ValidateCapabilityCandidate(t.Context(), validation)
+	remoteResult, remoteErr := binding.ValidateCapabilityCandidate(t.Context(), validation)
+	directJSON, _ = modulecapability.CanonicalJSON(directResult)
+	remoteJSON, _ = modulecapability.CanonicalJSON(remoteResult)
+	if fmt.Sprint(directErr) != fmt.Sprint(remoteErr) || string(directJSON) != string(remoteJSON) {
+		t.Fatalf("Integration Module/SaaS validation differs direct=%s/%v remote=%s/%v", directJSON, directErr, remoteJSON, remoteErr)
 	}
 	provider, ok := binding.(modulehttp.Provider)
 	if !ok || len(provider.HTTPSurfaces()) != 1 || len(provider.HTTPSurfaces()[0].Routes()) != 38 {
