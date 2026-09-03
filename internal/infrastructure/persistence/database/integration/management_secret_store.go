@@ -17,9 +17,13 @@ func (s *ManagementStore) ListSecrets(ctx context.Context, workspaceID string) (
 	if err != nil {
 		return nil, err
 	}
+	where, err := scopedWhere(ctx, workspaceID, "", "")
+	if err != nil {
+		return nil, err
+	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns(
 		"secret_key", "workspace_id", "kind", "status", "description", "value_ref", "fingerprint", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_tested_at", "last_test_status", "last_test_error",
-	).Where(query.Equal("workspace_id", workspaceID)).OrderBy(query.Ascending("secret_key")).Build()
+	).Where(where).OrderBy(query.Ascending("secret_key")).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -54,9 +58,13 @@ func scanSecret(row rowScanner) (integrationsdk.Secret, error) {
 }
 
 func (s *ManagementStore) getSecret(ctx context.Context, workspaceID, key string) (integrationsdk.Secret, error) {
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("secret_key", strings.TrimSpace(key)))
+	if err != nil {
+		return integrationsdk.Secret{}, err
+	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns(
 		"secret_key", "workspace_id", "kind", "status", "description", "value_ref", "fingerprint", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_tested_at", "last_test_status", "last_test_error",
-	).Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("secret_key", strings.TrimSpace(key)))).Limit(1).Build()
+	).Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.Secret{}, err
 	}
@@ -68,6 +76,18 @@ func (s *ManagementStore) getSecret(ctx context.Context, workspaceID, key string
 }
 
 func (s *ManagementStore) UpsertSecret(ctx context.Context, workspaceID, key, actorID string, input integrationsdk.SecretInput) (integrationsdk.Secret, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.Secret{}, err
+	}
+	if s.transactions != nil {
+		var value integrationsdk.Secret
+		err := s.withTransaction(ctx, func(store *ManagementStore) error {
+			var operationErr error
+			value, operationErr = store.UpsertSecret(ctx, workspaceID, key, actorID, input)
+			return operationErr
+		})
+		return value, err
+	}
 	workspaceID, err := requiredOwnerValue("workspace ID", workspaceID)
 	if err != nil {
 		return integrationsdk.Secret{}, err
@@ -80,22 +100,24 @@ func (s *ManagementStore) UpsertSecret(ctx context.Context, workspaceID, key, ac
 	if err != nil {
 		return integrationsdk.Secret{}, err
 	}
-	now, fingerprint, valueRef := ownerNow(), "", ""
-	if input.Value != "" {
+	now, fingerprint, valueRef, ciphertext := ownerNow(), "", "", ""
+	hasNewMaterial := input.Value != ""
+	if hasNewMaterial {
 		if s.cipher == nil {
 			return integrationsdk.Secret{}, fmt.Errorf("Integration secret cipher is unavailable")
 		}
-		ciphertext, encryptErr := s.cipher.EncryptSecretMaterial(ctx, workspaceID, key, input.Value)
-		if encryptErr != nil {
-			return integrationsdk.Secret{}, fmt.Errorf("encrypt Integration secret material: %w", encryptErr)
+		ciphertext, err = s.cipher.EncryptSecretMaterial(ctx, workspaceID, key, input.Value)
+		if err != nil {
+			return integrationsdk.Secret{}, fmt.Errorf("encrypt Integration secret material: %w", err)
 		}
 		digest := sha256.Sum256([]byte(input.Value))
 		fingerprint, valueRef = hex.EncodeToString(digest[:]), "material:"+key
-		if err := s.upsertSecretMaterial(ctx, workspaceID, key, ciphertext, now); err != nil {
-			return integrationsdk.Secret{}, err
-		}
 	}
-	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("id", "value_ref", "fingerprint", "created_by").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", key))).Limit(1).Build()
+	where, err := scopedWhere(ctx, workspaceID, "", "", query.Equal("secret_key", key))
+	if err != nil {
+		return integrationsdk.Secret{}, err
+	}
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("id", "value_ref", "fingerprint", "created_by").Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.Secret{}, err
 	}
@@ -108,8 +130,14 @@ func (s *ManagementStore) UpsertSecret(ctx context.Context, workspaceID, key, ac
 	if valueRef == "" {
 		valueRef, fingerprint = previousRef.String, previousFingerprint.String
 	}
+	if hasNewMaterial {
+		if err := s.upsertSecretMaterial(ctx, workspaceID, key, ciphertext, now); err != nil {
+			return integrationsdk.Secret{}, err
+		}
+	}
 	if lookupErr == sql.ErrNoRows {
 		id = ownerID("secret_", workspaceID, key)
+		actorID, _ = scopeOwner(ctx, actorID)
 		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_secrets").Columns(
 			"id", "secret_key", "workspace_id", "kind", "status", "description", "value_ref", "fingerprint", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_tested_at", "last_test_status", "last_test_error",
 		).Values(id, key, workspaceID, input.Kind, "active", input.Description, valueRef, fingerprint, actorID, now, now, "", input.ExpiresAt, "", "", "", "", "").Build()
@@ -120,7 +148,7 @@ func (s *ManagementStore) UpsertSecret(ctx context.Context, workspaceID, key, ac
 			return integrationsdk.Secret{}, fmt.Errorf("insert Integration secret: %w", err)
 		}
 	} else {
-		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("kind", input.Kind).Set("status", "active").Set("description", input.Description).Set("value_ref", valueRef).Set("fingerprint", fingerprint).Set("expires_at", input.ExpiresAt).Set("disabled_at", "").Set("revoked_at", "").Set("updated_at", now).Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", key))).Build()
+		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("kind", input.Kind).Set("status", "active").Set("description", input.Description).Set("value_ref", valueRef).Set("fingerprint", fingerprint).Set("expires_at", input.ExpiresAt).Set("disabled_at", "").Set("revoked_at", "").Set("updated_at", now).Where(where).Build()
 		if buildErr != nil {
 			return integrationsdk.Secret{}, buildErr
 		}
@@ -158,6 +186,21 @@ func (s *ManagementStore) upsertSecretMaterial(ctx context.Context, workspaceID,
 }
 
 func (s *ManagementStore) TransitionSecret(ctx context.Context, workspaceID, key, transition, _ string) (integrationsdk.Secret, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.Secret{}, err
+	}
+	if s.transactions != nil {
+		var value integrationsdk.Secret
+		err := s.withTransaction(ctx, func(store *ManagementStore) error {
+			var operationErr error
+			value, operationErr = store.TransitionSecret(ctx, workspaceID, key, transition, "")
+			return operationErr
+		})
+		return value, err
+	}
+	if _, err := s.getSecret(ctx, workspaceID, key); err != nil {
+		return integrationsdk.Secret{}, err
+	}
 	now := ownerNow()
 	builder := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("updated_at", now)
 	switch strings.TrimSpace(transition) {
@@ -172,7 +215,11 @@ func (s *ManagementStore) TransitionSecret(ctx context.Context, workspaceID, key
 	default:
 		return integrationsdk.Secret{}, fmt.Errorf("Integration secret transition %q is unsupported", transition)
 	}
-	statement, args, err := builder.Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("secret_key", strings.TrimSpace(key)))).Build()
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("secret_key", strings.TrimSpace(key)))
+	if err != nil {
+		return integrationsdk.Secret{}, err
+	}
+	statement, args, err := builder.Where(where).Build()
 	if err != nil {
 		return integrationsdk.Secret{}, err
 	}
@@ -184,4 +231,25 @@ func (s *ManagementStore) TransitionSecret(ctx context.Context, workspaceID, key
 		return integrationsdk.Secret{}, fmt.Errorf("Integration secret %q was not found", key)
 	}
 	return s.getSecret(ctx, workspaceID, key)
+}
+
+// RotateSecret keeps material replacement and the rotation transition in one
+// owner-database transaction. It is intentionally an optional local extension
+// to the public Management contract so the HTTP adapter never exposes a
+// partially rotated secret.
+func (s *ManagementStore) RotateSecret(ctx context.Context, workspaceID, key, actorID string, input integrationsdk.SecretInput) (integrationsdk.Secret, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.Secret{}, err
+	}
+	var value integrationsdk.Secret
+	err := s.withTransaction(ctx, func(store *ManagementStore) error {
+		var operationErr error
+		value, operationErr = store.UpsertSecret(ctx, workspaceID, key, actorID, input)
+		if operationErr != nil {
+			return operationErr
+		}
+		value, operationErr = store.TransitionSecret(ctx, workspaceID, value.Key, "rotate", actorID)
+		return operationErr
+	})
+	return value, err
 }

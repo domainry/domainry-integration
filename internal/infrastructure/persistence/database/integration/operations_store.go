@@ -15,17 +15,19 @@ import (
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 	"github.com/domainry/domainry-orm/query"
+	"github.com/domainry/domainry-orm/sqlhost"
 )
 
 type OperationsStore struct {
-	database modulehost.Database
-	dialect  modulehost.Dialect
-	delivery *DeliveryStore
-	triggers integrationsdk.TriggerSink
+	database     sqlhost.DBTX
+	transactions modulehost.Database
+	dialect      modulehost.Dialect
+	delivery     *DeliveryStore
+	triggers     integrationsdk.TriggerSink
 }
 
 func NewOperationsStore(database modulehost.Database, dialect modulehost.Dialect, delivery *DeliveryStore, triggers integrationsdk.TriggerSink) *OperationsStore {
-	return &OperationsStore{database: database, dialect: dialect, delivery: delivery, triggers: triggers}
+	return &OperationsStore{database: database, transactions: database, dialect: dialect, delivery: delivery, triggers: triggers}
 }
 
 func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.ProviderCallRequest) (integrationmodel.ProviderCallResult, error) {
@@ -97,7 +99,11 @@ func (s *OperationsStore) ListInvocations(ctx context.Context, filter integratio
 	if strings.TrimSpace(filter.WorkspaceID) == "" {
 		return nil, fmt.Errorf("Integration invocation workspace is required")
 	}
-	predicates := []query.Predicate{query.Equal("workspace_id", strings.TrimSpace(filter.WorkspaceID))}
+	where, err := scopedWhere(ctx, strings.TrimSpace(filter.WorkspaceID), "", "")
+	if err != nil {
+		return nil, err
+	}
+	predicates := []query.Predicate{where}
 	for column, value := range map[string]string{"connector_key": filter.ConnectorKey, "connection_key": filter.ConnectionKey, "operation": filter.Operation, "status": filter.Status} {
 		if value = strings.TrimSpace(value); value != "" {
 			predicates = append(predicates, query.Equal(column, value))
@@ -131,7 +137,11 @@ func (s *OperationsStore) ListInvocations(ctx context.Context, filter integratio
 }
 
 func (s *OperationsStore) GetInvocation(ctx context.Context, workspaceID, id string) (integrationmodel.Invocation, error) {
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns(invocationColumns()...).Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("id", strings.TrimSpace(id)))).Build()
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("id", strings.TrimSpace(id)))
+	if err != nil {
+		return integrationmodel.Invocation{}, err
+	}
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns(invocationColumns()...).Where(where).Build()
 	if err != nil {
 		return integrationmodel.Invocation{}, err
 	}

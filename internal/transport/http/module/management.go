@@ -1,9 +1,11 @@
 package module
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -254,10 +256,14 @@ func (h *handler) rotateSecret(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	value, err := h.management.UpsertSecret(r.Context(), workspaceID, strings.TrimSpace(r.PathValue("secretKey")), actorID, input)
-	if err == nil {
-		value, err = h.management.TransitionSecret(r.Context(), workspaceID, value.Key, "rotate", actorID)
+	rotator, ok := h.management.(interface {
+		RotateSecret(context.Context, string, string, string, integrationsdk.SecretInput) (integrationsdk.Secret, error)
+	})
+	if !ok {
+		writeManagementError(w, fmt.Errorf("Integration secret rotation requires atomic owner persistence"))
+		return
 	}
+	value, err := rotator.RotateSecret(r.Context(), workspaceID, strings.TrimSpace(r.PathValue("secretKey")), actorID, input)
 	if err != nil {
 		writeManagementError(w, err)
 		return

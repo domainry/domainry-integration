@@ -15,9 +15,13 @@ func (s *ManagementStore) ListExternalIdentities(ctx context.Context, workspaceI
 	if err != nil {
 		return nil, err
 	}
+	where, err := scopedWhere(ctx, workspaceID, "", "")
+	if err != nil {
+		return nil, err
+	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_external_identities").Columns(
 		"identity_key", "workspace_id", "provider", "external_subject", "external_subject_type", "external_name", "external_organization", "external_department", "external_group", "external_bot_id", "actor_id", "role_key", "status", "last_resolved_at", "created_by", "created_at", "updated_at", "disabled_at",
-	).Where(query.Equal("workspace_id", workspaceID)).OrderBy(query.Ascending("identity_key")).Build()
+	).Where(where).OrderBy(query.Ascending("identity_key")).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -50,9 +54,13 @@ func scanExternalIdentity(row rowScanner) (integrationsdk.ExternalIdentity, erro
 }
 
 func (s *ManagementStore) getExternalIdentity(ctx context.Context, workspaceID, key string) (integrationsdk.ExternalIdentity, error) {
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("identity_key", strings.TrimSpace(key)))
+	if err != nil {
+		return integrationsdk.ExternalIdentity{}, err
+	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_external_identities").Columns(
 		"identity_key", "workspace_id", "provider", "external_subject", "external_subject_type", "external_name", "external_organization", "external_department", "external_group", "external_bot_id", "actor_id", "role_key", "status", "last_resolved_at", "created_by", "created_at", "updated_at", "disabled_at",
-	).Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("identity_key", strings.TrimSpace(key)))).Limit(1).Build()
+	).Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.ExternalIdentity{}, err
 	}
@@ -64,6 +72,18 @@ func (s *ManagementStore) getExternalIdentity(ctx context.Context, workspaceID, 
 }
 
 func (s *ManagementStore) UpsertExternalIdentity(ctx context.Context, workspaceID, key, actorID string, input integrationsdk.ExternalIdentityInput) (integrationsdk.ExternalIdentity, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.ExternalIdentity{}, err
+	}
+	if s.transactions != nil {
+		var value integrationsdk.ExternalIdentity
+		err := s.withTransaction(ctx, func(store *ManagementStore) error {
+			var operationErr error
+			value, operationErr = store.UpsertExternalIdentity(ctx, workspaceID, key, actorID, input)
+			return operationErr
+		})
+		return value, err
+	}
 	workspaceID, err := requiredOwnerValue("workspace ID", workspaceID)
 	if err != nil {
 		return integrationsdk.ExternalIdentity{}, err
@@ -92,7 +112,11 @@ func (s *ManagementStore) UpsertExternalIdentity(ctx context.Context, workspaceI
 		input.Status = "active"
 	}
 	now := ownerNow()
-	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_external_identities").Columns("id").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("identity_key", key))).Limit(1).Build()
+	where, err := scopedWhere(ctx, workspaceID, "", "", query.Equal("identity_key", key))
+	if err != nil {
+		return integrationsdk.ExternalIdentity{}, err
+	}
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_external_identities").Columns("id").Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.ExternalIdentity{}, err
 	}
@@ -102,6 +126,7 @@ func (s *ManagementStore) UpsertExternalIdentity(ctx context.Context, workspaceI
 		return integrationsdk.ExternalIdentity{}, lookupErr
 	}
 	if lookupErr == sql.ErrNoRows {
+		actorID, _ = scopeOwner(ctx, actorID)
 		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_external_identities").Columns(
 			"id", "identity_key", "workspace_id", "provider", "external_subject", "external_subject_type", "external_name", "external_organization", "external_department", "external_group", "external_bot_id", "actor_id", "role_key", "status", "last_resolved_at", "created_by", "created_at", "updated_at", "disabled_at",
 		).Values(ownerID("external_identity_", workspaceID, key), key, workspaceID, input.Provider, input.ExternalSubject, input.ExternalSubjectType, input.ExternalName, input.ExternalOrganization, input.ExternalDepartment, input.ExternalGroup, input.ExternalBotID, input.ActorID, input.RoleKey, input.Status, "", actorID, now, now, "").Build()
@@ -112,7 +137,7 @@ func (s *ManagementStore) UpsertExternalIdentity(ctx context.Context, workspaceI
 			return integrationsdk.ExternalIdentity{}, fmt.Errorf("insert Integration external identity: %w", err)
 		}
 	} else {
-		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_external_identities").Set("provider", input.Provider).Set("external_subject", input.ExternalSubject).Set("external_subject_type", input.ExternalSubjectType).Set("external_name", input.ExternalName).Set("external_organization", input.ExternalOrganization).Set("external_department", input.ExternalDepartment).Set("external_group", input.ExternalGroup).Set("external_bot_id", input.ExternalBotID).Set("actor_id", input.ActorID).Set("role_key", input.RoleKey).Set("status", input.Status).Set("disabled_at", "").Set("updated_at", now).Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("identity_key", key))).Build()
+		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_external_identities").Set("provider", input.Provider).Set("external_subject", input.ExternalSubject).Set("external_subject_type", input.ExternalSubjectType).Set("external_name", input.ExternalName).Set("external_organization", input.ExternalOrganization).Set("external_department", input.ExternalDepartment).Set("external_group", input.ExternalGroup).Set("external_bot_id", input.ExternalBotID).Set("actor_id", input.ActorID).Set("role_key", input.RoleKey).Set("status", input.Status).Set("disabled_at", "").Set("updated_at", now).Where(where).Build()
 		if buildErr != nil {
 			return integrationsdk.ExternalIdentity{}, buildErr
 		}
@@ -124,8 +149,27 @@ func (s *ManagementStore) UpsertExternalIdentity(ctx context.Context, workspaceI
 }
 
 func (s *ManagementStore) DisableExternalIdentity(ctx context.Context, workspaceID, key, _ string) (integrationsdk.ExternalIdentity, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.ExternalIdentity{}, err
+	}
+	if s.transactions != nil {
+		var value integrationsdk.ExternalIdentity
+		err := s.withTransaction(ctx, func(store *ManagementStore) error {
+			var operationErr error
+			value, operationErr = store.DisableExternalIdentity(ctx, workspaceID, key, "")
+			return operationErr
+		})
+		return value, err
+	}
+	if _, err := s.getExternalIdentity(ctx, workspaceID, key); err != nil {
+		return integrationsdk.ExternalIdentity{}, err
+	}
 	now := ownerNow()
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_external_identities").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("identity_key", strings.TrimSpace(key)))).Build()
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("identity_key", strings.TrimSpace(key)))
+	if err != nil {
+		return integrationsdk.ExternalIdentity{}, err
+	}
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_external_identities").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(where).Build()
 	if err != nil {
 		return integrationsdk.ExternalIdentity{}, err
 	}
@@ -140,9 +184,25 @@ func (s *ManagementStore) DisableExternalIdentity(ctx context.Context, workspace
 }
 
 func (s *ManagementStore) ResolveExternalIdentity(ctx context.Context, workspaceID, provider, externalSubject string) (integrationsdk.ExternalIdentity, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.ExternalIdentity{}, err
+	}
+	if s.transactions != nil {
+		var value integrationsdk.ExternalIdentity
+		err := s.withTransaction(ctx, func(store *ManagementStore) error {
+			var operationErr error
+			value, operationErr = store.ResolveExternalIdentity(ctx, workspaceID, provider, externalSubject)
+			return operationErr
+		})
+		return value, err
+	}
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("provider", strings.TrimSpace(provider)), query.Equal("external_subject", strings.TrimSpace(externalSubject)), query.Equal("status", "active"))
+	if err != nil {
+		return integrationsdk.ExternalIdentity{}, err
+	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_external_identities").Columns(
 		"identity_key", "workspace_id", "provider", "external_subject", "external_subject_type", "external_name", "external_organization", "external_department", "external_group", "external_bot_id", "actor_id", "role_key", "status", "last_resolved_at", "created_by", "created_at", "updated_at", "disabled_at",
-	).Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("provider", strings.TrimSpace(provider)), query.Equal("external_subject", strings.TrimSpace(externalSubject)), query.Equal("status", "active"))).Limit(1).Build()
+	).Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.ExternalIdentity{}, err
 	}
@@ -154,7 +214,11 @@ func (s *ManagementStore) ResolveExternalIdentity(ctx context.Context, workspace
 		return value, err
 	}
 	now := ownerNow()
-	update, updateArgs, err := query.NewUpdateBuilder(s.dialect, "_integration_external_identities").Set("last_resolved_at", now).Set("updated_at", now).Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("identity_key", value.Key))).Build()
+	updateWhere, whereErr := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("identity_key", value.Key))
+	if whereErr != nil {
+		return value, whereErr
+	}
+	update, updateArgs, err := query.NewUpdateBuilder(s.dialect, "_integration_external_identities").Set("last_resolved_at", now).Set("updated_at", now).Where(updateWhere).Build()
 	if err == nil {
 		_, err = s.database.ExecContext(ctx, update, updateArgs...)
 	}

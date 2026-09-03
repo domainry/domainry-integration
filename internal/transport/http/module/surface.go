@@ -13,6 +13,8 @@ import (
 	"github.com/domainry/domainry-foundation/modulehttp"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
+	integrationapplication "github.com/domainry/domainry-integration/internal/application/integration"
+	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 )
 
 type surface struct {
@@ -56,6 +58,9 @@ func NewSurface(binding integrationsdk.Binding) (modulehttp.Surface, error) {
 		if _, found := operations[route.Pattern()]; !found {
 			return nil, fmt.Errorf("Integration Action %q has no OpenAPI operation", key)
 		}
+		if key != integrationsdk.ActionIntegrationWebhooksIngest {
+			implementation = authorizeAction(key, implementation)
+		}
 		h.mux.HandleFunc(route.Pattern(), implementation)
 		delete(handlers, key)
 		delete(operations, route.Pattern())
@@ -72,6 +77,37 @@ func NewSurface(binding integrationsdk.Binding) (modulehttp.Surface, error) {
 		return nil, fmt.Errorf("Integration implementations have no Action manifest entries: %v", keys)
 	}
 	return &surface{handler: h.mux, routes: routes, operations: integrationsdk.IntegrationHTTPSurfaceContract().OpenAPI}, nil
+}
+
+func authorizeAction(permissionKey string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := requestPrincipal(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "auth.principal_required")
+			return
+		}
+		scope, err := integrationapplication.AuthorizeDataAccess(principal, permissionKey)
+		if err != nil {
+			writeError(w, http.StatusForbidden, "backend.integration.permission_denied")
+			return
+		}
+		if requiresAllDataScope(permissionKey) && (!scope.Unrestricted || scope.DeniedAll || len(scope.DeniedUserIDs) != 0 || len(scope.DeniedOrgIDs) != 0) {
+			writeError(w, http.StatusForbidden, "backend.integration.all_data_scope_required")
+			return
+		}
+		next(w, r.WithContext(integrationmodel.WithAccessScope(r.Context(), scope)))
+	}
+}
+
+func requiresAllDataScope(permissionKey string) bool {
+	switch permissionKey {
+	case integrationsdk.ActionIntegrationWebPushSubscriptionsList,
+		integrationsdk.ActionIntegrationWebPushSubscriptionsUpsert,
+		integrationsdk.ActionIntegrationWebPushSubscriptionsRevoke:
+		return false
+	default:
+		return true
+	}
 }
 
 func integrationRoutes() ([]modulehttp.Route, error) {

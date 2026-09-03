@@ -18,9 +18,13 @@ func (s *ManagementStore) ListAPIKeys(ctx context.Context, workspaceID string) (
 	if err != nil {
 		return nil, err
 	}
+	where, err := scopedWhere(ctx, workspaceID, "", "")
+	if err != nil {
+		return nil, err
+	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_api_keys").Columns(
 		"api_key", "workspace_id", "name", "token_prefix", "actor_id", "role_key", "scopes_json", "status", "expires_at", "last_used_at", "created_by", "created_at", "updated_at", "disabled_at",
-	).Where(query.Equal("workspace_id", workspaceID)).OrderBy(query.Ascending("api_key")).Build()
+	).Where(where).OrderBy(query.Ascending("api_key")).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -55,9 +59,13 @@ func scanAPIKey(row rowScanner) (integrationsdk.APIKey, error) {
 }
 
 func (s *ManagementStore) getAPIKey(ctx context.Context, workspaceID, key string) (integrationsdk.APIKey, error) {
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("api_key", strings.TrimSpace(key)))
+	if err != nil {
+		return integrationsdk.APIKey{}, err
+	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_api_keys").Columns(
 		"api_key", "workspace_id", "name", "token_prefix", "actor_id", "role_key", "scopes_json", "status", "expires_at", "last_used_at", "created_by", "created_at", "updated_at", "disabled_at",
-	).Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("api_key", strings.TrimSpace(key)))).Limit(1).Build()
+	).Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.APIKey{}, err
 	}
@@ -86,6 +94,18 @@ func newAPIKeyCredential(input integrationsdk.APIKeyInput) (string, string, stri
 }
 
 func (s *ManagementStore) CreateAPIKey(ctx context.Context, workspaceID, actorID string, input integrationsdk.APIKeyInput) (integrationsdk.APIKeyCredential, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.APIKeyCredential{}, err
+	}
+	if s.transactions != nil {
+		var value integrationsdk.APIKeyCredential
+		err := s.withTransaction(ctx, func(store *ManagementStore) error {
+			var operationErr error
+			value, operationErr = store.CreateAPIKey(ctx, workspaceID, actorID, input)
+			return operationErr
+		})
+		return value, err
+	}
 	workspaceID, err := requiredOwnerValue("workspace ID", workspaceID)
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
@@ -107,6 +127,7 @@ func (s *ManagementStore) CreateAPIKey(ctx context.Context, workspaceID, actorID
 		return integrationsdk.APIKeyCredential{}, err
 	}
 	now := ownerNow()
+	actorID, _ = scopeOwner(ctx, actorID)
 	prefix := token
 	if len(prefix) > 12 {
 		prefix = prefix[:12]
@@ -125,8 +146,27 @@ func (s *ManagementStore) CreateAPIKey(ctx context.Context, workspaceID, actorID
 }
 
 func (s *ManagementStore) DisableAPIKey(ctx context.Context, workspaceID, key, _ string) (integrationsdk.APIKey, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.APIKey{}, err
+	}
+	if s.transactions != nil {
+		var value integrationsdk.APIKey
+		err := s.withTransaction(ctx, func(store *ManagementStore) error {
+			var operationErr error
+			value, operationErr = store.DisableAPIKey(ctx, workspaceID, key, "")
+			return operationErr
+		})
+		return value, err
+	}
+	if _, err := s.getAPIKey(ctx, workspaceID, key); err != nil {
+		return integrationsdk.APIKey{}, err
+	}
 	now := ownerNow()
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_api_keys").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("api_key", strings.TrimSpace(key)))).Build()
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("api_key", strings.TrimSpace(key)))
+	if err != nil {
+		return integrationsdk.APIKey{}, err
+	}
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_api_keys").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(where).Build()
 	if err != nil {
 		return integrationsdk.APIKey{}, err
 	}
@@ -141,6 +181,18 @@ func (s *ManagementStore) DisableAPIKey(ctx context.Context, workspaceID, key, _
 }
 
 func (s *ManagementStore) RotateAPIKey(ctx context.Context, workspaceID, key, _ string) (integrationsdk.APIKeyCredential, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.APIKeyCredential{}, err
+	}
+	if s.transactions != nil {
+		var value integrationsdk.APIKeyCredential
+		err := s.withTransaction(ctx, func(store *ManagementStore) error {
+			var operationErr error
+			value, operationErr = store.RotateAPIKey(ctx, workspaceID, key, "")
+			return operationErr
+		})
+		return value, err
+	}
 	current, err := s.getAPIKey(ctx, workspaceID, key)
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
@@ -154,7 +206,11 @@ func (s *ManagementStore) RotateAPIKey(ctx context.Context, workspaceID, key, _ 
 		prefix = prefix[:12]
 	}
 	now := ownerNow()
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_api_keys").Set("token_prefix", prefix).Set("token_hash", tokenHash).Set("status", "active").Set("disabled_at", "").Set("updated_at", now).Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("api_key", strings.TrimSpace(key)))).Build()
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("api_key", strings.TrimSpace(key)))
+	if err != nil {
+		return integrationsdk.APIKeyCredential{}, err
+	}
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_api_keys").Set("token_prefix", prefix).Set("token_hash", tokenHash).Set("status", "active").Set("disabled_at", "").Set("updated_at", now).Where(where).Build()
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
 	}

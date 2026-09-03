@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
 	"github.com/domainry/domainry-foundation/modulehttp"
@@ -160,7 +161,13 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 	}
 	payload, _ := json.Marshal(integrationsdk.ConnectionInput{ConnectorKey: "crm", ProviderKey: "probe", Name: "Updated"})
 	request := httptest.NewRequest(http.MethodPut, "/tenant-admin/integrations/connections/primary", bytes.NewReader(payload))
-	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: identitysdk.Principal{Known: true, WorkspaceID: "workspace-a", UserID: "admin"}}))
+	bundle := &identitysdk.AccessBundle{
+		ContractVersion: identitysdk.CurrentPolicyBundleVersion, AuthorizationRevision: "revision-1", ExpiresAt: time.Now().UTC().Add(time.Hour),
+		Subject:        identitysdk.Subject{WorkspaceID: "workspace-a", SubjectID: "admin"},
+		FunctionGrants: []identitysdk.FunctionGrant{{Resource: "integration.connections", Action: "upsert", Effect: identitysdk.EffectAllow}},
+		DataPolicies:   []identitysdk.DataPolicy{{Key: integrationsdk.ActionIntegrationConnectionsUpsert, Resource: "integration.connections", Action: "upsert", Effect: identitysdk.EffectAllow, DataScopes: []identitysdk.DataScope{identitysdk.DataScopeAll}}},
+	}
+	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: identitysdk.Principal{Known: true, WorkspaceID: "workspace-a", UserID: "admin", AccessBundle: bundle}}))
 	response := httptest.NewRecorder()
 	provider.HTTPSurfaces()[0].Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {

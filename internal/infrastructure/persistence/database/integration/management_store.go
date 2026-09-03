@@ -16,20 +16,57 @@ import (
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	"github.com/domainry/domainry-orm/query"
+	"github.com/domainry/domainry-orm/sqlhost"
 )
 
 // ManagementStore is the only owner-side DML implementation for Integration
 // configuration. Runtime projections consume it through the SDK and never read
 // these tables directly.
 type ManagementStore struct {
-	database modulehost.Database
-	dialect  modulehost.Dialect
-	cipher   modulehost.SecretMaterialCipher
-	delivery *DeliveryStore
+	database     sqlhost.DBTX
+	transactions modulehost.Database
+	dialect      modulehost.Dialect
+	cipher       modulehost.SecretMaterialCipher
+	delivery     *DeliveryStore
 }
 
 func NewManagementStore(database modulehost.Database, dialect modulehost.Dialect, cipher modulehost.SecretMaterialCipher, delivery *DeliveryStore) *ManagementStore {
-	return &ManagementStore{database: database, dialect: dialect, cipher: cipher, delivery: delivery}
+	return &ManagementStore{database: database, transactions: database, dialect: dialect, cipher: cipher, delivery: delivery}
+}
+
+func (s *ManagementStore) withTransaction(ctx context.Context, operation func(*ManagementStore) error) error {
+	if s.transactions == nil {
+		return operation(s)
+	}
+	tx, err := s.transactions.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	scoped := *s
+	scoped.database, scoped.transactions = tx, nil
+	if err := operation(&scoped); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *ManagementStore) requireScopedCandidate(ctx context.Context, table, keyColumn, workspaceID, key string) error {
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal(keyColumn, strings.TrimSpace(key)))
+	if err != nil {
+		return err
+	}
+	statement, args, err := query.NewSelectBuilder(s.dialect, table).Columns("id").Where(where).Limit(1).Build()
+	if err != nil {
+		return err
+	}
+	var id string
+	if err := s.database.QueryRowContext(ctx, statement, args...).Scan(&id); err == sql.ErrNoRows {
+		return fmt.Errorf("Integration resource was not found")
+	} else if err != nil {
+		return err
+	}
+	return nil
 }
 
 func ownerNow() string { return time.Now().UTC().Format(time.RFC3339Nano) }
@@ -63,9 +100,13 @@ func (s *ManagementStore) ListConnections(ctx context.Context, workspaceID strin
 	if err != nil {
 		return nil, err
 	}
+	where, err := scopedWhere(ctx, workspaceID, "", "")
+	if err != nil {
+		return nil, err
+	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_connections").
 		Columns("connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
-		Where(query.Equal("workspace_id", workspaceID)).OrderBy(query.Ascending("connection_key")).Build()
+		Where(where).OrderBy(query.Ascending("connection_key")).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -113,9 +154,13 @@ func (s *ManagementStore) GetConnection(ctx context.Context, workspaceID, key st
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}
+	where, err := scopedWhere(ctx, workspaceID, "", "", query.Equal("connection_key", key))
+	if err != nil {
+		return integrationsdk.Connection{}, err
+	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_connections").
 		Columns("connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
-		Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("connection_key", key))).Limit(1).Build()
+		Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}
@@ -127,6 +172,18 @@ func (s *ManagementStore) GetConnection(ctx context.Context, workspaceID, key st
 }
 
 func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key, actorID string, input integrationsdk.ConnectionInput) (integrationsdk.Connection, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.Connection{}, err
+	}
+	if s.transactions != nil {
+		var value integrationsdk.Connection
+		err := s.withTransaction(ctx, func(store *ManagementStore) error {
+			var operationErr error
+			value, operationErr = store.UpsertConnection(ctx, workspaceID, key, actorID, input)
+			return operationErr
+		})
+		return value, err
+	}
 	workspaceID, err := requiredOwnerValue("workspace ID", workspaceID)
 	if err != nil {
 		return integrationsdk.Connection{}, err
@@ -173,7 +230,11 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 		return integrationsdk.Connection{}, fmt.Errorf("encode Integration connection secret references: %w", err)
 	}
 	now := ownerNow()
-	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_connections").Columns("id").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("connection_key", key))).Limit(1).Build()
+	where, err := scopedWhere(ctx, workspaceID, "", "", query.Equal("connection_key", key))
+	if err != nil {
+		return integrationsdk.Connection{}, err
+	}
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_connections").Columns("id").Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}
@@ -184,6 +245,7 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 	}
 	if lookupErr == sql.ErrNoRows {
 		id = ownerID("connection_", workspaceID, key)
+		actorID, _ = scopeOwner(ctx, actorID)
 		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_connections").Columns(
 			"id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at",
 		).Values(id, key, workspaceID, input.ConnectorKey, input.ProviderKey, input.Name, input.Status, configJSON, refsJSON, actorID, now, now).Build()
@@ -197,7 +259,7 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_connections").
 			Set("connector_key", input.ConnectorKey).Set("provider_key", input.ProviderKey).Set("name", input.Name).
 			Set("status", input.Status).Set("config_json", configJSON).Set("secret_refs_json", refsJSON).Set("updated_at", now).
-			Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("connection_key", key))).Build()
+			Where(where).Build()
 		if buildErr != nil {
 			return integrationsdk.Connection{}, buildErr
 		}
@@ -209,7 +271,20 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 }
 
 func (s *ManagementStore) DeleteConnection(ctx context.Context, workspaceID, key string) error {
-	statement, args, err := query.NewDeleteBuilder(s.dialect, "_integration_connections").Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("connection_key", strings.TrimSpace(key)))).Build()
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return err
+	}
+	if s.transactions != nil {
+		return s.withTransaction(ctx, func(store *ManagementStore) error { return store.DeleteConnection(ctx, workspaceID, key) })
+	}
+	if err := s.requireScopedCandidate(ctx, "_integration_connections", "connection_key", workspaceID, key); err != nil {
+		return err
+	}
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("connection_key", strings.TrimSpace(key)))
+	if err != nil {
+		return err
+	}
+	statement, args, err := query.NewDeleteBuilder(s.dialect, "_integration_connections").Where(where).Build()
 	if err != nil {
 		return err
 	}
@@ -224,6 +299,18 @@ func (s *ManagementStore) DeleteConnection(ctx context.Context, workspaceID, key
 }
 
 func (s *ManagementStore) SetConnectionStatus(ctx context.Context, workspaceID, key, status, _ string) (integrationsdk.Connection, error) {
+	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
+		return integrationsdk.Connection{}, err
+	}
+	if s.transactions != nil {
+		var value integrationsdk.Connection
+		err := s.withTransaction(ctx, func(store *ManagementStore) error {
+			var operationErr error
+			value, operationErr = store.SetConnectionStatus(ctx, workspaceID, key, status, "")
+			return operationErr
+		})
+		return value, err
+	}
 	status, err := requiredOwnerValue("connection status", status)
 	if err != nil {
 		return integrationsdk.Connection{}, err
@@ -247,7 +334,11 @@ func (s *ManagementStore) SetConnectionStatus(ctx context.Context, workspaceID, 
 			return integrationsdk.Connection{}, validateErr
 		}
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", status).Set("updated_at", ownerNow()).Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("connection_key", strings.TrimSpace(key)))).Build()
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("connection_key", strings.TrimSpace(key)))
+	if err != nil {
+		return integrationsdk.Connection{}, err
+	}
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", status).Set("updated_at", ownerNow()).Where(where).Build()
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}

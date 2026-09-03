@@ -112,7 +112,11 @@ func (s *OperationsStore) ListEvents(ctx context.Context, filter integrationmode
 	if strings.TrimSpace(filter.WorkspaceID) == "" {
 		return nil, fmt.Errorf("Integration event workspace is required")
 	}
-	predicates := []query.Predicate{query.Equal("workspace_id", strings.TrimSpace(filter.WorkspaceID))}
+	where, err := scopedWhere(ctx, strings.TrimSpace(filter.WorkspaceID), "", "")
+	if err != nil {
+		return nil, err
+	}
+	predicates := []query.Predicate{where}
 	for column, value := range map[string]string{"provider": filter.Provider, "event_type": filter.EventType, "status": filter.Status} {
 		if value = strings.TrimSpace(value); value != "" {
 			predicates = append(predicates, query.Equal(column, value))
@@ -144,7 +148,11 @@ func (s *OperationsStore) ListEvents(ctx context.Context, filter integrationmode
 }
 
 func (s *OperationsStore) GetEvent(ctx context.Context, workspaceID, id string) (integrationmodel.Event, error) {
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_events").Columns(eventColumns()...).Where(query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("id", strings.TrimSpace(id)))).Build()
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("id", strings.TrimSpace(id)))
+	if err != nil {
+		return integrationmodel.Event{}, err
+	}
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_events").Columns(eventColumns()...).Where(where).Build()
 	if err != nil {
 		return integrationmodel.Event{}, err
 	}
@@ -159,10 +167,43 @@ func (s *OperationsStore) GetEvent(ctx context.Context, workspaceID, id string) 
 }
 
 func (s *OperationsStore) ReplayEvent(ctx context.Context, workspaceID, id string) (integrationmodel.Event, error) {
-	event, err := s.GetEvent(ctx, workspaceID, id)
+	workspaceID, id = strings.TrimSpace(workspaceID), strings.TrimSpace(id)
+	tx, err := s.transactions.BeginTx(ctx, nil)
+	if err != nil {
+		return integrationmodel.Event{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	where, err := scopedWhere(ctx, workspaceID, "", "", query.Equal("id", id))
+	if err != nil {
+		return integrationmodel.Event{}, err
+	}
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_events").Columns(eventColumns()...).Where(where).Limit(1).Build()
+	if err != nil {
+		return integrationmodel.Event{}, err
+	}
+	event, err := scanEvent(tx.QueryRowContext(ctx, statement, args...))
+	if err == sql.ErrNoRows {
+		return event, fmt.Errorf("Integration event %q was not found", id)
+	}
 	if err != nil {
 		return event, err
 	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_events").Set("status", "received").Set("error", "").Set("next_retry_at", "").Set("updated_at", now).Where(where).Build()
+	if err != nil {
+		return event, err
+	}
+	result, err := tx.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return event, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return event, fmt.Errorf("Integration event %q changed during replay", id)
+	}
+	if err := tx.Commit(); err != nil {
+		return event, err
+	}
+	event.Status, event.Error, event.NextRetryAt, event.UpdatedAt = "received", "", "", now
 	return s.processEvent(ctx, event, nil)
 }
 
@@ -360,7 +401,11 @@ func (s *OperationsStore) updateEventStatus(ctx context.Context, event integrati
 	} else {
 		builder = builder.Set("next_retry_at", "")
 	}
-	statement, args, err := builder.Where(query.And(query.Equal("workspace_id", event.WorkspaceID), query.Equal("id", event.ID))).Build()
+	where, err := scopedWhere(ctx, event.WorkspaceID, "", "", query.Equal("id", event.ID))
+	if err != nil {
+		return event, err
+	}
+	statement, args, err := builder.Where(where).Build()
 	if err != nil {
 		return event, err
 	}

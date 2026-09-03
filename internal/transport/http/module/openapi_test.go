@@ -33,7 +33,7 @@ func TestIntegrationSurfacePublishesOpenAPIForEveryOwnedRoute(t *testing.T) {
 			t.Errorf("route %q has no security contract", pattern)
 			continue
 		}
-		if route.Action.Authorization.Strategy == actioncontract.AuthorizationAnonymousProtocol {
+		if route.Action.Authorization.Strategy == actioncontract.AuthorizationSigned {
 			if values, ok := security.([]any); !ok || len(values) != 0 {
 				t.Errorf("anonymous route %q is not disclosed as anonymous: %#v", pattern, security)
 			}
