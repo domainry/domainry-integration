@@ -17,19 +17,19 @@ import (
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 )
 
-type surface struct {
+type adapter struct {
 	handler    http.Handler
 	routes     []modulehttp.Route
 	operations map[string]map[string]any
 }
 
-func (*surface) ContractVersion() string      { return modulehttp.ContractVersion }
-func (*surface) Owner() string                { return "integration" }
-func (*surface) Name() string                 { return "integration_product" }
-func (s *surface) Handler() http.Handler      { return s.handler }
-func (s *surface) Routes() []modulehttp.Route { return append([]modulehttp.Route(nil), s.routes...) }
+func (*adapter) ContractVersion() string      { return modulehttp.ContractVersion }
+func (*adapter) Owner() string                { return "integration" }
+func (*adapter) Name() string                 { return "integration_product" }
+func (s *adapter) Handler() http.Handler      { return s.handler }
+func (s *adapter) Routes() []modulehttp.Route { return append([]modulehttp.Route(nil), s.routes...) }
 
-func NewSurface(binding integrationsdk.Binding) (modulehttp.Surface, error) {
+func NewAdapter(binding integrationsdk.Binding) (modulehttp.Adapter, error) {
 	webPushBinding, ok := binding.(integrationsdk.WebPushBinding)
 	if !ok || webPushBinding.WebPushSubscriptions() == nil {
 		return nil, errors.New("Integration Web Push binding is unavailable")
@@ -48,7 +48,7 @@ func NewSurface(binding integrationsdk.Binding) (modulehttp.Surface, error) {
 		return nil, err
 	}
 	handlers := h.handlers()
-	operations := integrationsdk.IntegrationHTTPSurfaceContract().OpenAPI
+	operations := integrationsdk.IntegrationHTTPAdapterContract().OpenAPI
 	for _, route := range routes {
 		key := strings.TrimSpace(route.Action.Key)
 		implementation, found := handlers[key]
@@ -76,7 +76,7 @@ func NewSurface(binding integrationsdk.Binding) (modulehttp.Surface, error) {
 		sort.Strings(keys)
 		return nil, fmt.Errorf("Integration implementations have no Action manifest entries: %v", keys)
 	}
-	return &surface{handler: h.mux, routes: routes, operations: integrationsdk.IntegrationHTTPSurfaceContract().OpenAPI}, nil
+	return &adapter{handler: h.mux, routes: routes, operations: integrationsdk.IntegrationHTTPAdapterContract().OpenAPI}, nil
 }
 
 func authorizeAction(permissionKey string, next http.HandlerFunc) http.HandlerFunc {
@@ -111,7 +111,7 @@ func requiresAllDataScope(permissionKey string) bool {
 }
 
 func integrationRoutes() ([]modulehttp.Route, error) {
-	contract := integrationsdk.IntegrationHTTPSurfaceContract()
+	contract := integrationsdk.IntegrationHTTPAdapterContract()
 	routes := make([]modulehttp.Route, 0, len(contract.Routes))
 	for _, declared := range contract.Routes {
 		route, err := modulehttp.RouteFromAction(declared.Action)
@@ -340,4 +340,4 @@ func (h *handler) cleanup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"cleaned": count})
 }
 
-var _ modulehttp.Surface = (*surface)(nil)
+var _ modulehttp.Adapter = (*adapter)(nil)

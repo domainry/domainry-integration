@@ -32,7 +32,7 @@ The implementation follows an internal DDD boundary:
 - `internal/assembly/{module,saas}` composes the same application services for both deployment modes.
 - `internal/infrastructure/persistence/database/{integration,migration,schema}` separates business DML, migration registration, and source-owned DDL.
 - `internal/transport/http/module` implements the source-owned Module HTTP
-  surface and consumes the route, governance and OpenAPI contract published by
+  adapter and consumes the route, governance and OpenAPI contract published by
   `domainry-integration-sdk`.
 - `module` remains a thin public facade over the internal Module assembly.
 
@@ -51,7 +51,7 @@ Integration publishes deployment-neutral contracts through
 - Module HTTP routes, listener exposure, authorization governance and OpenAPI;
 - the `@domainry/integration-client` browser package.
 
-Plane generates its admin disclosure and surface inventory from those SDK
+Plane generates its admin disclosure and adapter inventory from those SDK
 contracts. Runtime only hosts and aggregates the selected Binding; it does not
 contain a second Integration capability catalog, OpenAPI implementation or
 browser client.

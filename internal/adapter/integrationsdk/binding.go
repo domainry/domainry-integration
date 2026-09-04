@@ -17,7 +17,7 @@ type Binding struct {
 	service    *integrationapplication.Service
 	management integrationsdk.Management
 	workers    integrationsdk.LocalWorkers
-	surfaces   []modulehttp.Surface
+	adapters   []modulehttp.Adapter
 	capability modulecapability.Binding
 }
 
@@ -59,11 +59,11 @@ func (b *Binding) WebPushSubscriptions() integrationsdk.WebPushSubscriptions {
 	return webPushBinding{b}
 }
 func (*Binding) Close(context.Context) error { return nil }
-func (b *Binding) SetHTTPSurfaces(surfaces []modulehttp.Surface) {
-	b.surfaces = append([]modulehttp.Surface(nil), surfaces...)
+func (b *Binding) SetHTTPAdapters(adapters []modulehttp.Adapter) {
+	b.adapters = append([]modulehttp.Adapter(nil), adapters...)
 }
-func (b *Binding) HTTPSurfaces() []modulehttp.Surface {
-	return append([]modulehttp.Surface(nil), b.surfaces...)
+func (b *Binding) HTTPAdapters() []modulehttp.Adapter {
+	return append([]modulehttp.Adapter(nil), b.adapters...)
 }
 
 type catalogBinding struct{ *Binding }

@@ -21,7 +21,7 @@ func TestAuthorizeActionRequiresAllScopeForAdministrativeActions(t *testing.T) {
 	}
 	handler := authorizeAction(integrationsdk.ActionIntegrationConnectionsList, next)
 
-	request := httptest.NewRequest(http.MethodGet, "/tenant-admin/integrations/connections", nil)
+	request := httptest.NewRequest(http.MethodGet, "/integration/connections", nil)
 	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: modulePrincipal("integration.connections", "list", identitysdk.DataScopeOwner)}))
 	recorder := httptest.NewRecorder()
 	handler(recorder, request)
@@ -29,7 +29,7 @@ func TestAuthorizeActionRequiresAllScopeForAdministrativeActions(t *testing.T) {
 		t.Fatalf("owner administrative request called=%v status=%d", called, recorder.Code)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/tenant-admin/integrations/connections", nil)
+	request = httptest.NewRequest(http.MethodGet, "/integration/connections", nil)
 	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: modulePrincipal("integration.connections", "list", identitysdk.DataScopeAll)}))
 	recorder = httptest.NewRecorder()
 	handler(recorder, request)
@@ -42,7 +42,7 @@ func TestAuthorizeActionUsesTheExactPermissionAndAllowsPersonalOwnerScope(t *tes
 	called := false
 	handler := authorizeAction(integrationsdk.ActionIntegrationWebPushSubscriptionsList, func(_ http.ResponseWriter, _ *http.Request) { called = true })
 
-	request := httptest.NewRequest(http.MethodGet, "/business/notifications/web-push/subscriptions", nil)
+	request := httptest.NewRequest(http.MethodGet, "/integration/web-push/subscriptions", nil)
 	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: modulePrincipal("integration.web_push_subscriptions", "get", identitysdk.DataScopeOwner)}))
 	recorder := httptest.NewRecorder()
 	handler(recorder, request)
@@ -50,7 +50,7 @@ func TestAuthorizeActionUsesTheExactPermissionAndAllowsPersonalOwnerScope(t *tes
 		t.Fatalf("wrong action called=%v status=%d", called, recorder.Code)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/business/notifications/web-push/subscriptions", nil)
+	request = httptest.NewRequest(http.MethodGet, "/integration/web-push/subscriptions", nil)
 	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: modulePrincipal("integration.web_push_subscriptions", "list", identitysdk.DataScopeOwner)}))
 	recorder = httptest.NewRecorder()
 	handler(recorder, request)

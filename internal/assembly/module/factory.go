@@ -85,11 +85,11 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 		return nil, err
 	}
 	if mode == integrationsdk.DeploymentModeModule {
-		surface, err := modulehttp.NewSurface(binding)
+		adapter, err := modulehttp.NewAdapter(binding)
 		if err != nil {
 			return nil, err
 		}
-		binding.SetHTTPSurfaces([]foundationhttp.Surface{surface})
+		binding.SetHTTPAdapters([]foundationhttp.Adapter{adapter})
 	}
 	return binding, nil
 }

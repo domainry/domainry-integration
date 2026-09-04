@@ -123,17 +123,17 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 		t.Fatalf("migration owners=%v", host.registrar.owners)
 	}
 	provider, ok := binding.(modulehttp.Provider)
-	if !ok || len(provider.HTTPSurfaces()) != 1 {
-		t.Fatalf("Module HTTP surfaces=%v", provider)
+	if !ok || len(provider.HTTPAdapters()) != 1 {
+		t.Fatalf("Module HTTP adapters=%v", provider)
 	}
-	if err := modulehttp.ValidateSurface(provider.HTTPSurfaces()[0]); err != nil {
+	if err := modulehttp.ValidateAdapter(provider.HTTPAdapters()[0]); err != nil {
 		t.Fatal(err)
 	}
-	routes := provider.HTTPSurfaces()[0].Routes()
+	routes := provider.HTTPAdapters()[0].Routes()
 	if len(routes) != 38 {
 		t.Fatalf("Integration product routes=%d", len(routes))
 	}
-	for _, required := range []string{"GET /tenant-admin/integrations/connectors", "PUT /tenant-admin/integrations/connections/{connectionKey}", "GET /business/notifications/web-push/readiness"} {
+	for _, required := range []string{"GET /integration/connectors", "PUT /integration/connections/{connectionKey}", "GET /integration/web-push/readiness"} {
 		found := false
 		for _, route := range routes {
 			if route.Pattern() == required {
@@ -160,7 +160,7 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 		t.Fatalf("connection=%#v err=%v", connection, err)
 	}
 	payload, _ := json.Marshal(integrationsdk.ConnectionInput{ConnectorKey: "crm", ProviderKey: "probe", Name: "Updated"})
-	request := httptest.NewRequest(http.MethodPut, "/tenant-admin/integrations/connections/primary", bytes.NewReader(payload))
+	request := httptest.NewRequest(http.MethodPut, "/integration/connections/primary", bytes.NewReader(payload))
 	bundle := &identitysdk.AccessBundle{
 		ContractVersion: identitysdk.CurrentPolicyBundleVersion, AuthorizationRevision: "revision-1", ExpiresAt: time.Now().UTC().Add(time.Hour),
 		Subject:        identitysdk.Subject{WorkspaceID: "workspace-a", SubjectID: "admin"},
@@ -169,9 +169,9 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 	}
 	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: identitysdk.Principal{Known: true, WorkspaceID: "workspace-a", UserID: "admin", AccessBundle: bundle}}))
 	response := httptest.NewRecorder()
-	provider.HTTPSurfaces()[0].Handler().ServeHTTP(response, request)
+	provider.HTTPAdapters()[0].Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
-		t.Fatalf("management surface status=%d body=%s", response.Code, response.Body.String())
+		t.Fatalf("management adapter status=%d body=%s", response.Code, response.Body.String())
 	}
 	connection, err = management.Management().GetConnection(t.Context(), "workspace-a", "primary")
 	if err != nil || connection.Name != "Updated" {

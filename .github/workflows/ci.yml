@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOWORK: "off"
+      GOPRIVATE: github.com/domainry/*
+      GONOSUMDB: github.com/domainry/*
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Configure access to Domainry modules
+        env:
+          DOMAINRY_MODULE_TOKEN: ${{ secrets.DOMAINRY_GITHUB_TOKEN || github.token }}
+        run: git config --global url."https://x-access-token:${DOMAINRY_MODULE_TOKEN}@github.com/".insteadOf "https://github.com/"
+      - name: Download pinned dependencies
+        run: go mod download
+      - name: Run the complete test suite
+        run: go test -count=1 ./...
+      - name: Run and prove critical race and database integration tests
+        run: bash scripts/ci/verify-critical-tests.sh

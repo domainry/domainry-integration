@@ -1,8 +1,11 @@
 package architecture
 
 import (
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -83,5 +86,53 @@ func TestDomainAndApplicationDoNotDependOnSDKOrInfrastructure(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestIntegrationDoesNotOwnConcreteProvidersOrRuntimeOutbox(t *testing.T) {
+	root := filepath.Clean(filepath.Join("..", ".."))
+	forbiddenImports := []string{
+		"github.com/domainry/domainry-connectors/providers",
+		"github.com/domainry/domainry-runtime",
+	}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == ".git" || entry.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(content), "_publication_outbox") {
+			t.Errorf("%s moves the Runtime-owned publication outbox into Integration", path)
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, content, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, declaration := range parsed.Imports {
+			importPath, err := strconv.Unquote(declaration.Path.Value)
+			if err != nil {
+				return err
+			}
+			for _, prefix := range forbiddenImports {
+				if importPath == prefix || strings.HasPrefix(importPath, prefix+"/") {
+					t.Errorf("%s imports forbidden implementation package %s", path, importPath)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

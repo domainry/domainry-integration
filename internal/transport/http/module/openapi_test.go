@@ -13,8 +13,8 @@ func TestIntegrationSurfacePublishesOpenAPIForEveryOwnedRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	surface := &surface{routes: routes, operations: integrationsdk.IntegrationHTTPSurfaceContract().OpenAPI}
-	operations := surface.OpenAPIOperations()
+	adapter := &adapter{routes: routes, operations: integrationsdk.IntegrationHTTPAdapterContract().OpenAPI}
+	operations := adapter.OpenAPIOperations()
 	if len(operations) != len(routes) {
 		t.Fatalf("OpenAPI operations = %d, routes = %d", len(operations), len(routes))
 	}

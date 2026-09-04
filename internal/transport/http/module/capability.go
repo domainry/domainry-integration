@@ -23,7 +23,7 @@ const (
 func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, validator modulecapability.Validator) (*modulecapability.StaticBinding, error) {
 	definitions = append([]connectorscatalog.ConnectorSchema(nil), definitions...)
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Key < definitions[j].Key })
-	operations := integrationsdk.IntegrationHTTPSurfaceContract().OpenAPI
+	operations := integrationsdk.IntegrationHTTPAdapterContract().OpenAPI
 	routes, err := integrationRoutes()
 	if err != nil {
 		return nil, err

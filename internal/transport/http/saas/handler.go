@@ -53,7 +53,7 @@ type handler struct {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/v1/public/webhooks/") {
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/integration/v1/public/webhooks/") {
 		h.mux.ServeHTTP(w, r)
 		return
 	}
@@ -65,16 +65,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 func (h *handler) register() {
-	h.mux.HandleFunc("GET /v1/connector-definitions", h.catalog)
-	h.mux.HandleFunc("PUT /v1/application-requirements/connections", h.requirements)
-	h.mux.HandleFunc("PUT /v1/application-requirements/event-mappings", h.eventMappingRequirements)
-	h.mux.HandleFunc("POST /v1/deliveries", h.accept)
-	h.mux.HandleFunc("GET /v1/deliveries/{messageID}", h.query)
-	h.mux.HandleFunc("GET /v1/web-push/readiness", h.readiness)
-	h.mux.HandleFunc("GET /v1/web-push-subscriptions", h.listWebPush)
-	h.mux.HandleFunc("PUT /v1/web-push-subscriptions/{subscriptionID}", h.upsertWebPush)
-	h.mux.HandleFunc("POST /v1/web-push-subscriptions/{subscriptionID}/revoke", h.revokeWebPush)
-	h.mux.HandleFunc("POST /v1/web-push-subscriptions/cleanup-expired", h.cleanupWebPush)
+	h.mux.HandleFunc("GET /integration/v1/connector-definitions", h.catalog)
+	h.mux.HandleFunc("PUT /integration/v1/application-requirements/connections", h.requirements)
+	h.mux.HandleFunc("PUT /integration/v1/application-requirements/event-mappings", h.eventMappingRequirements)
+	h.mux.HandleFunc("POST /integration/v1/deliveries", h.accept)
+	h.mux.HandleFunc("GET /integration/v1/deliveries/{messageID}", h.query)
+	h.mux.HandleFunc("GET /integration/v1/web-push/readiness", h.readiness)
+	h.mux.HandleFunc("GET /integration/v1/web-push-subscriptions", h.listWebPush)
+	h.mux.HandleFunc("PUT /integration/v1/web-push-subscriptions/{subscriptionID}", h.upsertWebPush)
+	h.mux.HandleFunc("POST /integration/v1/web-push-subscriptions/{subscriptionID}/revoke", h.revokeWebPush)
+	h.mux.HandleFunc("POST /integration/v1/web-push-subscriptions/cleanup-expired", h.cleanupWebPush)
 	h.registerManagement()
 	h.registerOperations()
 }

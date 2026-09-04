@@ -10,14 +10,14 @@ import (
 )
 
 func (h *handler) registerOperations() {
-	h.mux.HandleFunc("POST /v1/operations/call", h.callProvider)
-	h.mux.HandleFunc("GET /v1/operations/invocations", h.listInvocations)
-	h.mux.HandleFunc("GET /v1/operations/invocations/{id}", h.getInvocation)
-	h.mux.HandleFunc("POST /v1/inbound/webhooks", h.acceptWebhook)
-	h.mux.HandleFunc("POST /v1/public/webhooks/{workspaceID}/{connectorKey}/{connectionKey}", h.acceptPublicWebhook)
-	h.mux.HandleFunc("GET /v1/inbound/events", h.listEvents)
-	h.mux.HandleFunc("GET /v1/inbound/events/{id}", h.getEvent)
-	h.mux.HandleFunc("POST /v1/inbound/events/{id}/replay", h.replayEvent)
+	h.mux.HandleFunc("POST /integration/v1/operations/call", h.callProvider)
+	h.mux.HandleFunc("GET /integration/v1/operations/invocations", h.listInvocations)
+	h.mux.HandleFunc("GET /integration/v1/operations/invocations/{id}", h.getInvocation)
+	h.mux.HandleFunc("POST /integration/v1/inbound/webhooks", h.acceptWebhook)
+	h.mux.HandleFunc("POST /integration/v1/public/webhooks/{workspaceID}/{connectorKey}/{connectionKey}", h.acceptPublicWebhook)
+	h.mux.HandleFunc("GET /integration/v1/inbound/events", h.listEvents)
+	h.mux.HandleFunc("GET /integration/v1/inbound/events/{id}", h.getEvent)
+	h.mux.HandleFunc("POST /integration/v1/inbound/events/{id}/replay", h.replayEvent)
 }
 
 func (h *handler) callProvider(w http.ResponseWriter, r *http.Request) {

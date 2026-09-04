@@ -147,8 +147,8 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 		t.Fatalf("Integration Module/SaaS validation differs direct=%s/%v remote=%s/%v", directJSON, directErr, remoteJSON, remoteErr)
 	}
 	provider, ok := binding.(modulehttp.Provider)
-	if !ok || len(provider.HTTPSurfaces()) != 1 || len(provider.HTTPSurfaces()[0].Routes()) != 38 {
-		t.Fatalf("SaaS Integration HTTP surfaces=%v", provider)
+	if !ok || len(provider.HTTPAdapters()) != 1 || len(provider.HTTPAdapters()[0].Routes()) != 38 {
+		t.Fatalf("SaaS Integration HTTP adapters=%v", provider)
 	}
 	if values, err := binding.Catalog().ListConnectorDefinitions(t.Context()); err != nil || len(values) < 50 {
 		t.Fatalf("built-in catalog count=%d err=%v", len(values), err)
