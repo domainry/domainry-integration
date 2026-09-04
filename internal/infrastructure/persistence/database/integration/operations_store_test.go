@@ -16,7 +16,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type operationsTestProvider struct{ calls int }
+type operationsTestProvider struct {
+	calls      int
+	duringCall func()
+}
 
 func (*operationsTestProvider) Descriptor() connector.ProviderDescriptor {
 	return connector.ProviderDescriptor{
@@ -27,6 +30,9 @@ func (*operationsTestProvider) Descriptor() connector.ProviderDescriptor {
 
 func (p *operationsTestProvider) Call(_ context.Context, request connector.CallRequest) (connector.CallResult, error) {
 	p.calls++
+	if p.duringCall != nil {
+		p.duringCall()
+	}
 	return connector.CallResult{Payload: json.RawMessage(`{"found":true}`), ResponseRef: "response-1"}, nil
 }
 
@@ -150,6 +156,75 @@ func TestOperationsStoreOwnsCallWebhookMappingAndRuntimeReceipt(t *testing.T) {
 	}
 	if trigger.request.Target.ObjectKey != "contact" || trigger.request.Target.RecordID != "contact-1" || trigger.request.Target.ActionKey != "sync" || trigger.request.Target.Input["name"] != "Ada" || trigger.request.Target.Input["source"] != "webhook" {
 		t.Fatalf("trigger request=%#v", trigger.request)
+	}
+}
+
+func TestOperationsStoreSensitiveCallNeverPersistsPlaintext(t *testing.T) {
+	database, err := sql.Open("sqlite", "file:integration-sensitive-operations?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	rawDialect, _ := ormdialect.New(ormdialect.SQLite)
+	dialect := rawDialect.WithSchema("")
+	migrations, err := SchemaMigrations("sqlite", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations {
+		for _, statement := range migration.Statements {
+			if _, err := database.ExecContext(t.Context(), statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").
+		Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
+		Values("connection-sensitive", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(t.Context(), insert, args...); err != nil {
+		t.Fatal(err)
+	}
+	provider := &operationsTestProvider{}
+	var duringCallMetadata string
+	var duringCallReadErr error
+	provider.duringCall = func() {
+		duringCallReadErr = database.QueryRowContext(t.Context(), "SELECT metadata_json FROM _integration_invocations WHERE request_ref = ?", "otp-1").Scan(&duringCallMetadata)
+	}
+	delivery := NewDeliveryStore(database, dialect, deliveryTestProviders{provider: provider}, deliveryTestSecrets{})
+	store := NewOperationsStore(database, dialect, delivery, nil)
+	request := integrationmodel.ProviderCallRequest{
+		RequestID: "otp-1", WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "primary", Operation: "lookup",
+		Payload: json.RawMessage(`{"pin":"917204","destination":"+15555550123"}`), PersistenceMode: integrationmodel.ProviderCallPersistenceSensitive, MaskedDestination: "+1*******0123",
+	}
+	result, err := store.Call(t.Context(), request)
+	if err != nil || result.Invocation.Status != "succeeded" || string(result.Response) != `{"found":true}` {
+		t.Fatalf("sensitive call result=%#v err=%v", result, err)
+	}
+	if duringCallReadErr != nil {
+		t.Fatalf("read invocation while provider was handling payload: %v", duringCallReadErr)
+	}
+	if strings.Contains(duringCallMetadata, "917204") || strings.Contains(duringCallMetadata, "+15555550123") {
+		t.Fatalf("sensitive payload was transiently persisted before provider return: %s", duringCallMetadata)
+	}
+	var persisted string
+	if err := database.QueryRowContext(t.Context(), "SELECT metadata_json FROM _integration_invocations WHERE request_ref = ?", "otp-1").Scan(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(persisted, "917204") || strings.Contains(persisted, "+15555550123") || strings.Contains(persisted, `"request"`) || strings.Contains(persisted, `"response"`) {
+		t.Fatalf("sensitive payload entered invocation evidence: %s", persisted)
+	}
+	if strings.Contains(persisted, `"request_sha256"`) || strings.Contains(persisted, `"response_ref_sha256"`) || !strings.Contains(persisted, `"masked_destination":"+1*******0123"`) {
+		t.Fatalf("sensitive audit evidence incomplete: %s", persisted)
+	}
+	if result.Invocation.ResponseRef != "" {
+		t.Fatalf("sensitive response reference was not redacted: invocation=%#v metadata=%s", result.Invocation, persisted)
+	}
+	replay, err := store.Call(t.Context(), request)
+	if err != nil || len(replay.Response) != 0 || provider.calls != 1 {
+		t.Fatalf("sensitive replay result=%#v calls=%d err=%v", replay, provider.calls, err)
 	}
 }
 

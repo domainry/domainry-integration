@@ -33,6 +33,9 @@ func NewOperationsStore(database modulehost.Database, dialect modulehost.Dialect
 func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.ProviderCallRequest) (integrationmodel.ProviderCallResult, error) {
 	invocationID := operationInvocationID(request.WorkspaceID, request.RequestID)
 	if current, err := s.GetInvocation(ctx, request.WorkspaceID, invocationID); err == nil && current.Status == "succeeded" {
+		if request.PersistenceMode == integrationmodel.ProviderCallPersistenceSensitive {
+			return integrationmodel.ProviderCallResult{Invocation: current}, nil
+		}
 		return integrationmodel.ProviderCallResult{Invocation: current, Response: invocationResponse(current.Metadata)}, nil
 	}
 	connection, err := s.delivery.connection(ctx, integrationmodel.DeliveryRequest{WorkspaceID: request.WorkspaceID, ConnectorKey: request.ConnectorKey, ConnectionKey: request.ConnectionKey})
@@ -55,7 +58,7 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 		return integrationmodel.ProviderCallResult{}, err
 	}
 	deliveryRequest := integrationmodel.DeliveryRequest{MessageID: request.RequestID, DeduplicationKey: request.RequestID, WorkspaceID: request.WorkspaceID, ConnectorKey: request.ConnectorKey, ConnectionKey: request.ConnectionKey, Operation: request.Operation, Payload: request.Payload}
-	if err := s.delivery.prepareInvocation(ctx, invocationID, deliveryRequest, connection); err != nil {
+	if err := s.prepareProviderInvocation(ctx, invocationID, deliveryRequest, connection, request); err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
 	started := time.Now()
@@ -77,8 +80,20 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 	if callErr != nil {
 		status, errorText = "failed", callErr.Error()
 	}
-	metadata, _ := json.Marshal(map[string]any{"request": json.RawMessage(request.Payload), "response": json.RawMessage(result.Payload), "resource_health": result.ResourceHealth})
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", result.ResponseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID))).Build()
+	metadataValue := map[string]any{"resource_health": result.ResourceHealth}
+	responseRef := result.ResponseRef
+	if request.PersistenceMode == integrationmodel.ProviderCallPersistenceSensitive {
+		metadataValue = sensitiveInvocationMetadata(request)
+		responseRef = ""
+		if callErr != nil {
+			errorText = "sensitive provider call failed"
+		}
+	} else {
+		metadataValue["request"] = json.RawMessage(request.Payload)
+		metadataValue["response"] = json.RawMessage(result.Payload)
+	}
+	metadata, _ := json.Marshal(metadataValue)
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID))).Build()
 	if err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
@@ -93,6 +108,21 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 		return integrationmodel.ProviderCallResult{Invocation: invocation}, callErr
 	}
 	return integrationmodel.ProviderCallResult{Invocation: invocation, Response: append(json.RawMessage(nil), result.Payload...)}, nil
+}
+
+func (s *OperationsStore) prepareProviderInvocation(ctx context.Context, invocationID string, deliveryRequest integrationmodel.DeliveryRequest, connection deliveryConnection, request integrationmodel.ProviderCallRequest) error {
+	if request.PersistenceMode != integrationmodel.ProviderCallPersistenceSensitive {
+		return s.delivery.prepareInvocation(ctx, invocationID, deliveryRequest, connection)
+	}
+	return s.delivery.prepareInvocationWithMetadata(ctx, invocationID, deliveryRequest, connection, sensitiveInvocationMetadata(request))
+}
+
+func sensitiveInvocationMetadata(request integrationmodel.ProviderCallRequest) map[string]any {
+	return map[string]any{
+		"message_id":          request.RequestID,
+		"payload_persistence": integrationmodel.ProviderCallPersistenceSensitive,
+		"masked_destination":  strings.TrimSpace(request.MaskedDestination),
+	}
 }
 
 func (s *OperationsStore) ListInvocations(ctx context.Context, filter integrationmodel.InvocationQuery) ([]integrationmodel.Invocation, error) {

@@ -80,6 +80,12 @@ func (s *Service) Call(ctx context.Context, value integrationmodel.ProviderCallR
 	if strings.TrimSpace(value.RequestID) == "" || strings.TrimSpace(value.WorkspaceID) == "" || strings.TrimSpace(value.ConnectorKey) == "" || strings.TrimSpace(value.Operation) == "" || !json.Valid(value.Payload) {
 		return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration provider call is invalid")
 	}
+	if value.PersistenceMode != "" && value.PersistenceMode != integrationmodel.ProviderCallPersistenceStandard && value.PersistenceMode != integrationmodel.ProviderCallPersistenceSensitive {
+		return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration provider call persistence mode is invalid")
+	}
+	if value.PersistenceMode == integrationmodel.ProviderCallPersistenceSensitive && strings.TrimSpace(value.MaskedDestination) == "" {
+		return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration sensitive provider call masked destination is required")
+	}
 	return s.operations.Call(ctx, value)
 }
 func (s *Service) ListInvocations(ctx context.Context, query integrationmodel.InvocationQuery) ([]integrationmodel.Invocation, error) {

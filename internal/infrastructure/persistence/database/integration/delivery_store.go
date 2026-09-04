@@ -192,8 +192,13 @@ func (s *DeliveryStore) connection(ctx context.Context, request integrationmodel
 }
 
 func (s *DeliveryStore) prepareInvocation(ctx context.Context, id string, request integrationmodel.DeliveryRequest, connection deliveryConnection) error {
+	metadata := map[string]any{"message_id": request.MessageID, "deduplication_key": request.DeduplicationKey, "payload": json.RawMessage(request.Payload)}
+	return s.prepareInvocationWithMetadata(ctx, id, request, connection, metadata)
+}
+
+func (s *DeliveryStore) prepareInvocationWithMetadata(ctx context.Context, id string, request integrationmodel.DeliveryRequest, connection deliveryConnection, metadataValue map[string]any) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	metadata, _ := json.Marshal(map[string]any{"message_id": request.MessageID, "deduplication_key": request.DeduplicationKey, "payload": json.RawMessage(request.Payload)})
+	metadata, _ := json.Marshal(metadataValue)
 	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status").Where(query.Equal("id", id)).Build()
 	if err != nil {
 		return err
@@ -201,7 +206,7 @@ func (s *DeliveryStore) prepareInvocation(ctx context.Context, id string, reques
 	var current string
 	err = s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&current)
 	if err == nil {
-		update, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("updated_at", now).Where(query.Equal("id", id)).Build()
+		update, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("metadata_json", string(metadata)).Set("updated_at", now).Where(query.Equal("id", id)).Build()
 		if buildErr != nil {
 			return buildErr
 		}

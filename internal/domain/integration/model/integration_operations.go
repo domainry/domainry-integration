@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+const (
+	ProviderCallPersistenceStandard  = "standard"
+	ProviderCallPersistenceSensitive = "sensitive"
+)
+
 type Invocation struct {
 	ID                  string         `json:"id"`
 	WorkspaceID         string         `json:"workspace_id,omitempty"`
@@ -37,14 +42,16 @@ type InvocationQuery struct {
 }
 
 type ProviderCallRequest struct {
-	RequestID     string          `json:"request_id"`
-	WorkspaceID   string          `json:"workspace_id"`
-	ConnectorKey  string          `json:"connector_key"`
-	ConnectionKey string          `json:"connection_key,omitempty"`
-	Operation     string          `json:"operation"`
-	Payload       json.RawMessage `json:"payload"`
-	ActorID       string          `json:"actor_id,omitempty"`
-	RoleKey       string          `json:"role_key,omitempty"`
+	RequestID         string          `json:"request_id"`
+	WorkspaceID       string          `json:"workspace_id"`
+	ConnectorKey      string          `json:"connector_key"`
+	ConnectionKey     string          `json:"connection_key,omitempty"`
+	Operation         string          `json:"operation"`
+	Payload           json.RawMessage `json:"payload"`
+	PersistenceMode   string          `json:"persistence_mode,omitempty"`
+	MaskedDestination string          `json:"masked_destination,omitempty"`
+	ActorID           string          `json:"actor_id,omitempty"`
+	RoleKey           string          `json:"role_key,omitempty"`
 }
 
 type ProviderCallResult struct {
