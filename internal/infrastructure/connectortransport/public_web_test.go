@@ -137,6 +137,32 @@ func TestPublicWebHTTPRedirectLimitsAndCancellation(t *testing.T) {
 	}
 }
 
+func TestPublicWebHostTimeoutBoundsBothProxyTools(t *testing.T) {
+	paths := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths <- r.URL.Path
+		time.Sleep(250 * time.Millisecond)
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	defer server.Close()
+	transport, err := NewPublicWeb(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport.client.Timeout = 25 * time.Millisecond
+	for _, path := range []string{"/tool/web_search", "/tool/web_fetch_jina"} {
+		request := webHTTPRequest(server.URL)
+		request.URL = server.URL + path
+		started := time.Now()
+		if _, err = transport.RoundTripHTTP(t.Context(), request); err == nil || err.Error() != "Integration public-web dispatch failed" || time.Since(started) > time.Second {
+			t.Fatalf("path=%s elapsed=%s err=%v", path, time.Since(started), err)
+		}
+		if got := <-paths; got != path {
+			t.Fatalf("path=%s got=%s", path, got)
+		}
+	}
+}
+
 func TestPublicWebProviderOverProductionHostHTTP(t *testing.T) {
 	var searches, fetches atomic.Int32
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
