@@ -107,6 +107,7 @@ func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, valid
 			RequirementSignals:   []string{"third-party API", "connector", "provider credentials", "webhook", "external identity", "web push", "outbound delivery", "provider reconciliation"},
 			ProvidedCapabilities: provided, RequiredModules: []string{"identity"}, OptionalModules: []string{"audit", "notification", "scheduler"}, ConflictingModules: []string{},
 			AssemblyChains: []string{
+				"identity_subject_to_connection_account", "oauth_grant_to_account_read", "account_read_to_sensitive_invocation",
 				"connector_descriptor_to_integration_connection", "integration_connection_to_provider_operation", "secret_reference_to_connection_validation",
 				"identity_actor_to_integration_api_key", "provider_subject_to_external_identity",
 				"provider_webhook_to_integration_event", "integration_event_mapping_to_runtime_execution", "notification_delivery_to_web_push_provider",
