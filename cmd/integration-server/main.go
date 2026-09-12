@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -15,9 +16,12 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	connectormodule "github.com/domainry/domainry-connectors/module"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	saasassembly "github.com/domainry/domainry-integration/internal/assembly/saas"
+	"github.com/domainry/domainry-integration/internal/infrastructure/connectortransport"
+	"github.com/domainry/domainry-integration/internal/infrastructure/security"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormmigration "github.com/domainry/domainry-orm/migration"
 	_ "modernc.org/sqlite"
@@ -38,6 +42,18 @@ func run() error {
 	if token == "" {
 		return errors.New("INTEGRATION_SERVICE_TOKEN is required")
 	}
+	cipher, err := configuredCipher(os.Getenv("INTEGRATION_MASTER_KEY"))
+	if err != nil {
+		return err
+	}
+	providers, err := configuredProviders(strings.TrimSpace(os.Getenv("INTEGRATION_WEB_PROXY_ORIGIN")))
+	if err != nil {
+		return err
+	}
+	registry, err := connectormodule.NewFactory(connectormodule.Options{Providers: providers}).Registry()
+	if err != nil {
+		return err
+	}
 	path := strings.TrimSpace(os.Getenv("INTEGRATION_SQLITE_PATH"))
 	if path == "" {
 		path = "integration.db"
@@ -49,7 +65,7 @@ func run() error {
 	defer database.Close()
 	database.SetMaxOpenConns(1)
 	dialect, _ := ormdialect.New(ormdialect.SQLite)
-	host := &standaloneHost{database: database, dialect: dialect.WithSchema("")}
+	host := &standaloneHost{database: database, dialect: dialect.WithSchema(""), providers: registry, cipher: cipher}
 	service, err := saasassembly.Open(context.Background(), application, host, token)
 	if err != nil {
 		return err
@@ -84,16 +100,18 @@ type standaloneHost struct {
 	database    *sql.DB
 	dialect     ormdialect.Renderer
 	migrationMu sync.Mutex
+	providers   modulehost.ProviderRegistry
+	cipher      modulehost.SecretMaterialCipher
 }
 
-func (h *standaloneHost) Database() modulehost.Database               { return h.database }
-func (h *standaloneHost) Dialect() modulehost.Dialect                 { return h.dialect }
-func (h *standaloneHost) Migrations() modulehost.MigrationRegistrar   { return h }
-func (*standaloneHost) Providers() modulehost.ProviderRegistry        { return emptyProviders{} }
-func (*standaloneHost) SecretCipher() modulehost.SecretMaterialCipher { return unavailableCipher{} }
-func (*standaloneHost) RuntimeTriggers() integrationsdk.TriggerSink   { return unavailableTrigger{} }
-func (*standaloneHost) Driver() string                                { return "sqlite" }
-func (*standaloneHost) Schema() string                                { return "" }
+func (h *standaloneHost) Database() modulehost.Database                 { return h.database }
+func (h *standaloneHost) Dialect() modulehost.Dialect                   { return h.dialect }
+func (h *standaloneHost) Migrations() modulehost.MigrationRegistrar     { return h }
+func (h *standaloneHost) Providers() modulehost.ProviderRegistry        { return h.providers }
+func (h *standaloneHost) SecretCipher() modulehost.SecretMaterialCipher { return h.cipher }
+func (*standaloneHost) RuntimeTriggers() integrationsdk.TriggerSink     { return unavailableTrigger{} }
+func (*standaloneHost) Driver() string                                  { return "sqlite" }
+func (*standaloneHost) Schema() string                                  { return "" }
 func (h *standaloneHost) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {
 	if owner != "integration" {
 		return fmt.Errorf("unsupported migration owner %q", owner)
@@ -107,22 +125,35 @@ func (h *standaloneHost) ApplyOwnedMigrations(ctx context.Context, owner string,
 	return runner.Apply(ctx, migrations)
 }
 
-type emptyProviders struct{}
-
-func (emptyProviders) Provider(string, string) (connector.Adapter, bool) { return nil, false }
-func (emptyProviders) Descriptors() []connector.ProviderDescriptor       { return nil }
-
-type unavailableCipher struct{}
-
 type unavailableTrigger struct{}
 
 func (unavailableTrigger) Trigger(context.Context, integrationsdk.TriggerRequest) (integrationsdk.RuntimeExecutionReceipt, error) {
 	return integrationsdk.RuntimeExecutionReceipt{}, errors.New("standalone Integration Runtime TriggerSink is not configured")
 }
 
-func (unavailableCipher) EncryptSecretMaterial(context.Context, string, string, string) (string, error) {
-	return "", errors.New("standalone Integration secret cipher is not configured")
+func configuredCipher(encoded string) (*security.SecretCipher, error) {
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil || len(key) != 32 {
+		return nil, errors.New("INTEGRATION_MASTER_KEY is required: base64-encoded 32-byte AES key")
+	}
+	return security.NewSecretCipher(key)
 }
-func (unavailableCipher) DecryptSecretMaterial(context.Context, string, string, string) (string, error) {
-	return "", errors.New("standalone Integration secret cipher is not configured")
+
+// Provider families receive separate, host-owned network policies. Registering
+// a web connection cannot expand the Google/Microsoft transport allowlist.
+func configuredProviders(webOrigin string) (connector.ProviderSet, error) {
+	providers, err := connectormodule.WorkAccountProviders(connectortransport.NewWorkAccounts())
+	if err != nil || webOrigin == "" {
+		return providers, err
+	}
+	transport, err := connectortransport.NewPublicWeb(webOrigin)
+	if err != nil {
+		return connector.ProviderSet{}, err
+	}
+	webProviders, err := connectormodule.PublicWebProviders(transport)
+	if err != nil {
+		return connector.ProviderSet{}, err
+	}
+	providers.Providers = append(providers.Providers, webProviders.Providers...)
+	return providers, nil
 }

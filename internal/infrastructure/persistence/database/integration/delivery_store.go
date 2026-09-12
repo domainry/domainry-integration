@@ -28,8 +28,25 @@ type SecretReferenceResolver interface {
 	ResolveSecretReferences(context.Context, string, map[string]string) (map[string]string, error)
 }
 
+type providerSecretVersion struct {
+	SecretKey, Fingerprint, UpdatedAt string
+}
+
+type resolvedProviderSecrets struct {
+	Values   map[string]string
+	Versions map[string]providerSecretVersion
+}
+
+type SecretSnapshotResolver interface {
+	ResolveSecretReferencesSnapshot(context.Context, string, map[string]string) (resolvedProviderSecrets, error)
+}
+
 type SecretUpdateWriter interface {
 	ApplySecretUpdates(context.Context, string, map[string]string, map[string]string) error
+}
+
+type ConditionalSecretUpdateWriter interface {
+	ApplySecretUpdatesIfCurrent(context.Context, string, map[string]string, map[string]providerSecretVersion, map[string]string) error
 }
 
 func NewDeliveryStore(database modulehost.Database, dialect modulehost.Dialect, providers modulehost.ProviderRegistry, secrets SecretReferenceResolver, webPush ...*WebPushSubscriptionStore) *DeliveryStore {
@@ -42,6 +59,7 @@ func NewDeliveryStore(database modulehost.Database, dialect modulehost.Dialect, 
 
 type deliveryConnection struct {
 	Key, WorkspaceID, ConnectorKey, ProviderKey, Status string
+	UpdatedAt                                           string
 	Config                                              map[string]any
 	SecretRefs                                          map[string]string
 }
@@ -65,7 +83,7 @@ func (s *DeliveryStore) Accept(ctx context.Context, request integrationmodel.Del
 	if !ok {
 		return integrationmodel.DeliveryReceipt{}, fmt.Errorf("Integration provider %s/%s does not implement operation %s", connection.ConnectorKey, connection.ProviderKey, request.Operation)
 	}
-	secrets, err := s.secrets.ResolveSecretReferences(ctx, request.WorkspaceID, connection.SecretRefs)
+	resolvedSecrets, err := s.resolveProviderSecrets(ctx, request.WorkspaceID, connection.SecretRefs)
 	if err != nil {
 		return integrationmodel.DeliveryReceipt{}, err
 	}
@@ -82,18 +100,11 @@ func (s *DeliveryStore) Accept(ctx context.Context, request integrationmodel.Del
 	result, callErr := provider.Call(ctx, connector.CallRequest{
 		ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, OperationKey: request.Operation,
 		ContractSHA256: operation.ContractSHA256, Mode: operation.Mode, Payload: providerPayload,
-		RequestRef: request.MessageID, Delivery: true, Secrets: secrets,
+		RequestRef: request.MessageID, Delivery: true, Secrets: resolvedSecrets.Values,
 		Connection: connector.Connection{Key: connection.Key, WorkspaceID: connection.WorkspaceID, ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, Status: connection.Status, Config: connection.Config, SecretRefs: connection.SecretRefs},
 		Principal:  connector.Principal{WorkspaceID: request.WorkspaceID, RequestID: request.MessageID, IsAuthenticated: true},
 	})
-	if callErr == nil && len(result.SecretUpdates) != 0 {
-		writer, ok := s.secrets.(SecretUpdateWriter)
-		if !ok {
-			callErr = fmt.Errorf("Integration secret update writer is unavailable")
-		} else if err := writer.ApplySecretUpdates(ctx, request.WorkspaceID, connection.SecretRefs, result.SecretUpdates); err != nil {
-			callErr = err
-		}
-	}
+	callErr = s.persistProviderSecretUpdates(ctx, request.WorkspaceID, connection.SecretRefs, resolvedSecrets.Versions, result.SecretUpdates, callErr)
 	status, errorText := "succeeded", ""
 	if callErr != nil {
 		status, errorText = "failed", callErr.Error()
@@ -158,7 +169,7 @@ func (s *DeliveryStore) connection(ctx context.Context, request integrationmodel
 	if request.ConnectionKey != "" {
 		predicates = append(predicates, query.Equal("connection_key", request.ConnectionKey))
 	}
-	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_connections").Columns("connection_key", "workspace_id", "connector_key", "provider_key", "status", "config_json", "secret_refs_json").Where(query.And(predicates...)).OrderBy(query.Ascending("connection_key")).Limit(2).Build()
+	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_connections").Columns("connection_key", "workspace_id", "connector_key", "provider_key", "status", "config_json", "secret_refs_json", "updated_at").Where(query.And(predicates...)).OrderBy(query.Ascending("connection_key")).Limit(2).Build()
 	if err != nil {
 		return deliveryConnection{}, err
 	}
@@ -171,7 +182,7 @@ func (s *DeliveryStore) connection(ctx context.Context, request integrationmodel
 	for rows.Next() {
 		var value deliveryConnection
 		var configJSON, refsJSON string
-		if err := rows.Scan(&value.Key, &value.WorkspaceID, &value.ConnectorKey, &value.ProviderKey, &value.Status, &configJSON, &refsJSON); err != nil {
+		if err := rows.Scan(&value.Key, &value.WorkspaceID, &value.ConnectorKey, &value.ProviderKey, &value.Status, &configJSON, &refsJSON, &value.UpdatedAt); err != nil {
 			return deliveryConnection{}, err
 		}
 		if err := json.Unmarshal([]byte(configJSON), &value.Config); err != nil {
@@ -216,6 +227,13 @@ func (s *DeliveryStore) prepareInvocationWithMetadata(ctx context.Context, id st
 	if err != sql.ErrNoRows {
 		return err
 	}
+	return s.insertInvocation(ctx, id, request, connection, metadata)
+}
+
+// insertInvocation claims one identity with a unique primary-key insert. The
+// synchronous sensitive-call path must not use the delivery retry transition.
+func (s *DeliveryStore) insertInvocation(ctx context.Context, id string, request integrationmodel.DeliveryRequest, connection deliveryConnection, metadata []byte) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	queryValue, args, err := query.NewInsertBuilder(s.dialect, "_integration_invocations").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at").Values(id, request.WorkspaceID, request.ConnectorKey, connection.ProviderKey, connection.Key, request.Operation, "running", int64(0), request.MessageID, nil, nil, nil, nil, nil, nil, string(metadata), now, now).Build()
 	if err != nil {
 		return err

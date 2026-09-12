@@ -13,19 +13,28 @@ import (
 )
 
 type Binding struct {
-	mode       integrationsdk.DeploymentMode
-	service    *integrationapplication.Service
-	management integrationsdk.Management
-	workers    integrationsdk.LocalWorkers
-	adapters   []modulehttp.Adapter
-	capability modulecapability.Binding
+	mode          integrationsdk.DeploymentMode
+	service       *integrationapplication.Service
+	management    integrationsdk.Management
+	accounts      integrationsdk.ConnectionAccounts
+	accountReads  *integrationapplication.AccountReadService
+	accountWrites *integrationapplication.AccountWriteService
+	accountAdmin  integrationsdk.ConnectionAccountAdministration
+	workers       integrationsdk.LocalWorkers
+	adapters      []modulehttp.Adapter
+	capability    modulecapability.Binding
 }
 
 func NewBinding(mode integrationsdk.DeploymentMode, service *integrationapplication.Service, management integrationsdk.Management, capability modulecapability.Binding, workers ...integrationsdk.LocalWorkers) (*Binding, error) {
 	if capability == nil {
 		return nil, fmt.Errorf("Integration capability binding is required")
 	}
-	binding := &Binding{mode: mode, service: service, management: management, capability: capability}
+	accounts, accountsOK := management.(integrationsdk.ConnectionAccounts)
+	accountAdmin, accountAdminOK := management.(integrationsdk.ConnectionAccountAdministration)
+	if !accountsOK || !accountAdminOK {
+		return nil, fmt.Errorf("Integration connection account stores are required")
+	}
+	binding := &Binding{mode: mode, service: service, management: management, accounts: accounts, accountAdmin: accountAdmin, capability: capability}
 	if len(workers) != 0 {
 		binding.workers = workers[0]
 	}
@@ -41,17 +50,42 @@ func (b *Binding) ValidateCapabilityCandidate(ctx context.Context, request modul
 	return b.capability.ValidateCapabilityCandidate(ctx, request)
 }
 func (b *Binding) Descriptor() integrationsdk.Descriptor {
-	capabilities := []string{"catalog.read", "requirements.connections.sync", "delivery.accept", "delivery.query", "web_push_subscriptions.manage", "management.connections", "management.secrets", "management.api_keys", "management.external_identities", "management.webhook_subscriptions", "operations.call", "operations.invocations.query", "inbound.webhooks.accept", "inbound.events.query"}
+	capabilities := []string{"catalog.read", "requirements.connections.sync", "delivery.accept", "delivery.query", "web_push_subscriptions.manage", "management.connections", "connection_accounts.manage", "management.secrets", "management.api_keys", "management.external_identities", "management.webhook_subscriptions", "operations.call", "operations.invocations.query", "inbound.webhooks.accept", "inbound.events.query"}
+	if port, ok := b.management.(integrationsdk.OAuthApplications); ok && port != nil {
+		capabilities = append(capabilities, "oauth_applications.manage")
+	}
+	if port, ok := b.management.(integrationsdk.OAuthAuthorizations); ok && port != nil {
+		capabilities = append(capabilities, "oauth_authorizations.manage")
+	}
 	if b.workers != nil {
 		capabilities = append(capabilities, "local_workers")
 	}
+	if b.accountWrites != nil {
+		capabilities = append(capabilities, "connection_accounts.write")
+	}
+	if b.accountReads != nil {
+		capabilities = append(capabilities, "connection_accounts.read")
+	}
 	return integrationsdk.Descriptor{ProtocolVersion: integrationsdk.ProtocolVersionV1, Mode: b.mode, Capabilities: capabilities}
 }
-func (b *Binding) Catalog() integrationsdk.Catalog           { return catalogBinding{b} }
-func (b *Binding) Requirements() integrationsdk.Requirements { return requirementsBinding{b} }
-func (b *Binding) Delivery() integrationsdk.Delivery         { return deliveryBinding{b} }
-func (b *Binding) Management() integrationsdk.Management     { return b.management }
-func (b *Binding) Operations() integrationsdk.Operations     { return operationsBinding{b} }
+func (b *Binding) Catalog() integrationsdk.Catalog                       { return catalogBinding{b} }
+func (b *Binding) Requirements() integrationsdk.Requirements             { return requirementsBinding{b} }
+func (b *Binding) Delivery() integrationsdk.Delivery                     { return deliveryBinding{b} }
+func (b *Binding) Management() integrationsdk.Management                 { return b.management }
+func (b *Binding) ConnectionAccounts() integrationsdk.ConnectionAccounts { return b.accounts }
+func (b *Binding) ConnectionAccountReads() integrationsdk.ConnectionAccountReads {
+	if b.accountReads == nil {
+		return nil
+	}
+	return accountReadsBinding{service: b.accountReads}
+}
+func (b *Binding) SetConnectionAccountReads(reads *integrationapplication.AccountReadService) {
+	b.accountReads = reads
+}
+func (b *Binding) ConnectionAccountAdministration() integrationsdk.ConnectionAccountAdministration {
+	return b.accountAdmin
+}
+func (b *Binding) Operations() integrationsdk.Operations { return operationsBinding{b} }
 func (b *Binding) LocalWorkers() (integrationsdk.LocalWorkers, bool) {
 	return b.workers, b.workers != nil
 }
@@ -196,6 +230,27 @@ func convert[T any](value any, sourceErr error) (T, error) {
 var _ integrationsdk.Binding = (*Binding)(nil)
 var _ integrationsdk.WebPushBinding = (*Binding)(nil)
 var _ integrationsdk.ManagementBinding = (*Binding)(nil)
+var _ integrationsdk.ConnectionAccountsBinding = (*Binding)(nil)
+var _ integrationsdk.ConnectionAccountAdministrationBinding = (*Binding)(nil)
 var _ integrationsdk.OperationsBinding = (*Binding)(nil)
 var _ integrationsdk.LocalWorkerBinding = (*Binding)(nil)
 var _ modulehttp.Provider = (*Binding)(nil)
+
+func (b *Binding) OAuthApplications() integrationsdk.OAuthApplications {
+	value, _ := b.management.(integrationsdk.OAuthApplications)
+	return value
+}
+func (b *Binding) OAuthAuthorizations() integrationsdk.OAuthAuthorizations {
+	value, _ := b.management.(integrationsdk.OAuthAuthorizations)
+	return value
+}
+
+func (b *Binding) ConnectionAccountWrites() integrationsdk.ConnectionAccountWrites {
+	if b.accountWrites == nil {
+		return nil
+	}
+	return accountWritesBinding{service: b.accountWrites}
+}
+func (b *Binding) SetConnectionAccountWrites(writes *integrationapplication.AccountWriteService) {
+	b.accountWrites = writes
+}

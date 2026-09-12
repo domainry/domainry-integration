@@ -147,7 +147,7 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 		t.Fatalf("Integration Module/SaaS validation differs direct=%s/%v remote=%s/%v", directJSON, directErr, remoteJSON, remoteErr)
 	}
 	provider, ok := binding.(modulehttp.Provider)
-	if !ok || len(provider.HTTPAdapters()) != 1 || len(provider.HTTPAdapters()[0].Routes()) != 38 {
+	if !ok || len(provider.HTTPAdapters()) != 1 || len(provider.HTTPAdapters()[0].Routes()) != 51 {
 		t.Fatalf("SaaS Integration HTTP adapters=%v", provider)
 	}
 	if values, err := binding.Catalog().ListConnectorDefinitions(t.Context()); err != nil || len(values) < 50 {
@@ -167,6 +167,22 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 	connection, err = management.Management().UpsertConnection(t.Context(), "workspace-a", "primary", "admin", integrationsdk.ConnectionInput{ConnectorKey: "crm", ProviderKey: "probe", Name: "Remote"})
 	if err != nil || connection.Name != "Remote" {
 		t.Fatalf("remote updated connection=%#v err=%v", connection, err)
+	}
+	accountAdmin, ok := binding.(integrationsdk.ConnectionAccountAdministrationBinding)
+	if !ok || accountAdmin.ConnectionAccountAdministration() == nil {
+		t.Fatal("remote binding does not expose connection account administration")
+	}
+	account, err := accountAdmin.ConnectionAccountAdministration().RegisterConnectionAccount(t.Context(), "workspace-a", "primary", "admin", integrationsdk.ConnectionAccountRegistration{Scope: integrationsdk.ConnectionAccountScopeWorkspace})
+	if err != nil || account.Key != "primary" || account.Scope != integrationsdk.ConnectionAccountScopeWorkspace {
+		t.Fatalf("remote account=%#v err=%v", account, err)
+	}
+	accounts, ok := binding.(integrationsdk.ConnectionAccountsBinding)
+	if !ok || accounts.ConnectionAccounts() == nil {
+		t.Fatal("remote binding does not expose current-user connection accounts")
+	}
+	listed, err := accounts.ConnectionAccounts().ListConnectionAccounts(t.Context(), integrationsdk.ConnectionAccountSubject{WorkspaceID: "workspace-a", UserID: "user-a", Access: integrationsdk.ConnectionAccountAccess{Personal: true, Workspace: true}})
+	if err != nil || len(listed) != 1 || listed[0].Key != "primary" {
+		t.Fatalf("remote listed accounts=%#v err=%v", listed, err)
 	}
 	readiness, err := binding.(integrationsdk.WebPushBinding).WebPushSubscriptions().Readiness(t.Context(), "workspace-a")
 	if err != nil || readiness.Status != "unconfigured" {

@@ -130,10 +130,10 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	routes := provider.HTTPAdapters()[0].Routes()
-	if len(routes) != 38 {
+	if len(routes) != 51 {
 		t.Fatalf("Integration product routes=%d", len(routes))
 	}
-	for _, required := range []string{"GET /integration/connectors", "PUT /integration/connections/{connectionKey}", "GET /integration/web-push/readiness"} {
+	for _, required := range []string{"GET /integration/connectors", "PUT /integration/connections/{connectionKey}", "GET /integration/connection-accounts", "GET /integration/web-push/readiness"} {
 		found := false
 		for _, route := range routes {
 			if route.Pattern() == required {
@@ -158,6 +158,22 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 	connection, err := management.Management().GetConnection(t.Context(), "workspace-a", "primary")
 	if err != nil || connection.ConnectorKey != "crm" {
 		t.Fatalf("connection=%#v err=%v", connection, err)
+	}
+	accountAdmin, ok := binding.(integrationsdk.ConnectionAccountAdministrationBinding)
+	if !ok || accountAdmin.ConnectionAccountAdministration() == nil {
+		t.Fatal("binding does not expose Integration connection account administration")
+	}
+	account, err := accountAdmin.ConnectionAccountAdministration().RegisterConnectionAccount(t.Context(), "workspace-a", "primary", "admin", integrationsdk.ConnectionAccountRegistration{Scope: integrationsdk.ConnectionAccountScopeWorkspace})
+	if err != nil || account.Scope != integrationsdk.ConnectionAccountScopeWorkspace {
+		t.Fatalf("account=%#v err=%v", account, err)
+	}
+	accounts, ok := binding.(integrationsdk.ConnectionAccountsBinding)
+	if !ok || accounts.ConnectionAccounts() == nil {
+		t.Fatal("binding does not expose Integration current-user connection accounts")
+	}
+	listed, err := accounts.ConnectionAccounts().ListConnectionAccounts(t.Context(), integrationsdk.ConnectionAccountSubject{WorkspaceID: "workspace-a", UserID: "user-a", Access: integrationsdk.ConnectionAccountAccess{Personal: true, Workspace: true}})
+	if err != nil || len(listed) != 1 || listed[0].Key != "primary" {
+		t.Fatalf("listed accounts=%#v err=%v", listed, err)
 	}
 	payload, _ := json.Marshal(integrationsdk.ConnectionInput{ConnectorKey: "crm", ProviderKey: "probe", Name: "Updated"})
 	request := httptest.NewRequest(http.MethodPut, "/integration/connections/primary", bytes.NewReader(payload))

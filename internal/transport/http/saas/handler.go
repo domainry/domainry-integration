@@ -23,6 +23,14 @@ func NewHandler(binding integrationsdk.Binding, serviceToken string) (http.Handl
 	if !ok || management.Management() == nil {
 		return nil, fmt.Errorf("Integration SaaS Management binding is required")
 	}
+	accounts, ok := binding.(integrationsdk.ConnectionAccountsBinding)
+	if !ok || accounts.ConnectionAccounts() == nil {
+		return nil, fmt.Errorf("Integration SaaS connection accounts binding is required")
+	}
+	accountAdmin, ok := binding.(integrationsdk.ConnectionAccountAdministrationBinding)
+	if !ok || accountAdmin.ConnectionAccountAdministration() == nil {
+		return nil, fmt.Errorf("Integration SaaS connection account administration binding is required")
+	}
 	operations, ok := binding.(integrationsdk.OperationsBinding)
 	if !ok || operations.Operations() == nil {
 		return nil, fmt.Errorf("Integration SaaS Operations binding is required")
@@ -31,7 +39,21 @@ func NewHandler(binding integrationsdk.Binding, serviceToken string) (http.Handl
 	if token == "" {
 		return nil, fmt.Errorf("Integration SaaS service token is required")
 	}
-	h := &handler{binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(), operations: operations.Operations(), token: token, mux: http.NewServeMux()}
+	h := &handler{binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(), accounts: accounts.ConnectionAccounts(), accountAdmin: accountAdmin.ConnectionAccountAdministration(), operations: operations.Operations(), token: token, mux: http.NewServeMux()}
+	if port, ok := binding.(integrationsdk.ConnectionAccountReadsBinding); ok {
+		h.accountReads = port.ConnectionAccountReads()
+	}
+	if port, ok := binding.(integrationsdk.OAuthApplicationsBinding); ok {
+		h.oauthApplications = port.OAuthApplications()
+	}
+	if port, ok := binding.(integrationsdk.OAuthAuthorizationsBinding); ok {
+		h.oauthAuthorizations = port.OAuthAuthorizations()
+	}
+	if port, ok := binding.(integrationsdk.ConnectionAccountWritesBinding); ok {
+		h.accountWrites = port.ConnectionAccountWrites()
+	}
+	h.registerAccountWrites()
+	h.registerOAuth()
 	capability, err := modulecapability.NewHTTPHandler(binding, func(*http.Request) error { return nil })
 	if err != nil {
 		return nil, err
@@ -44,12 +66,18 @@ func NewHandler(binding integrationsdk.Binding, serviceToken string) (http.Handl
 }
 
 type handler struct {
-	binding    integrationsdk.Binding
-	webPush    integrationsdk.WebPushSubscriptions
-	management integrationsdk.Management
-	operations integrationsdk.Operations
-	token      string
-	mux        *http.ServeMux
+	oauthApplications   integrationsdk.OAuthApplications
+	oauthAuthorizations integrationsdk.OAuthAuthorizations
+	binding             integrationsdk.Binding
+	webPush             integrationsdk.WebPushSubscriptions
+	management          integrationsdk.Management
+	accounts            integrationsdk.ConnectionAccounts
+	accountReads        integrationsdk.ConnectionAccountReads
+	accountWrites       integrationsdk.ConnectionAccountWrites
+	accountAdmin        integrationsdk.ConnectionAccountAdministration
+	operations          integrationsdk.Operations
+	token               string
+	mux                 *http.ServeMux
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

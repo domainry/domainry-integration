@@ -7,12 +7,19 @@ import (
 )
 
 func (h *handler) registerManagement() {
+	h.mux.HandleFunc("GET /integration/v1/connection-accounts", h.listConnectionAccounts)
+	h.mux.HandleFunc("GET /integration/v1/connection-accounts/{key}", h.getConnectionAccount)
+	h.mux.HandleFunc("POST /integration/v1/connection-accounts/{key}/test", h.testConnectionAccount)
+	h.mux.HandleFunc("POST /integration/v1/connection-accounts/{key}/revoke", h.revokeConnectionAccount)
+	h.mux.HandleFunc("POST /integration/v1/connection-accounts/{key}/read-access", h.authorizeConnectionAccountRead)
+	h.mux.HandleFunc("POST /integration/v1/connection-accounts/{key}/read", h.readConnectionAccount)
 	h.mux.HandleFunc("GET /integration/v1/management/connections", h.listConnections)
 	h.mux.HandleFunc("GET /integration/v1/management/connections/{key}", h.getConnection)
 	h.mux.HandleFunc("PUT /integration/v1/management/connections/{key}", h.upsertConnection)
 	h.mux.HandleFunc("DELETE /integration/v1/management/connections/{key}", h.deleteConnection)
 	h.mux.HandleFunc("POST /integration/v1/management/connections/{key}/status", h.setConnectionStatus)
 	h.mux.HandleFunc("POST /integration/v1/management/connections/{key}/test", h.testConnection)
+	h.mux.HandleFunc("POST /integration/v1/management/connections/{key}/account", h.registerConnectionAccount)
 	h.mux.HandleFunc("GET /integration/v1/management/secrets", h.listSecrets)
 	h.mux.HandleFunc("PUT /integration/v1/management/secrets/{key}", h.upsertSecret)
 	h.mux.HandleFunc("POST /integration/v1/management/secrets/{key}/transition", h.transitionSecret)
@@ -28,6 +35,49 @@ func (h *handler) registerManagement() {
 	h.mux.HandleFunc("PUT /integration/v1/management/webhook-subscriptions/{key}", h.upsertWebhookSubscription)
 	h.mux.HandleFunc("DELETE /integration/v1/management/webhook-subscriptions/{key}", h.deleteWebhookSubscription)
 	h.mux.HandleFunc("POST /integration/v1/management/webhook-subscriptions/{key}/disable", h.disableWebhookSubscription)
+}
+
+func accountSubject(r *http.Request) integrationsdk.ConnectionAccountSubject {
+	return integrationsdk.ConnectionAccountSubject{WorkspaceID: workspace(r), UserID: r.URL.Query().Get("user_id"), Access: integrationsdk.ConnectionAccountAccess{Personal: r.URL.Query().Get("allow_personal") == "true", Workspace: r.URL.Query().Get("allow_workspace") == "true"}}
+}
+
+func (h *handler) listConnectionAccounts(w http.ResponseWriter, r *http.Request) {
+	v, e := h.accounts.ListConnectionAccounts(r.Context(), accountSubject(r))
+	respond(w, map[string]any{"items": v}, e)
+}
+
+func (h *handler) getConnectionAccount(w http.ResponseWriter, r *http.Request) {
+	v, e := h.accounts.GetConnectionAccount(r.Context(), accountSubject(r), r.PathValue("key"))
+	respond(w, v, e)
+}
+
+func (h *handler) testConnectionAccount(w http.ResponseWriter, r *http.Request) {
+	var input integrationsdk.ConnectionTestRequest
+	if !decode(w, r, &input) {
+		return
+	}
+	v, e := h.accounts.TestConnectionAccount(r.Context(), accountSubject(r), r.PathValue("key"), input)
+	respond(w, v, e)
+}
+
+func (h *handler) revokeConnectionAccount(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ExpectedUpdatedAt string `json:"expected_updated_at"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	v, e := h.accounts.RevokeConnectionAccount(r.Context(), accountSubject(r), r.PathValue("key"), input.ExpectedUpdatedAt)
+	respond(w, v, e)
+}
+
+func (h *handler) registerConnectionAccount(w http.ResponseWriter, r *http.Request) {
+	var input integrationsdk.ConnectionAccountRegistration
+	if !decode(w, r, &input) {
+		return
+	}
+	v, e := h.accountAdmin.RegisterConnectionAccount(r.Context(), workspace(r), r.PathValue("key"), actor(r), input)
+	respond(w, v, e)
 }
 
 func workspace(r *http.Request) string { return r.URL.Query().Get("workspace_id") }

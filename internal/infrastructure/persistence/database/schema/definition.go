@@ -9,7 +9,7 @@ import (
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 )
 
-const SchemaVersion uint = 3
+const SchemaVersion uint = 6
 
 func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, error) {
 	parsed, err := ormdialect.Parse(driver)
@@ -47,10 +47,37 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 	if err != nil {
 		return nil, fmt.Errorf("build Integration Provider commit migration: %w", err)
 	}
+	connectionAccounts, _, err := connectionAccountsTable(renderer).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build Integration connection account migration: %w", err)
+	}
+	connectionAccountSecrets, _, err := connectionAccountSecretsTable(renderer).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build Integration connection account secret migration: %w", err)
+	}
+	connectionAccountIndex, _, err := ormschema.NewIndex(renderer, "idx_integration_connection_account_owner", "_integration_connection_accounts").Columns("workspace_id", "scope", "owner_user_id", "connection_key").Build()
+	if err != nil {
+		return nil, fmt.Errorf("build Integration connection account index: %w", err)
+	}
+	connectionAccountSecretIndex, _, err := ormschema.NewIndex(renderer, "idx_integration_connection_account_secret", "_integration_connection_account_secrets").Columns("workspace_id", "connection_key", "secret_key").Build()
+	if err != nil {
+		return nil, fmt.Errorf("build Integration connection account secret index: %w", err)
+	}
+	oauth, err := oauthStatements(renderer)
+	if err != nil {
+		return nil, err
+	}
+	grant, _, err := table(renderer, "_integration_connection_grants", key("id"), scope("workspace_id"), scope("connection_key"), text("scopes_json")).Unique("workspace_id", "connection_key").Build()
+	if err != nil {
+		return nil, err
+	}
 	return []modulehost.SchemaMigration{
 		{Version: 1, Name: "integration_foundation", Statements: statements},
 		{Version: 2, Name: "integration_owner_indexes", Statements: indexes},
-		{Version: SchemaVersion, Name: "integration_provider_commits", Statements: []string{providerCommits}},
+		{Version: 3, Name: "integration_provider_commits", Statements: []string{providerCommits}},
+		{Version: 4, Name: "integration_connection_accounts", Statements: []string{connectionAccounts, connectionAccountSecrets, connectionAccountIndex, connectionAccountSecretIndex}},
+		{Version: 5, Name: "integration_oauth_authorization", Statements: oauth},
+		{Version: SchemaVersion, Name: "integration_connection_grants", Statements: []string{grant}},
 	}, nil
 }
 
@@ -124,6 +151,14 @@ func definitionTable(renderer modulehost.Dialect, name string) *ormschema.TableB
 
 func connectionsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, "_integration_connections", key("id"), scope("connection_key"), scope("workspace_id"), scope("connector_key"), key("provider_key"), opt("name", ormschema.Text()), key("status"), text("config_json"), text("secret_refs_json"), opt("created_by", ormschema.TextKey(255)), key("created_at"), key("updated_at")).Unique("workspace_id", "connection_key")
+}
+
+func connectionAccountsTable(r modulehost.Dialect) *ormschema.TableBuilder {
+	return table(r, "_integration_connection_accounts", key("id"), scope("workspace_id"), scope("connection_key"), key("scope"), key("owner_user_id"), key("created_by"), key("created_at"), key("updated_at")).Unique("workspace_id", "connection_key")
+}
+
+func connectionAccountSecretsTable(r modulehost.Dialect) *ormschema.TableBuilder {
+	return table(r, "_integration_connection_account_secrets", key("id"), scope("workspace_id"), scope("connection_key"), scope("secret_key"), key("created_at")).Unique("workspace_id", "connection_key", "secret_key").Unique("workspace_id", "secret_key")
 }
 
 func providerStatesTable(r modulehost.Dialect) *ormschema.TableBuilder {

@@ -267,6 +267,10 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 			return integrationsdk.Connection{}, fmt.Errorf("update Integration connection: %w", err)
 		}
 	}
+	connection := integrationsdk.Connection{Key: key, WorkspaceID: workspaceID, ConnectorKey: input.ConnectorKey, ProviderKey: input.ProviderKey, Name: input.Name, Status: input.Status, Config: input.Config, SecretRefs: input.SecretRefs}
+	if err = s.syncConnectionAccountSecrets(ctx, connection); err != nil {
+		return integrationsdk.Connection{}, err
+	}
 	return s.GetConnection(ctx, workspaceID, key)
 }
 
@@ -283,6 +287,16 @@ func (s *ManagementStore) DeleteConnection(ctx context.Context, workspaceID, key
 	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("connection_key", strings.TrimSpace(key)))
 	if err != nil {
 		return err
+	}
+	accountWhere := query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("connection_key", strings.TrimSpace(key)))
+	for _, table := range []string{"_integration_connection_account_secrets", "_integration_connection_accounts"} {
+		statement, args, buildErr := query.NewDeleteBuilder(s.dialect, table).Where(accountWhere).Build()
+		if buildErr != nil {
+			return buildErr
+		}
+		if _, execErr := s.database.ExecContext(ctx, statement, args...); execErr != nil {
+			return execErr
+		}
 	}
 	statement, args, err := query.NewDeleteBuilder(s.dialect, "_integration_connections").Where(where).Build()
 	if err != nil {
@@ -375,14 +389,15 @@ func (s *ManagementStore) TestConnection(ctx context.Context, workspaceID, key s
 	if err != nil {
 		return integrationsdk.ConnectionTestResult{}, err
 	}
-	secrets, err := s.delivery.secrets.ResolveSecretReferences(ctx, workspaceID, connection.SecretRefs)
+	resolvedSecrets, err := s.delivery.resolveProviderSecrets(ctx, workspaceID, connection.SecretRefs)
 	if err != nil {
 		return integrationsdk.ConnectionTestResult{Connection: connection, Operation: "test_connection"}, err
 	}
 	result, err := tester.TestConnection(ctx, connector.TestConnectionRequest{
 		ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, Connection: providerConnection,
-		Secrets: secrets, Principal: connector.Principal{WorkspaceID: workspaceID, IsAuthenticated: true},
+		Secrets: resolvedSecrets.Values, Principal: connector.Principal{WorkspaceID: workspaceID, IsAuthenticated: true},
 	})
+	err = s.delivery.persistProviderSecretUpdates(ctx, workspaceID, connection.SecretRefs, resolvedSecrets.Versions, result.SecretUpdates, err)
 	status := integrationsdk.DeliveryStatusSucceeded
 	if err != nil || !result.Connected {
 		status = integrationsdk.DeliveryStatusFailed

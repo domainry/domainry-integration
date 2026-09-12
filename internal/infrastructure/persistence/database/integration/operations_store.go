@@ -53,7 +53,12 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 	if operation.Mode != connector.ModeCall {
 		return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration operation %s is not a synchronous call", request.Operation)
 	}
-	secrets, err := s.delivery.secrets.ResolveSecretReferences(ctx, request.WorkspaceID, connection.SecretRefs)
+	if expected := request.ReadExpectation; expected != nil {
+		if expected.ConnectionUpdatedAt == "" || expected.ConnectionUpdatedAt != connection.UpdatedAt || expected.ProviderKey != connection.ProviderKey || expected.ContractSHA256 != operation.ContractSHA256 || operation.Reliability.Effect != connector.EffectRead {
+			return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration account read target changed before execution")
+		}
+	}
+	resolvedSecrets, err := s.delivery.resolveProviderSecrets(ctx, request.WorkspaceID, connection.SecretRefs)
 	if err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
@@ -65,17 +70,10 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 	result, callErr := provider.Call(ctx, connector.CallRequest{
 		ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, OperationKey: request.Operation,
 		ContractSHA256: operation.ContractSHA256, Mode: operation.Mode, Connection: connector.Connection{Key: connection.Key, WorkspaceID: connection.WorkspaceID, ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, Name: "", Status: connection.Status, Config: connection.Config, SecretRefs: connection.SecretRefs},
-		Payload: request.Payload, RequestRef: request.RequestID, Secrets: secrets,
+		Payload: request.Payload, RequestRef: request.RequestID, Secrets: resolvedSecrets.Values,
 		Principal: connector.Principal{UserID: request.ActorID, RoleKey: request.RoleKey, WorkspaceID: request.WorkspaceID, RequestID: request.RequestID, IsAuthenticated: strings.TrimSpace(request.ActorID) != ""},
 	})
-	if callErr == nil && len(result.SecretUpdates) != 0 {
-		writer, ok := s.delivery.secrets.(SecretUpdateWriter)
-		if !ok {
-			callErr = fmt.Errorf("Integration secret update writer is unavailable")
-		} else if err := writer.ApplySecretUpdates(ctx, request.WorkspaceID, connection.SecretRefs, result.SecretUpdates); err != nil {
-			callErr = err
-		}
-	}
+	callErr = s.delivery.persistProviderSecretUpdates(ctx, request.WorkspaceID, connection.SecretRefs, resolvedSecrets.Versions, result.SecretUpdates, callErr)
 	status, errorText := "succeeded", ""
 	if callErr != nil {
 		status, errorText = "failed", callErr.Error()
@@ -114,7 +112,15 @@ func (s *OperationsStore) prepareProviderInvocation(ctx context.Context, invocat
 	if request.PersistenceMode != integrationmodel.ProviderCallPersistenceSensitive {
 		return s.delivery.prepareInvocation(ctx, invocationID, deliveryRequest, connection)
 	}
-	return s.delivery.prepareInvocationWithMetadata(ctx, invocationID, deliveryRequest, connection, sensitiveInvocationMetadata(request))
+	// Claim before external I/O using an insert-only identity. Failed, in-flight
+	// or crash-interrupted sensitive requests cannot be reset to running: a
+	// read can be billable, and its unavailable response cannot prove no work
+	// occurred. A separately authorized new RequestID is an explicit new call.
+	metadata, err := json.Marshal(sensitiveInvocationMetadata(request))
+	if err != nil {
+		return err
+	}
+	return s.delivery.insertInvocation(ctx, invocationID, deliveryRequest, connection, metadata)
 }
 
 func sensitiveInvocationMetadata(request integrationmodel.ProviderCallRequest) map[string]any {

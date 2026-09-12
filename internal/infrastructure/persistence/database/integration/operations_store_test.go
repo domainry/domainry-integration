@@ -264,6 +264,17 @@ func TestLocalWorkersPersistProviderStateBeforeDispatchingEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	workers := NewWorkerStore(database, dialect, delivery, operations, "runtime-a")
+	// Force the previously flaky precision prefix: .123Z sorts after .1231Z,
+	// although the second instant is later. Do not rely on the machine clock.
+	clockCalls := 0
+	workers.clock = func() time.Time {
+		clockCalls++
+		nanos := 123000000
+		if clockCalls > 1 {
+			nanos = 123100000
+		}
+		return time.Date(2026, 9, 11, 10, 0, 0, nanos, time.UTC)
+	}
 	processed, err := workers.ProcessDueProviderTasks(t.Context(), 10)
 	if err != nil || processed != 1 || provider.calls != 1 {
 		t.Fatalf("processed=%d provider_calls=%d err=%v", processed, provider.calls, err)
@@ -279,4 +290,19 @@ func TestLocalWorkersPersistProviderStateBeforeDispatchingEvent(t *testing.T) {
 	if err != nil || processed != 1 || trigger.calls != 1 || trigger.request.Target.RecordID != "contact-2" {
 		t.Fatalf("processed=%d trigger=%#v err=%v", processed, trigger, err)
 	}
+	// SQL deliberately scans the whole current second. Precision checks must
+	// still prevent a slightly future deadline or an unexpired lease from firing.
+	for _, deadline := range []struct{ due, lease string }{
+		{"2026-09-11T10:00:00.1232Z", ""},
+		{"2026-09-11T10:00:00.123Z", "2026-09-11T10:00:00.1232Z"},
+	} {
+		if _, err := database.ExecContext(t.Context(), "UPDATE _integration_connector_provider_states SET due_at=?,lease_expires_at=? WHERE task_key=?", deadline.due, deadline.lease, "poll"); err != nil {
+			t.Fatal(err)
+		}
+		processed, err := workers.processProviderTasks(t.Context(), 10)
+		if err != nil || processed != 0 || provider.calls != 1 {
+			t.Fatalf("future work claimed: processed=%d calls=%d err=%v", processed, provider.calls, err)
+		}
+	}
+
 }

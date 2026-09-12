@@ -38,11 +38,28 @@ func NewAdapter(binding integrationsdk.Binding) (modulehttp.Adapter, error) {
 	if !ok || managementBinding.Management() == nil {
 		return nil, errors.New("Integration Management binding is unavailable")
 	}
+	accountsBinding, ok := binding.(integrationsdk.ConnectionAccountsBinding)
+	if !ok || accountsBinding.ConnectionAccounts() == nil {
+		return nil, errors.New("Integration connection accounts binding is unavailable")
+	}
+	accountAdminBinding, ok := binding.(integrationsdk.ConnectionAccountAdministrationBinding)
+	if !ok || accountAdminBinding.ConnectionAccountAdministration() == nil {
+		return nil, errors.New("Integration connection account administration binding is unavailable")
+	}
 	operationsBinding, ok := binding.(integrationsdk.OperationsBinding)
 	if !ok || operationsBinding.Operations() == nil {
 		return nil, errors.New("Integration Operations binding is unavailable")
 	}
-	h := &handler{catalog: binding.Catalog(), management: managementBinding.Management(), operations: operationsBinding.Operations(), subscriptions: webPushBinding.WebPushSubscriptions(), mux: http.NewServeMux()}
+	h := &handler{catalog: binding.Catalog(), management: managementBinding.Management(), accounts: accountsBinding.ConnectionAccounts(), accountAdmin: accountAdminBinding.ConnectionAccountAdministration(), operations: operationsBinding.Operations(), subscriptions: webPushBinding.WebPushSubscriptions(), mux: http.NewServeMux()}
+	if port, ok := binding.(integrationsdk.ConnectionAccountReadsBinding); ok {
+		h.accountReads = port.ConnectionAccountReads()
+	}
+	if port, ok := binding.(integrationsdk.OAuthApplicationsBinding); ok {
+		h.oauthApplications = port.OAuthApplications()
+	}
+	if port, ok := binding.(integrationsdk.OAuthAuthorizationsBinding); ok {
+		h.oauthAuthorizations = port.OAuthAuthorizations()
+	}
 	routes, err := integrationRoutes()
 	if err != nil {
 		return nil, err
@@ -101,9 +118,19 @@ func authorizeAction(permissionKey string, next http.HandlerFunc) http.HandlerFu
 
 func requiresAllDataScope(permissionKey string) bool {
 	switch permissionKey {
-	case integrationsdk.ActionIntegrationWebPushSubscriptionsList,
+	case integrationsdk.ActionIntegrationOAuthAuthorizationsOptions,
+		integrationsdk.ActionIntegrationOAuthAuthorizationsStart,
+		integrationsdk.ActionIntegrationOAuthAuthorizationsGet,
+		integrationsdk.ActionIntegrationOAuthAuthorizationsComplete,
+		integrationsdk.ActionIntegrationWebPushSubscriptionsList,
 		integrationsdk.ActionIntegrationWebPushSubscriptionsUpsert,
-		integrationsdk.ActionIntegrationWebPushSubscriptionsRevoke:
+		integrationsdk.ActionIntegrationWebPushSubscriptionsRevoke,
+		integrationsdk.ActionIntegrationConnectionAccountsList,
+		integrationsdk.ActionIntegrationConnectionAccountsGet,
+		integrationsdk.ActionIntegrationConnectionAccountsTest,
+		integrationsdk.ActionIntegrationConnectionAccountsReadAccess,
+		integrationsdk.ActionIntegrationConnectionAccountsRead,
+		integrationsdk.ActionIntegrationConnectionAccountsRevoke:
 		return false
 	default:
 		return true
@@ -124,15 +151,23 @@ func integrationRoutes() ([]modulehttp.Route, error) {
 }
 
 type handler struct {
-	catalog       integrationsdk.Catalog
-	management    integrationsdk.Management
-	operations    integrationsdk.Operations
-	subscriptions integrationsdk.WebPushSubscriptions
-	mux           *http.ServeMux
+	oauthApplications   integrationsdk.OAuthApplications
+	oauthAuthorizations integrationsdk.OAuthAuthorizations
+	catalog             integrationsdk.Catalog
+	management          integrationsdk.Management
+	accounts            integrationsdk.ConnectionAccounts
+	accountReads        integrationsdk.ConnectionAccountReads
+	accountAdmin        integrationsdk.ConnectionAccountAdministration
+	operations          integrationsdk.Operations
+	subscriptions       integrationsdk.WebPushSubscriptions
+	mux                 *http.ServeMux
 }
 
 func (h *handler) handlers() map[string]http.HandlerFunc {
 	handlers := h.managementHandlers()
+	for key, handler := range h.oauthHandlers() {
+		handlers[key] = handler
+	}
 	handlers[integrationsdk.ActionIntegrationWebPushReadiness] = h.readiness
 	handlers[integrationsdk.ActionIntegrationWebPushSubscriptionsList] = h.list
 	handlers[integrationsdk.ActionIntegrationWebPushSubscriptionsUpsert] = h.upsert

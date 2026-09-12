@@ -15,6 +15,7 @@ import (
 
 const (
 	integrationConnectionsCategory   = integrationsdk.CapabilityIntegrationConnections
+	integrationAccountsCategory      = integrationsdk.CapabilityIntegrationAccounts
 	integrationCredentialsCategory   = integrationsdk.CapabilityIntegrationCredentials
 	integrationOperationsCategory    = integrationsdk.CapabilityIntegrationOperations
 	integrationSubscriptionsCategory = integrationsdk.CapabilityIntegrationSubscriptions
@@ -38,6 +39,7 @@ func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, valid
 		chains, scopes         []string
 	}{
 		{integrationConnectionsCategory, "Connector connections", "Discover connector/provider contracts and manage validated connection resources and provider-operation probes.", []string{"connector_descriptor_to_integration_connection", "integration_connection_to_provider_operation", "secret_reference_to_connection_validation"}, []string{"integration.connection_requirement"}},
+		{integrationAccountsCategory, "Current-user connection accounts", "Authorize personal and workspace accounts, complete OAuth sessions, and execute declared read operations against current account ownership and grants.", []string{"identity_subject_to_connection_account", "oauth_grant_to_account_read", "account_read_to_sensitive_invocation"}, []string{}},
 		{integrationCredentialsCategory, "Integration credentials", "Manage secret references, application API keys, and external identity mappings without exposing secret material.", []string{"identity_actor_to_integration_api_key", "provider_subject_to_external_identity"}, []string{}},
 		{integrationSubscriptionsCategory, "Inbound and push subscriptions", "Manage webhook and browser push subscriptions and accept provider-authenticated inbound webhooks.", []string{"provider_webhook_to_integration_event", "integration_event_mapping_to_runtime_execution", "notification_delivery_to_web_push_provider"}, []string{"integration.event_mapping"}},
 		{integrationOperationsCategory, "Invocation and event operations", "Inspect provider invocations and durable inbound events, and replay eligible event execution.", []string{"integration_provider_call_to_invocation", "integration_event_to_runtime_execution_receipt"}, []string{}},

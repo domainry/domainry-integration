@@ -108,9 +108,12 @@ func validateProviderConfigValue(field connector.ConfigField, value any) error {
 	case connector.ConfigFieldBoolean:
 		_, valid = value.(bool)
 	case connector.ConfigFieldJSON:
-		_, object := value.(map[string]any)
-		_, array := value.([]any)
-		valid = object || array
+		// Module callers may supply []string or typed maps while HTTP decoding
+		// supplies []any/map[string]any. Judge their JSON shape consistently;
+		// strings containing JSON, null and non-serializable values are not a
+		// structured configuration. Provider validation still owns its contents.
+		raw, err := json.Marshal(value)
+		valid = err == nil && len(raw) > 0 && (raw[0] == '{' || raw[0] == '[')
 	}
 	if !valid {
 		return fmt.Errorf("Integration Provider config field %q must be %s", field.Key, field.Type)

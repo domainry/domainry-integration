@@ -10,6 +10,7 @@ import (
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	integrationcapability "github.com/domainry/domainry-integration/capability"
+	"github.com/domainry/domainry-integration/internal/adapter/accountwrite"
 	integrationsdkadapter "github.com/domainry/domainry-integration/internal/adapter/integrationsdk"
 	integrationapplication "github.com/domainry/domainry-integration/internal/application/integration"
 	integrationservice "github.com/domainry/domainry-integration/internal/domain/integration/service"
@@ -84,6 +85,8 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	if err != nil {
 		return nil, err
 	}
+	binding.SetConnectionAccountReads(integrationapplication.NewAccountReadService(management, domain))
+	binding.SetConnectionAccountWrites(integrationapplication.NewAccountWriteService(management, accountwrite.Codec{}, operations, operations))
 	if mode == integrationsdk.DeploymentModeModule {
 		adapter, err := modulehttp.NewAdapter(binding)
 		if err != nil {

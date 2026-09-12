@@ -41,3 +41,22 @@ func AccessScopeFromContext(ctx context.Context) (AccessScope, bool) {
 	scope, ok := ctx.Value(accessScopeContextKey{}).(AccessScope)
 	return scope, ok
 }
+
+// ConnectionAccountAccess projects the exact action's canonical data scope.
+// Account ownership has no organization inheritance. Unsupported organization
+// denials fail closed; creator evidence never determines account access.
+func (scope AccessScope) ConnectionAccountAccess() (personal, workspace bool) {
+	if !scope.Valid() || scope.DeniedAll || len(scope.DeniedOrgIDs) != 0 {
+		return false, false
+	}
+	personal, workspace = scope.Unrestricted, scope.Unrestricted
+	for _, id := range scope.AllowedUserIDs {
+		personal = personal || id == scope.ActorID
+	}
+	for _, id := range scope.DeniedUserIDs {
+		if id == scope.ActorID {
+			personal = false
+		}
+	}
+	return
+}

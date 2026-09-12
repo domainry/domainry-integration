@@ -59,6 +59,26 @@ func TestAuthorizeActionUsesTheExactPermissionAndAllowsPersonalOwnerScope(t *tes
 	}
 }
 
+func TestConnectionAccountActionsAllowOwnerScopeButRegistrationRemainsAdministrative(t *testing.T) {
+	called := false
+	request := httptest.NewRequest(http.MethodGet, "/integration/connection-accounts", nil)
+	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: modulePrincipal("integration.connection_accounts", "list", identitysdk.DataScopeOwner)}))
+	recorder := httptest.NewRecorder()
+	authorizeAction(integrationsdk.ActionIntegrationConnectionAccountsList, func(_ http.ResponseWriter, _ *http.Request) { called = true })(recorder, request)
+	if !called || recorder.Code != http.StatusOK {
+		t.Fatalf("owner account list called=%v status=%d", called, recorder.Code)
+	}
+
+	called = false
+	request = httptest.NewRequest(http.MethodPost, "/integration/connections/google/account", nil)
+	request = request.WithContext(identitysdk.WithRequestIdentity(request.Context(), identitysdk.RequestIdentity{Principal: modulePrincipal("integration.connections", "register_account", identitysdk.DataScopeOwner)}))
+	recorder = httptest.NewRecorder()
+	authorizeAction(integrationsdk.ActionIntegrationConnectionsRegisterAccount, func(_ http.ResponseWriter, _ *http.Request) { called = true })(recorder, request)
+	if called || recorder.Code != http.StatusForbidden {
+		t.Fatalf("owner account registration called=%v status=%d", called, recorder.Code)
+	}
+}
+
 func modulePrincipal(resource, action string, dataScope identitysdk.DataScope) identitysdk.Principal {
 	bundle := &identitysdk.AccessBundle{
 		ContractVersion: identitysdk.CurrentPolicyBundleVersion, AuthorizationRevision: "revision-1", ExpiresAt: time.Now().UTC().Add(time.Hour),
