@@ -106,6 +106,9 @@ func (s *ManagementStore) CreateAPIKey(ctx context.Context, workspaceID, actorID
 		})
 		return value, err
 	}
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, workspaceID, subjectFenceReference{"subject", "", input.ActorID}); err != nil {
+		return integrationsdk.APIKeyCredential{}, err
+	}
 	workspaceID, err := requiredOwnerValue("workspace ID", workspaceID)
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
@@ -166,7 +169,7 @@ func (s *ManagementStore) DisableAPIKey(ctx context.Context, workspaceID, key, _
 	if err != nil {
 		return integrationsdk.APIKey{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_api_keys").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(where).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_api_keys").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_api_keys"), where)).Build()
 	if err != nil {
 		return integrationsdk.APIKey{}, err
 	}
@@ -210,7 +213,7 @@ func (s *ManagementStore) RotateAPIKey(ctx context.Context, workspaceID, key, _ 
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_api_keys").Set("token_prefix", prefix).Set("token_hash", tokenHash).Set("status", "active").Set("disabled_at", "").Set("updated_at", now).Where(where).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_api_keys").Set("token_prefix", prefix).Set("token_hash", tokenHash).Set("status", "active").Set("disabled_at", "").Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_api_keys"), where)).Build()
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
 	}

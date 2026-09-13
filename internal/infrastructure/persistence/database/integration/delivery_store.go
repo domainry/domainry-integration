@@ -208,6 +208,9 @@ func (s *DeliveryStore) prepareInvocation(ctx context.Context, id string, reques
 }
 
 func (s *DeliveryStore) prepareInvocationWithMetadata(ctx context.Context, id string, request integrationmodel.DeliveryRequest, connection deliveryConnection, metadataValue map[string]any) error {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, request.WorkspaceID, subjectFenceReference{"connection", "", connection.Key}, subjectFenceReference{"message", "", request.MessageID}, subjectFenceReference{"row", "_integration_invocations", id}); err != nil {
+		return err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	metadata, _ := json.Marshal(metadataValue)
 	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status").Where(query.Equal("id", id)).Build()
@@ -217,12 +220,22 @@ func (s *DeliveryStore) prepareInvocationWithMetadata(ctx context.Context, id st
 	var current string
 	err = s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&current)
 	if err == nil {
-		update, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("metadata_json", string(metadata)).Set("updated_at", now).Where(query.Equal("id", id)).Build()
+		update, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("metadata_json", string(metadata)).Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_invocations"), query.Equal("id", id))).Build()
 		if buildErr != nil {
 			return buildErr
 		}
-		_, execErr := s.database.ExecContext(ctx, update, args...)
-		return execErr
+		result, execErr := s.database.ExecContext(ctx, update, args...)
+		if execErr != nil {
+			return execErr
+		}
+		count, execErr := result.RowsAffected()
+		if execErr != nil {
+			return execErr
+		}
+		if count != 1 {
+			return fmt.Errorf("Integration invocation claim changed")
+		}
+		return nil
 	}
 	if err != sql.ErrNoRows {
 		return err
@@ -233,22 +246,45 @@ func (s *DeliveryStore) prepareInvocationWithMetadata(ctx context.Context, id st
 // insertInvocation claims one identity with a unique primary-key insert. The
 // synchronous sensitive-call path must not use the delivery retry transition.
 func (s *DeliveryStore) insertInvocation(ctx context.Context, id string, request integrationmodel.DeliveryRequest, connection deliveryConnection, metadata []byte) error {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, request.WorkspaceID, subjectFenceReference{"connection", "", connection.Key}, subjectFenceReference{"message", "", request.MessageID}, subjectFenceReference{"row", "_integration_invocations", id}); err != nil {
+		return err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	queryValue, args, err := query.NewInsertBuilder(s.dialect, "_integration_invocations").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at").Values(id, request.WorkspaceID, request.ConnectorKey, connection.ProviderKey, connection.Key, request.Operation, "running", int64(0), request.MessageID, nil, nil, nil, nil, nil, nil, string(metadata), now, now).Build()
 	if err != nil {
 		return err
 	}
-	_, err = s.database.ExecContext(ctx, queryValue, args...)
-	return err
-}
-
-func (s *DeliveryStore) finishInvocation(ctx context.Context, id, status, responseRef, errorText string) error {
-	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.Equal("id", id)).Build()
+	result, err := s.database.ExecContext(ctx, queryValue, args...)
 	if err != nil {
 		return err
 	}
-	_, err = s.database.ExecContext(ctx, queryValue, args...)
-	return err
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("Integration invocation claim changed")
+	}
+	return nil
+}
+
+func (s *DeliveryStore) finishInvocation(ctx context.Context, id, status, responseRef, errorText string) error {
+	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_invocations"), query.Equal("id", id))).Build()
+	if err != nil {
+		return err
+	}
+	result, err := s.database.ExecContext(ctx, queryValue, args...)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("Integration invocation completion changed")
+	}
+	return nil
 }
 
 func (s *DeliveryStore) receipt(ctx context.Context, messageID, id string) (integrationmodel.DeliveryReceipt, bool, error) {

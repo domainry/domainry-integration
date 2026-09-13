@@ -134,3 +134,10 @@ func (b *bindingWithHTTPAdapter) ConnectionAccountWrites() integrationsdk.Connec
 	}
 	return nil
 }
+
+func (b *bindingWithHTTPAdapter) SubjectLifecycle() integrationsdk.SubjectLifecycle {
+	if port, ok := b.Binding.(integrationsdk.SubjectLifecycleBinding); ok {
+		return port.SubjectLifecycle()
+	}
+	return nil
+}

@@ -19,6 +19,7 @@ type Binding struct {
 	accounts      integrationsdk.ConnectionAccounts
 	accountReads  *integrationapplication.AccountReadService
 	accountWrites *integrationapplication.AccountWriteService
+	subjects      integrationsdk.SubjectLifecycle
 	accountAdmin  integrationsdk.ConnectionAccountAdministration
 	workers       integrationsdk.LocalWorkers
 	adapters      []modulehttp.Adapter
@@ -65,6 +66,9 @@ func (b *Binding) Descriptor() integrationsdk.Descriptor {
 	}
 	if b.accountReads != nil {
 		capabilities = append(capabilities, "connection_accounts.read")
+	}
+	if b.subjects != nil {
+		capabilities = append(capabilities, "subjects.lifecycle")
 	}
 	return integrationsdk.Descriptor{ProtocolVersion: integrationsdk.ProtocolVersionV1, Mode: b.mode, Capabilities: capabilities}
 }
@@ -254,3 +258,10 @@ func (b *Binding) ConnectionAccountWrites() integrationsdk.ConnectionAccountWrit
 func (b *Binding) SetConnectionAccountWrites(writes *integrationapplication.AccountWriteService) {
 	b.accountWrites = writes
 }
+
+func (b *Binding) SetSubjectLifecycle(subjects integrationsdk.SubjectLifecycle) {
+	b.subjects = subjects
+}
+func (b *Binding) SubjectLifecycle() integrationsdk.SubjectLifecycle { return b.subjects }
+
+var _ integrationsdk.SubjectLifecycleBinding = (*Binding)(nil)

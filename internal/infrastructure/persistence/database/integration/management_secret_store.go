@@ -88,6 +88,9 @@ func (s *ManagementStore) UpsertSecret(ctx context.Context, workspaceID, key, ac
 		})
 		return value, err
 	}
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, workspaceID, subjectFenceReference{"secret", "", key}, subjectFenceReference{"subject", "", actorID}); err != nil {
+		return integrationsdk.Secret{}, err
+	}
 	workspaceID, err := requiredOwnerValue("workspace ID", workspaceID)
 	if err != nil {
 		return integrationsdk.Secret{}, err
@@ -148,7 +151,7 @@ func (s *ManagementStore) UpsertSecret(ctx context.Context, workspaceID, key, ac
 			return integrationsdk.Secret{}, fmt.Errorf("insert Integration secret: %w", err)
 		}
 	} else {
-		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("kind", input.Kind).Set("status", "active").Set("description", input.Description).Set("value_ref", valueRef).Set("fingerprint", fingerprint).Set("expires_at", input.ExpiresAt).Set("disabled_at", "").Set("revoked_at", "").Set("updated_at", now).Where(where).Build()
+		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("kind", input.Kind).Set("status", "active").Set("description", input.Description).Set("value_ref", valueRef).Set("fingerprint", fingerprint).Set("expires_at", input.ExpiresAt).Set("disabled_at", "").Set("revoked_at", "").Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_secrets"), where)).Build()
 		if buildErr != nil {
 			return integrationsdk.Secret{}, buildErr
 		}
@@ -160,6 +163,9 @@ func (s *ManagementStore) UpsertSecret(ctx context.Context, workspaceID, key, ac
 }
 
 func (s *ManagementStore) upsertSecretMaterial(ctx context.Context, workspaceID, key, ciphertext, now string) error {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, workspaceID, subjectFenceReference{"secret", "", key}); err != nil {
+		return err
+	}
 	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_secret_materials").Columns("id").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", key))).Limit(1).Build()
 	if err != nil {
 		return err
@@ -177,7 +183,7 @@ func (s *ManagementStore) upsertSecretMaterial(ctx context.Context, workspaceID,
 		_, err = s.database.ExecContext(ctx, statement, args...)
 		return err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", ciphertext).Set("updated_at", now).Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", key))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", ciphertext).Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_secret_materials"), query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", key)))).Build()
 	if err != nil {
 		return err
 	}
@@ -219,7 +225,7 @@ func (s *ManagementStore) TransitionSecret(ctx context.Context, workspaceID, key
 	if err != nil {
 		return integrationsdk.Secret{}, err
 	}
-	statement, args, err := builder.Where(where).Build()
+	statement, args, err := builder.Where(query.And(subjectRowWriteAllowed("_integration_secrets"), where)).Build()
 	if err != nil {
 		return integrationsdk.Secret{}, err
 	}

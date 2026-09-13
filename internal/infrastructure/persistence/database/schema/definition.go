@@ -9,7 +9,7 @@ import (
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 )
 
-const SchemaVersion uint = 6
+const SchemaVersion uint = 7
 
 func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, error) {
 	parsed, err := ormdialect.Parse(driver)
@@ -71,13 +71,18 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 	if err != nil {
 		return nil, err
 	}
+	erasure, err := subjectErasureStatements(renderer)
+	if err != nil {
+		return nil, err
+	}
 	return []modulehost.SchemaMigration{
 		{Version: 1, Name: "integration_foundation", Statements: statements},
 		{Version: 2, Name: "integration_owner_indexes", Statements: indexes},
 		{Version: 3, Name: "integration_provider_commits", Statements: []string{providerCommits}},
 		{Version: 4, Name: "integration_connection_accounts", Statements: []string{connectionAccounts, connectionAccountSecrets, connectionAccountIndex, connectionAccountSecretIndex}},
 		{Version: 5, Name: "integration_oauth_authorization", Statements: oauth},
-		{Version: SchemaVersion, Name: "integration_connection_grants", Statements: []string{grant}},
+		{Version: 6, Name: "integration_connection_grants", Statements: []string{grant}},
+		{Version: SchemaVersion, Name: "integration_subject_erasure", Statements: erasure},
 	}, nil
 }
 

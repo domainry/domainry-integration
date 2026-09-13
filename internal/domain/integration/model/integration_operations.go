@@ -2,6 +2,7 @@ package integrationmodel
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -42,6 +43,7 @@ type InvocationQuery struct {
 }
 
 type ProviderCallRequest struct {
+	Source InvocationSource `json:"source,omitempty"`
 	// ReadExpectation is set only by owner-side account-read orchestration.
 	// JSON callers cannot supply or override this pre-I/O consistency guard.
 	ReadExpectation   *ProviderReadExpectation `json:"-"`
@@ -55,6 +57,24 @@ type ProviderCallRequest struct {
 	MaskedDestination string                   `json:"masked_destination,omitempty"`
 	ActorID           string                   `json:"actor_id,omitempty"`
 	RoleKey           string                   `json:"role_key,omitempty"`
+}
+
+type InvocationSource struct {
+	ExecutionID string `json:"execution_id,omitempty"`
+	ObjectKey   string `json:"object_key,omitempty"`
+	RecordID    string `json:"record_id,omitempty"`
+}
+
+func (s InvocationSource) Validate() error {
+	for _, value := range []string{s.ExecutionID, s.ObjectKey, s.RecordID} {
+		if value != "" && !boundedAccountWriteValue(value, 255) {
+			return fmt.Errorf("Integration invocation source invalid")
+		}
+	}
+	if s.RecordID != "" && (s.ExecutionID == "" || s.ObjectKey == "") {
+		return fmt.Errorf("Integration invocation source incomplete")
+	}
+	return nil
 }
 
 type ProviderReadExpectation struct {

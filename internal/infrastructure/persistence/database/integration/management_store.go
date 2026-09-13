@@ -184,6 +184,9 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 		})
 		return value, err
 	}
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, workspaceID, subjectFenceReference{"connection", "", key}, subjectFenceReference{"subject", "", actorID}); err != nil {
+		return integrationsdk.Connection{}, err
+	}
 	workspaceID, err := requiredOwnerValue("workspace ID", workspaceID)
 	if err != nil {
 		return integrationsdk.Connection{}, err
@@ -259,7 +262,7 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_connections").
 			Set("connector_key", input.ConnectorKey).Set("provider_key", input.ProviderKey).Set("name", input.Name).
 			Set("status", input.Status).Set("config_json", configJSON).Set("secret_refs_json", refsJSON).Set("updated_at", now).
-			Where(where).Build()
+			Where(query.And(subjectRowWriteAllowed("_integration_connections"), where)).Build()
 		if buildErr != nil {
 			return integrationsdk.Connection{}, buildErr
 		}
@@ -352,7 +355,7 @@ func (s *ManagementStore) SetConnectionStatus(ctx context.Context, workspaceID, 
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", status).Set("updated_at", ownerNow()).Where(where).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", status).Set("updated_at", ownerNow()).Where(query.And(subjectRowWriteAllowed("_integration_connections"), where)).Build()
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}

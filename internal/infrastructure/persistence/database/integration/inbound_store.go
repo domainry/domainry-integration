@@ -54,6 +54,13 @@ func (s *OperationsStore) AcceptWebhook(ctx context.Context, request integration
 	if err != nil {
 		return integrationmodel.WebhookReceipt{}, err
 	}
+	if err = s.guardInboundSubject(ctx, request, connection.ProviderKey, verified); err != nil {
+		return integrationmodel.WebhookReceipt{}, err
+	}
+	verified.Payload, err = verifiedInboundPayload(verified.Payload, verified.ExternalIdentity)
+	if err != nil {
+		return integrationmodel.WebhookReceipt{}, err
+	}
 	if verified.Security != nil && strings.TrimSpace(verified.Security.Nonce) != "" {
 		if err := s.acceptWebhookNonce(ctx, request, verified.Security.Nonce); err != nil {
 			return integrationmodel.WebhookReceipt{}, err
@@ -88,6 +95,9 @@ func (s *OperationsStore) acceptWebhookNonce(ctx context.Context, request integr
 func (s *OperationsStore) acceptEvent(ctx context.Context, request integrationmodel.WebhookRequest, providerKey string, verified connector.VerifiedWebhook) (integrationmodel.Event, bool, error) {
 	digest := sha256.Sum256([]byte(request.WorkspaceID + "\x00" + providerKey + "\x00" + strings.TrimSpace(verified.ExternalID)))
 	id := "event:" + hex.EncodeToString(digest[:])
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, request.WorkspaceID, subjectFenceReference{"row", "_integration_events", id}, subjectFenceReference{"connection", "", request.ConnectionKey}); err != nil {
+		return integrationmodel.Event{}, false, err
+	}
 	if existing, err := s.GetEvent(ctx, request.WorkspaceID, id); err == nil {
 		existing.ConnectorKey, existing.ConnectionKey = request.ConnectorKey, request.ConnectionKey
 		return existing, false, nil
@@ -189,7 +199,7 @@ func (s *OperationsStore) ReplayEvent(ctx context.Context, workspaceID, id strin
 		return event, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_events").Set("status", "received").Set("error", "").Set("next_retry_at", "").Set("updated_at", now).Where(where).Build()
+	statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_events").Set("status", "received").Set("error", "").Set("next_retry_at", "").Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_events"), where)).Build()
 	if err != nil {
 		return event, err
 	}
@@ -307,6 +317,9 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 			return event, err
 		}
 	}
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, event.WorkspaceID, subjectFenceReference{"row", "_integration_events", event.ID}, subjectFenceReference{"subject", "", principal.ActorID}); err != nil {
+		return event, err
+	}
 	receipt, triggerErr := s.triggers.Trigger(ctx, integrationsdk.TriggerRequest{
 		EventID: event.ID, WorkspaceID: event.WorkspaceID, MappingKey: mapping.Key, IdempotencyKey: event.ID + ":" + mapping.Key,
 		Target: integrationsdk.TriggerTarget{Type: mapping.TargetType, WorkflowKey: mapping.WorkflowKey, ObjectKey: objectKey, RecordID: recordID, ActionKey: actionKey, Input: input}, Principal: principal,
@@ -362,24 +375,8 @@ func (s *OperationsStore) eventMapping(ctx context.Context, event integrationmod
 		if err := json.Unmarshal([]byte(payload), &mapping); err != nil {
 			return mapping, false, err
 		}
-		if !mapping.Enabled || strings.TrimSpace(mapping.Provider) != event.Provider || (strings.TrimSpace(mapping.EventType) != "" && strings.TrimSpace(mapping.EventType) != event.EventType) {
+		if !eventMappingMatches(mapping, event) {
 			continue
-		}
-		if prefix := strings.TrimSpace(mapping.CommandPrefix); prefix != "" {
-			var eventPayload map[string]any
-			_ = json.Unmarshal(event.Payload, &eventPayload)
-			command, _ := integrationPayloadPath(eventPayload, "command")
-			if !strings.HasPrefix(strings.TrimSpace(fmt.Sprint(command)), prefix) {
-				continue
-			}
-		}
-		if connectionKey := strings.TrimSpace(mapping.ConnectionKey); connectionKey != "" {
-			var eventPayload map[string]any
-			_ = json.Unmarshal(event.Payload, &eventPayload)
-			actual, _ := integrationPayloadPath(eventPayload, "_integration_context.connection_key")
-			if strings.TrimSpace(fmt.Sprint(actual)) != connectionKey {
-				continue
-			}
 		}
 		{
 			return mapping, true, nil
@@ -405,7 +402,7 @@ func (s *OperationsStore) updateEventStatus(ctx context.Context, event integrati
 	if err != nil {
 		return event, err
 	}
-	statement, args, err := builder.Where(where).Build()
+	statement, args, err := builder.Where(query.And(subjectRowWriteAllowed("_integration_events"), where)).Build()
 	if err != nil {
 		return event, err
 	}
@@ -449,7 +446,7 @@ func (s *OperationsStore) persistExecutionReceipt(ctx context.Context, event int
 	if err != nil {
 		return err
 	}
-	statement, values, err := query.NewUpdateBuilder(s.dialect, "_integration_event_mapping_intents").Set("mapping_key", mapping.Key).Set("target_type", mapping.TargetType).Set("status", receipt.Status).Set("payload_json", string(payload)).Set("updated_at", now).Where(query.Equal("id", current)).Build()
+	statement, values, err := query.NewUpdateBuilder(s.dialect, "_integration_event_mapping_intents").Set("mapping_key", mapping.Key).Set("target_type", mapping.TargetType).Set("status", receipt.Status).Set("payload_json", string(payload)).Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_event_mapping_intents"), query.Equal("id", current))).Build()
 	if err != nil {
 		return err
 	}
@@ -505,10 +502,7 @@ func integrationWebhookEventPayload(raw json.RawMessage, connectorKey, connectio
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("Integration webhook event payload must be a JSON object: %w", err)
 	}
-	contextValue, _ := payload["_integration_context"].(map[string]any)
-	if contextValue == nil {
-		contextValue = map[string]any{}
-	}
+	contextValue := map[string]any{}
 	contextValue["connector_key"], contextValue["connection_key"] = strings.TrimSpace(connectorKey), strings.TrimSpace(connectionKey)
 	payload["_integration_context"] = contextValue
 	encoded, err := json.Marshal(payload)

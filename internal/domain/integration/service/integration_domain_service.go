@@ -77,6 +77,9 @@ func (s *Service) Call(ctx context.Context, value integrationmodel.ProviderCallR
 	if s.operations == nil {
 		return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration Operations port is unavailable")
 	}
+	if err := value.Source.Validate(); err != nil {
+		return integrationmodel.ProviderCallResult{}, err
+	}
 	if strings.TrimSpace(value.RequestID) == "" || strings.TrimSpace(value.WorkspaceID) == "" || strings.TrimSpace(value.ConnectorKey) == "" || strings.TrimSpace(value.Operation) == "" || !json.Valid(value.Payload) {
 		return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration provider call is invalid")
 	}

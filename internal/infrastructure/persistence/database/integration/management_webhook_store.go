@@ -136,7 +136,7 @@ func (s *ManagementStore) UpsertWebhookSubscription(ctx context.Context, workspa
 			return integrationsdk.WebhookSubscription{}, fmt.Errorf("insert Integration webhook subscription: %w", err)
 		}
 	} else {
-		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_webhook_subscriptions").Set("name", input.Name).Set("connector_key", input.ConnectorKey).Set("connection_key", input.ConnectionKey).Set("event_types_json", eventTypesJSON).Set("status", input.Status).Set("description", input.Description).Set("disabled_at", "").Set("updated_at", now).Where(where).Build()
+		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_webhook_subscriptions").Set("name", input.Name).Set("connector_key", input.ConnectorKey).Set("connection_key", input.ConnectionKey).Set("event_types_json", eventTypesJSON).Set("status", input.Status).Set("description", input.Description).Set("disabled_at", "").Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_webhook_subscriptions"), where)).Build()
 		if buildErr != nil {
 			return integrationsdk.WebhookSubscription{}, buildErr
 		}
@@ -198,7 +198,7 @@ func (s *ManagementStore) DisableWebhookSubscription(ctx context.Context, worksp
 	if err != nil {
 		return integrationsdk.WebhookSubscription{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_webhook_subscriptions").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(where).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_webhook_subscriptions").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_webhook_subscriptions"), where)).Build()
 	if err != nil {
 		return integrationsdk.WebhookSubscription{}, err
 	}

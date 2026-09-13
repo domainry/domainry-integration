@@ -53,6 +53,7 @@ func NewHandler(binding integrationsdk.Binding, serviceToken string) (http.Handl
 		h.accountWrites = port.ConnectionAccountWrites()
 	}
 	h.registerAccountWrites()
+	h.registerSubjectLifecycle()
 	h.registerOAuth()
 	capability, err := modulecapability.NewHTTPHandler(binding, func(*http.Request) error { return nil })
 	if err != nil {

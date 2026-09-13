@@ -109,7 +109,7 @@ func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requireme
 		update, updateArgs, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_connections").
 			Set("connector_key", requirement.ConnectorKey).Set("provider_key", requirement.ProviderKey).
 			Set("name", requirement.Name).Set("status", requirement.Status).Set("config_json", string(payload)).Set("updated_at", now).
-			Where(query.Equal("id", id)).Build()
+			Where(query.And(subjectRowWriteAllowed("_integration_connections"), query.Equal("id", id))).Build()
 		if buildErr != nil {
 			return fmt.Errorf("build Integration connection requirement update: %w", buildErr)
 		}

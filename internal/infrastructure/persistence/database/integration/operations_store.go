@@ -31,6 +31,16 @@ func NewOperationsStore(database modulehost.Database, dialect modulehost.Dialect
 }
 
 func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.ProviderCallRequest) (integrationmodel.ProviderCallResult, error) {
+	if request.Source.RecordID != "" {
+		if err := guardSubjectWrite(ctx, s.database, s.dialect, request.WorkspaceID, subjectFenceReference{"resource", request.Source.ObjectKey, request.Source.RecordID}); err != nil {
+			return integrationmodel.ProviderCallResult{}, err
+		}
+	}
+	if request.ActorID != "" {
+		if err := guardSubjectWrite(ctx, s.database, s.dialect, request.WorkspaceID, subjectFenceReference{"subject", "", request.ActorID}); err != nil {
+			return integrationmodel.ProviderCallResult{}, err
+		}
+	}
 	invocationID := operationInvocationID(request.WorkspaceID, request.RequestID)
 	if current, err := s.GetInvocation(ctx, request.WorkspaceID, invocationID); err == nil && current.Status == "succeeded" {
 		if request.PersistenceMode == integrationmodel.ProviderCallPersistenceSensitive {
@@ -89,9 +99,12 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 	} else {
 		metadataValue["request"] = json.RawMessage(request.Payload)
 		metadataValue["response"] = json.RawMessage(result.Payload)
+		metadataValue["kind"] = "operation-v1"
+		metadataValue["actor_id"] = request.ActorID
+		metadataValue["source"] = request.Source
 	}
 	metadata, _ := json.Marshal(metadataValue)
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_invocations"), query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID)))).Build()
 	if err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
@@ -110,7 +123,7 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 
 func (s *OperationsStore) prepareProviderInvocation(ctx context.Context, invocationID string, deliveryRequest integrationmodel.DeliveryRequest, connection deliveryConnection, request integrationmodel.ProviderCallRequest) error {
 	if request.PersistenceMode != integrationmodel.ProviderCallPersistenceSensitive {
-		return s.delivery.prepareInvocation(ctx, invocationID, deliveryRequest, connection)
+		return s.delivery.prepareInvocationWithMetadata(ctx, invocationID, deliveryRequest, connection, map[string]any{"kind": "operation-v1", "actor_id": request.ActorID, "source": request.Source, "message_id": request.RequestID, "payload": json.RawMessage(request.Payload)})
 	}
 	// Claim before external I/O using an insert-only identity. Failed, in-flight
 	// or crash-interrupted sensitive requests cannot be reset to running: a
@@ -125,6 +138,9 @@ func (s *OperationsStore) prepareProviderInvocation(ctx context.Context, invocat
 
 func sensitiveInvocationMetadata(request integrationmodel.ProviderCallRequest) map[string]any {
 	return map[string]any{
+		"kind":                "operation-v1",
+		"actor_id":            request.ActorID,
+		"source":              request.Source,
 		"message_id":          request.RequestID,
 		"payload_persistence": integrationmodel.ProviderCallPersistenceSensitive,
 		"masked_destination":  strings.TrimSpace(request.MaskedDestination),

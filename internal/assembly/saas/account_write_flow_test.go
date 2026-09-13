@@ -133,6 +133,19 @@ func TestAccountWriteOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 				if _, err := port().WriteConnectionAccount(t.Context(), subject, key, conflict); err == nil || up.calls.Load() != before {
 					t.Fatal("changed request reused identity")
 				}
+				if _, err := port().ReadConnectionAccountWriteReceipt(t.Context(), subject, key, conflict); err == nil || up.calls.Load() != before {
+					t.Fatal("read receipt accepted changed original payload or performed vendor IO")
+				}
+				missing := send
+				missing.RequestID = "never-executed-read-only"
+				if result, err := port().ReadConnectionAccountWriteReceipt(t.Context(), subject, key, missing); err != nil || result.Status != sdk.AccountWriteNotFound || up.calls.Load() != before {
+					t.Fatal("read receipt created an operation", result, err)
+				}
+				other := subject
+				other.UserID = "other-receipt-reader"
+				if result, err := port().ReadConnectionAccountWriteReceipt(t.Context(), other, key, send); err == nil && result.Status == sdk.AccountWriteSucceeded || up.calls.Load() != before {
+					t.Fatal("read receipt crossed original actor boundary", result, err)
+				}
 				up.conflict.Store(true)
 				cas := request("update-conflict", calendarwrite.UpdateOperationKey, calendarwrite.UpdateRequest{CalendarID: "team", EventID: event.EventID, ExpectedVersion: changed.Version, Scope: calendarwrite.ScopeEvent, Notifications: calendarwrite.NotifyAttendees, Changes: calendarwrite.Patch{Location: &clear}})
 				write(cas, sdk.AccountWriteFailed)

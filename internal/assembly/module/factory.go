@@ -87,6 +87,7 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	}
 	binding.SetConnectionAccountReads(integrationapplication.NewAccountReadService(management, domain))
 	binding.SetConnectionAccountWrites(integrationapplication.NewAccountWriteService(management, accountwrite.Codec{}, operations, operations))
+	binding.SetSubjectLifecycle(integrationsdkadapter.NewSubjectLifecycleBinding(integrationapplication.NewSubjectLifecycleService(integrationpersistence.NewSubjectLifecycleStore(host.Database(), host.Dialect()))))
 	if mode == integrationsdk.DeploymentModeModule {
 		adapter, err := modulehttp.NewAdapter(binding)
 		if err != nil {

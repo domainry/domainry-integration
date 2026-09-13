@@ -139,7 +139,7 @@ func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspa
 	updatedAt := now.Format(time.RFC3339Nano)
 	for _, item := range current {
 		where := query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey), query.Equal("status", "active"), query.Equal("value_ref", "material:"+item.secretKey), query.Equal("fingerprint", item.fingerprint), query.Equal("updated_at", item.updatedAt))
-		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("fingerprint", item.preparedProviderSecretUpdate.fingerprint).Set("rotated_at", updatedAt).Set("updated_at", updatedAt).Where(where).Build()
+		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("fingerprint", item.preparedProviderSecretUpdate.fingerprint).Set("rotated_at", updatedAt).Set("updated_at", updatedAt).Where(query.And(subjectRowWriteAllowed("_integration_secrets"), where)).Build()
 		if err != nil {
 			return err
 		}
@@ -150,7 +150,7 @@ func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspa
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			return fmt.Errorf("%w: %s", errProviderSecretChanged, item.fieldKey)
 		}
-		statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", item.ciphertext).Set("updated_at", updatedAt).Where(query.And(query.Equal("id", item.materialID), query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey))).Build()
+		statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", item.ciphertext).Set("updated_at", updatedAt).Where(query.And(subjectRowWriteAllowed("_integration_secret_materials"), query.And(query.Equal("id", item.materialID), query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey)))).Build()
 		if err != nil {
 			return err
 		}

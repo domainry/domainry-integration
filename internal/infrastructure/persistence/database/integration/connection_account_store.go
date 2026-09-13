@@ -207,6 +207,9 @@ func (s *ManagementStore) TestConnectionAccount(ctx context.Context, subject int
 }
 
 func (s *ManagementStore) RegisterConnectionAccount(ctx context.Context, workspaceID, key, actorID string, input integrationsdk.ConnectionAccountRegistration) (integrationsdk.ConnectionAccount, error) {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, workspaceID, subjectFenceReference{"subject", "", input.OwnerUserID}, subjectFenceReference{"connection", "", key}); err != nil {
+		return integrationsdk.ConnectionAccount{}, err
+	}
 	workspaceID, key, actorID = strings.TrimSpace(workspaceID), strings.TrimSpace(key), strings.TrimSpace(actorID)
 	if err := requireAllDataScope(ctx, workspaceID); err != nil {
 		return integrationsdk.ConnectionAccount{}, err
@@ -376,7 +379,7 @@ func (s *ManagementStore) RevokeConnectionAccount(ctx context.Context, subject i
 	}
 	now := ownerNow()
 	connectionWhere := query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("connection_key", account.Key), query.Equal("updated_at", expectedUpdatedAt))
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", "revoked").Set("updated_at", now).Where(connectionWhere).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", "revoked").Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_connections"), connectionWhere)).Build()
 	if err != nil {
 		return integrationsdk.ConnectionAccount{}, err
 	}
@@ -413,7 +416,7 @@ func (s *ManagementStore) RevokeConnectionAccount(ctx context.Context, subject i
 	}
 	for _, secret := range secrets {
 		secretWhere := query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("secret_key", secret), query.Equal("status", "active"))
-		update, values, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("status", "revoked").Set("revoked_at", now).Set("updated_at", now).Where(secretWhere).Build()
+		update, values, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("status", "revoked").Set("revoked_at", now).Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_secrets"), secretWhere)).Build()
 		if buildErr != nil {
 			return integrationsdk.ConnectionAccount{}, buildErr
 		}
