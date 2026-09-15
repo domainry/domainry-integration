@@ -2,7 +2,9 @@ package integration
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+
 	connector "github.com/domainry/domainry-connector-sdk"
 	model "github.com/domainry/domainry-integration/internal/domain/integration/model"
 	service "github.com/domainry/domainry-integration/internal/domain/integration/service"
@@ -66,9 +68,14 @@ func (s *OperationsStore) accountWriteScopesGranted(ctx context.Context, source 
 		return false
 	}
 	var raw string
-	if err = s.database.QueryRowContext(ctx, statement, args...).Scan(&raw); err != nil {
+	err = s.database.QueryRowContext(ctx, statement, args...).Scan(&raw)
+	if err != nil && err != sql.ErrNoRows {
 		return false
 	}
 	var grants []string
-	return json.Unmarshal([]byte(raw), &grants) == nil && service.OAuthScopeState(grants, len(grants) > 0, alternatives) == "ready"
+	known := err == nil
+	if known && json.Unmarshal([]byte(raw), &grants) != nil {
+		return false
+	}
+	return service.OAuthScopeState(grants, known, alternatives) == "ready"
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
@@ -102,6 +103,9 @@ func (b *Binding) SetHTTPAdapters(adapters []modulehttp.Adapter) {
 }
 func (b *Binding) HTTPAdapters() []modulehttp.Adapter {
 	return append([]modulehttp.Adapter(nil), b.adapters...)
+}
+func (*Binding) AuthorizationActions() ([]actioncontract.ActionDefinition, error) {
+	return integrationsdk.IntegrationAuthorizationActions()
 }
 
 type catalogBinding struct{ *Binding }

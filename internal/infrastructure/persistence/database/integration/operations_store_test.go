@@ -157,6 +157,68 @@ func TestOperationsStoreOwnsCallWebhookMappingAndRuntimeReceipt(t *testing.T) {
 	if trigger.request.Target.ObjectKey != "contact" || trigger.request.Target.RecordID != "contact-1" || trigger.request.Target.ActionKey != "sync" || trigger.request.Target.Input["name"] != "Ada" || trigger.request.Target.Input["source"] != "webhook" {
 		t.Fatalf("trigger request=%#v", trigger.request)
 	}
+	if trigger.request.MappingRevision == "" || trigger.request.Source.Provider != "probe" || trigger.request.Source.EventType != "contact.changed" || trigger.request.Source.ExternalID != "external-event-1" || trigger.request.Source.ReceivedAt != webhook.ReceivedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("trigger provenance=%#v", trigger.request)
+	}
+}
+
+func TestOperationsStoreMapsVerifiedEventToFiniteAgentTargetAndCurrentIdentity(t *testing.T) {
+	database, err := sql.Open("sqlite", "file:integration-agent-event?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	rawDialect, _ := ormdialect.New(ormdialect.SQLite)
+	dialect := rawDialect.WithSchema("")
+	migrations, err := SchemaMigrations("sqlite", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations {
+		for _, statement := range migration.Statements {
+			if _, err = database.ExecContext(t.Context(), statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").
+		Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
+		Values("connection-agent", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.ExecContext(t.Context(), insert, args...); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.ExecContext(t.Context(), `INSERT INTO _integration_external_identities (id,identity_key,workspace_id,provider,external_subject,external_subject_type,external_name,external_organization,external_department,external_group,external_bot_id,actor_id,role_key,status,last_resolved_at,created_by,created_at,updated_at,disabled_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"identity-agent", "contact-1", "workspace-a", "probe", "contact-1", "user", "Ada", "", "", "", "", "user-7", "support", "active", "", "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", ""); err != nil {
+		t.Fatal(err)
+	}
+	provider := &operationsTestProvider{}
+	providers := deliveryTestProviders{provider: provider}
+	delivery := NewDeliveryStore(database, dialect, providers, deliveryTestSecrets{})
+	trigger := &operationsTriggerProbe{}
+	store := NewOperationsStore(database, dialect, delivery, trigger)
+	requirements := NewRequirementsStore(database, dialect, providers)
+	if err = requirements.SynchronizeEventMappings(t.Context(), []integrationmodel.EventMappingRequirement{{
+		Key: "contact-agent", WorkspaceID: "workspace-a", Provider: "probe", ConnectionKey: "primary", EventType: "contact.changed", TargetType: "agent_task",
+		AgentID: "support-agent", ConversationID: "conversation-support", AgentTaskMode: "start", AgentInput: map[string]string{"customer_name": "contact.name"},
+		EventFields:      []integrationmodel.EventFieldRequirement{{Path: "contact.id", Type: "text", Required: true}, {Path: "contact.name", Type: "text"}},
+		ExternalIdentity: integrationmodel.ExternalIdentityMappingRequirement{Provider: "probe", SubjectPath: "contact.id", OnUnmapped: "error"},
+		Payload:          map[string]any{"goal": "Review changed contact", "allowed_tools": []any{}}, Enabled: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	webhook := integrationmodel.WebhookRequest{WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "primary", Body: []byte(`{}`), ReceivedAt: time.Date(2026, 9, 16, 9, 30, 0, 0, time.UTC)}
+	receipt, err := store.AcceptWebhook(t.Context(), webhook)
+	if err != nil || receipt.Event.Status != "processed" || trigger.calls != 1 {
+		t.Fatalf("receipt=%+v trigger=%+v err=%v", receipt, trigger, err)
+	}
+	request := trigger.request
+	if request.Target.Type != "agent_task" || request.Target.AgentID != "support-agent" || request.Target.ConversationID != "conversation-support" || request.Target.AgentTaskMode != "start" || request.Target.RelatedTaskID != "" ||
+		request.Target.Input["goal"] != "Review changed contact" || request.Target.Input["customer_name"] != "Ada" || request.Principal.ActorID != "user-7" || request.Principal.RoleKey != "support" || len(request.MappingRevision) != 64 || request.Source.ReceivedAt != webhook.ReceivedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("Agent trigger request=%#v", request)
+	}
 }
 
 func TestOperationsStoreSensitiveCallNeverPersistsPlaintext(t *testing.T) {

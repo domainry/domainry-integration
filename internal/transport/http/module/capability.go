@@ -276,23 +276,29 @@ type integrationConnectionAuthoringFragment struct {
 }
 
 type integrationEventMappingAuthoringFragment struct {
-	Key              string                                            `json:"key"`
-	Provider         string                                            `json:"provider"`
-	EventType        string                                            `json:"event_type,omitempty"`
-	CommandPrefix    string                                            `json:"command_prefix,omitempty"`
-	TargetType       string                                            `json:"target_type"`
-	WorkflowKey      string                                            `json:"workflow_key,omitempty"`
-	ObjectKey        string                                            `json:"object_key,omitempty"`
-	ObjectKeyPath    string                                            `json:"object_key_path,omitempty"`
-	RecordID         string                                            `json:"record_id,omitempty"`
-	RecordIDPath     string                                            `json:"record_id_path,omitempty"`
-	ActionKey        string                                            `json:"action_key,omitempty"`
-	ActionKeyPath    string                                            `json:"action_key_path,omitempty"`
-	ActionInput      map[string]string                                 `json:"action_input,omitempty"`
-	WorkflowInput    map[string]string                                 `json:"workflow_input,omitempty"`
-	EventFields      []integrationsdk.EventFieldRequirement            `json:"event_fields,omitempty"`
-	ExternalIdentity integrationsdk.ExternalIdentityMappingRequirement `json:"external_identity"`
-	Payload          map[string]any                                    `json:"payload,omitempty"`
+	Key               string                                            `json:"key"`
+	Provider          string                                            `json:"provider"`
+	EventType         string                                            `json:"event_type,omitempty"`
+	CommandPrefix     string                                            `json:"command_prefix,omitempty"`
+	TargetType        string                                            `json:"target_type"`
+	WorkflowKey       string                                            `json:"workflow_key,omitempty"`
+	ObjectKey         string                                            `json:"object_key,omitempty"`
+	ObjectKeyPath     string                                            `json:"object_key_path,omitempty"`
+	RecordID          string                                            `json:"record_id,omitempty"`
+	RecordIDPath      string                                            `json:"record_id_path,omitempty"`
+	ActionKey         string                                            `json:"action_key,omitempty"`
+	ActionKeyPath     string                                            `json:"action_key_path,omitempty"`
+	ActionInput       map[string]string                                 `json:"action_input,omitempty"`
+	WorkflowInput     map[string]string                                 `json:"workflow_input,omitempty"`
+	AgentID           string                                            `json:"agent_id,omitempty"`
+	ConversationID    string                                            `json:"conversation_id,omitempty"`
+	AgentTaskMode     string                                            `json:"agent_task_mode,omitempty"`
+	RelatedTaskID     string                                            `json:"related_task_id,omitempty"`
+	RelatedTaskIDPath string                                            `json:"related_task_id_path,omitempty"`
+	AgentInput        map[string]string                                 `json:"agent_input,omitempty"`
+	EventFields       []integrationsdk.EventFieldRequirement            `json:"event_fields,omitempty"`
+	ExternalIdentity  integrationsdk.ExternalIdentityMappingRequirement `json:"external_identity"`
+	Payload           map[string]any                                    `json:"payload,omitempty"`
 }
 
 func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest, definitions []connectorscatalog.ConnectorSchema) (modulecapability.ValidationResult, error) {
@@ -350,7 +356,9 @@ func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.V
 			TargetType: source.TargetType, WorkflowKey: source.WorkflowKey, ObjectKey: source.ObjectKey,
 			ObjectKeyPath: source.ObjectKeyPath, RecordID: source.RecordID, RecordIDPath: source.RecordIDPath,
 			ActionKey: source.ActionKey, ActionKeyPath: source.ActionKeyPath, ActionInput: source.ActionInput,
-			WorkflowInput: source.WorkflowInput, EventFields: source.EventFields, ExternalIdentity: source.ExternalIdentity,
+			WorkflowInput: source.WorkflowInput, AgentID: source.AgentID, ConversationID: source.ConversationID,
+			AgentTaskMode: source.AgentTaskMode, RelatedTaskID: source.RelatedTaskID, RelatedTaskIDPath: source.RelatedTaskIDPath,
+			AgentInput: source.AgentInput, EventFields: source.EventFields, ExternalIdentity: source.ExternalIdentity,
 			Payload: source.Payload, Enabled: true,
 		}
 		if err := value.Validate(); err != nil {

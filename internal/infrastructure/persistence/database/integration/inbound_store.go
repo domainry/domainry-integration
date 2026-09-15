@@ -256,6 +256,8 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 	inputPaths := mapping.ActionInput
 	if mapping.TargetType == "workflow" {
 		inputPaths = mapping.WorkflowInput
+	} else if mapping.TargetType == "agent_task" {
+		inputPaths = mapping.AgentInput
 	}
 	input := map[string]any{}
 	for key, path := range inputPaths {
@@ -287,6 +289,12 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 	if actionKey == "" && strings.TrimSpace(mapping.ActionKeyPath) != "" {
 		if value, ok := integrationPayloadPath(payload, mapping.ActionKeyPath); ok {
 			actionKey = strings.TrimSpace(fmt.Sprint(value))
+		}
+	}
+	relatedTaskID := strings.TrimSpace(mapping.RelatedTaskID)
+	if relatedTaskID == "" && strings.TrimSpace(mapping.RelatedTaskIDPath) != "" {
+		if value, ok := integrationPayloadPath(payload, mapping.RelatedTaskIDPath); ok {
+			relatedTaskID = strings.TrimSpace(fmt.Sprint(value))
 		}
 	}
 	principal := integrationsdk.TriggerPrincipal{}
@@ -321,8 +329,12 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 		return event, err
 	}
 	receipt, triggerErr := s.triggers.Trigger(ctx, integrationsdk.TriggerRequest{
-		EventID: event.ID, WorkspaceID: event.WorkspaceID, MappingKey: mapping.Key, IdempotencyKey: event.ID + ":" + mapping.Key,
-		Target: integrationsdk.TriggerTarget{Type: mapping.TargetType, WorkflowKey: mapping.WorkflowKey, ObjectKey: objectKey, RecordID: recordID, ActionKey: actionKey, Input: input}, Principal: principal,
+		EventID: event.ID, WorkspaceID: event.WorkspaceID, MappingKey: mapping.Key, MappingRevision: integrationEventMappingRevision(mapping), IdempotencyKey: event.ID + ":" + mapping.Key,
+		Source: integrationsdk.TriggerSource{Provider: event.Provider, EventType: event.EventType, ExternalID: event.ExternalID, ReceivedAt: event.ReceivedAt},
+		Target: integrationsdk.TriggerTarget{
+			Type: mapping.TargetType, WorkflowKey: mapping.WorkflowKey, ObjectKey: objectKey, RecordID: recordID, ActionKey: actionKey,
+			AgentID: mapping.AgentID, ConversationID: mapping.ConversationID, AgentTaskMode: mapping.AgentTaskMode, RelatedTaskID: relatedTaskID, Input: input,
+		}, Principal: principal,
 	})
 	if triggerErr != nil {
 		if strings.TrimSpace(receipt.EventID) == "" {
@@ -354,6 +366,12 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 		event.Execution = &integrationmodel.RuntimeExecutionReceipt{EventID: receipt.EventID, MappingKey: receipt.MappingKey, ExecutionID: receipt.ExecutionID, TargetType: receipt.TargetType, Status: receipt.Status, ErrorCode: receipt.ErrorCode, CompletedAt: receipt.CompletedAt}
 	}
 	return event, err
+}
+
+func integrationEventMappingRevision(mapping integrationmodel.EventMappingRequirement) string {
+	raw, _ := json.Marshal(mapping)
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:])
 }
 
 func (s *OperationsStore) eventMapping(ctx context.Context, event integrationmodel.Event) (integrationmodel.EventMappingRequirement, bool, error) {

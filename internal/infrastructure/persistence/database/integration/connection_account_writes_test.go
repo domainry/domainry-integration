@@ -181,6 +181,19 @@ func TestAccountWriteAuthorityRejectsBeforeProviderIO(t *testing.T) {
 	}
 }
 
+func TestAccountWriteExplicitScopeFreeOperationDoesNotRequireGrantRow(t *testing.T) {
+	store, ops, _, _, _, request := accountWriteFixture(t)
+	if _, err := store.database.ExecContext(t.Context(), "DELETE FROM _integration_connection_grants WHERE workspace_id=? AND connection_key=?", request.ExpectedSource.WorkspaceID, request.ExpectedSource.ConnectionKey); err != nil {
+		t.Fatal(err)
+	}
+	if !ops.accountWriteScopesGranted(t.Context(), request.ExpectedSource, [][]string{{}}) {
+		t.Fatal("explicit scope-free operation was rejected without a grant row")
+	}
+	if ops.accountWriteScopesGranted(t.Context(), request.ExpectedSource, [][]string{{"mail.send"}}) {
+		t.Fatal("scoped operation was accepted without a grant row")
+	}
+}
+
 func TestAccountWriteConcurrentClaimCannotSendTwice(t *testing.T) {
 	_, _, p, service, subject, request := accountWriteFixture(t)
 	entered, release := make(chan struct{}), make(chan struct{})

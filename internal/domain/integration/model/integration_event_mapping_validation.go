@@ -29,6 +29,25 @@ func (r EventMappingRequirement) Validate() error {
 		if strings.TrimSpace(r.WorkflowKey) == "" {
 			return fmt.Errorf("Integration workflow event mapping requires workflow_key")
 		}
+	case "agent_task":
+		if strings.TrimSpace(r.AgentID) == "" || strings.TrimSpace(r.ConversationID) == "" {
+			return fmt.Errorf("Integration Agent event mapping requires agent_id and conversation_id")
+		}
+		if strings.TrimSpace(r.ExternalIdentity.SubjectPath) == "" {
+			return fmt.Errorf("Integration Agent event mapping requires external_identity.subject_path")
+		}
+		switch strings.TrimSpace(r.AgentTaskMode) {
+		case "start":
+			if strings.TrimSpace(r.RelatedTaskID) != "" || strings.TrimSpace(r.RelatedTaskIDPath) != "" {
+				return fmt.Errorf("Integration Agent start event mapping cannot declare related_task_id")
+			}
+		case "wake":
+			if strings.TrimSpace(r.RelatedTaskID) == "" && strings.TrimSpace(r.RelatedTaskIDPath) == "" {
+				return fmt.Errorf("Integration Agent wake event mapping requires related_task_id or related_task_id_path")
+			}
+		default:
+			return fmt.Errorf("Integration Agent event mapping agent_task_mode must be start or wake")
+		}
 	default:
 		return fmt.Errorf("Integration event mapping target_type %q is unsupported", r.TargetType)
 	}
@@ -67,8 +86,14 @@ func (r EventMappingRequirement) Validate() error {
 			return err
 		}
 	}
+	for key, path := range r.AgentInput {
+		if err := requireDeclared("agent_input."+key, path); err != nil {
+			return err
+		}
+	}
 	for name, path := range map[string]string{
 		"record_id_path":                 r.RecordIDPath,
+		"related_task_id_path":           r.RelatedTaskIDPath,
 		"external_identity.subject_path": r.ExternalIdentity.SubjectPath,
 		"external_identity.name_path":    r.ExternalIdentity.NamePath,
 	} {

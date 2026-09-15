@@ -219,3 +219,17 @@ func accountPrincipal(workspace, user string, sharedRead bool) identitysdk.Princ
 	}
 	return identitysdk.Principal{Known: true, WorkspaceID: workspace, UserID: user, AccessBundle: bundle}
 }
+
+func TestConnectionAccountSubjectForPrincipalPreservesCanonicalScope(t *testing.T) {
+	owner, err := module.ConnectionAccountSubjectForPrincipal(accountPrincipal("workspace-a", "user-a", false), integrationsdk.ActionIntegrationConnectionAccountsList)
+	if err != nil || owner.WorkspaceID != "workspace-a" || owner.UserID != "user-a" || !owner.Access.Personal || owner.Access.Workspace {
+		t.Fatalf("owner subject=%#v err=%v", owner, err)
+	}
+	shared, err := module.ConnectionAccountSubjectForPrincipal(accountPrincipal("workspace-a", "user-a", true), integrationsdk.ActionIntegrationConnectionAccountsList)
+	if err != nil || !shared.Access.Personal || !shared.Access.Workspace {
+		t.Fatalf("shared subject=%#v err=%v", shared, err)
+	}
+	if _, err := module.ConnectionAccountSubjectForPrincipal(accountPrincipal("workspace-a", "user-a", false), integrationsdk.ActionIntegrationConnectionAccountsWrite); err == nil {
+		t.Fatal("ungranted account action produced a subject")
+	}
+}

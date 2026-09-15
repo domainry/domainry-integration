@@ -142,26 +142,32 @@ type RuntimeExecutionReceipt struct {
 }
 
 type EventMappingRequirement struct {
-	Key              string                             `json:"key"`
-	WorkspaceID      string                             `json:"workspace_id"`
-	Provider         string                             `json:"provider"`
-	ConnectionKey    string                             `json:"connection_key,omitempty"`
-	EventType        string                             `json:"event_type,omitempty"`
-	CommandPrefix    string                             `json:"command_prefix,omitempty"`
-	TargetType       string                             `json:"target_type"`
-	WorkflowKey      string                             `json:"workflow_key,omitempty"`
-	ObjectKey        string                             `json:"object_key,omitempty"`
-	ObjectKeyPath    string                             `json:"object_key_path,omitempty"`
-	RecordID         string                             `json:"record_id,omitempty"`
-	RecordIDPath     string                             `json:"record_id_path,omitempty"`
-	ActionKey        string                             `json:"action_key,omitempty"`
-	ActionKeyPath    string                             `json:"action_key_path,omitempty"`
-	ActionInput      map[string]string                  `json:"action_input,omitempty"`
-	WorkflowInput    map[string]string                  `json:"workflow_input,omitempty"`
-	EventFields      []EventFieldRequirement            `json:"event_fields,omitempty"`
-	ExternalIdentity ExternalIdentityMappingRequirement `json:"external_identity,omitempty"`
-	Payload          map[string]any                     `json:"payload,omitempty"`
-	Enabled          bool                               `json:"enabled"`
+	Key               string                             `json:"key"`
+	WorkspaceID       string                             `json:"workspace_id"`
+	Provider          string                             `json:"provider"`
+	ConnectionKey     string                             `json:"connection_key,omitempty"`
+	EventType         string                             `json:"event_type,omitempty"`
+	CommandPrefix     string                             `json:"command_prefix,omitempty"`
+	TargetType        string                             `json:"target_type"`
+	WorkflowKey       string                             `json:"workflow_key,omitempty"`
+	ObjectKey         string                             `json:"object_key,omitempty"`
+	ObjectKeyPath     string                             `json:"object_key_path,omitempty"`
+	RecordID          string                             `json:"record_id,omitempty"`
+	RecordIDPath      string                             `json:"record_id_path,omitempty"`
+	ActionKey         string                             `json:"action_key,omitempty"`
+	ActionKeyPath     string                             `json:"action_key_path,omitempty"`
+	ActionInput       map[string]string                  `json:"action_input,omitempty"`
+	WorkflowInput     map[string]string                  `json:"workflow_input,omitempty"`
+	AgentID           string                             `json:"agent_id,omitempty"`
+	ConversationID    string                             `json:"conversation_id,omitempty"`
+	AgentTaskMode     string                             `json:"agent_task_mode,omitempty"`
+	RelatedTaskID     string                             `json:"related_task_id,omitempty"`
+	RelatedTaskIDPath string                             `json:"related_task_id_path,omitempty"`
+	AgentInput        map[string]string                  `json:"agent_input,omitempty"`
+	EventFields       []EventFieldRequirement            `json:"event_fields,omitempty"`
+	ExternalIdentity  ExternalIdentityMappingRequirement `json:"external_identity,omitempty"`
+	Payload           map[string]any                     `json:"payload,omitempty"`
+	Enabled           bool                               `json:"enabled"`
 }
 
 type EventFieldRequirement struct {
