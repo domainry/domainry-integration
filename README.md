@@ -1,5 +1,15 @@
 # Domainry Integration
 
+Agent-facing question index and source-owned guides: [`capability/agent/index.json`](capability/agent/index.json).
+
+The Agent index deliberately exposes Connector catalog selection and custom
+Provider extension because those are product decisions. It does not expose
+Connection or Secret persistence, encryption, credential injection, retry
+workers, or operational status handling as project-authored behavior.
+Deck derives its lightweight per-Connector purpose index from Integration's
+locked capability projections, while executable availability comes only from
+the official Provider release catalog rather than planned Provider definitions.
+
 `domainry-connectors` owns Connector definitions, the official Provider release
 catalog, Provider schemas, and Provider implementations. `domainry-integration`
 consumes that source-owned catalog and materializes a query projection; it does

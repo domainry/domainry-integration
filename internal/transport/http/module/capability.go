@@ -21,9 +21,16 @@ const (
 	integrationSubscriptionsCategory = integrationsdk.CapabilityIntegrationSubscriptions
 )
 
-func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, validator modulecapability.Validator) (*modulecapability.StaticBinding, error) {
+func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, releasedProviders []connectorscatalog.ProviderEntry, validator modulecapability.Validator) (*modulecapability.StaticBinding, error) {
 	definitions = append([]connectorscatalog.ConnectorSchema(nil), definitions...)
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Key < definitions[j].Key })
+	releasedProviders = append([]connectorscatalog.ProviderEntry(nil), releasedProviders...)
+	sort.Slice(releasedProviders, func(i, j int) bool {
+		if releasedProviders[i].ConnectorKey == releasedProviders[j].ConnectorKey {
+			return releasedProviders[i].ProviderKey < releasedProviders[j].ProviderKey
+		}
+		return releasedProviders[i].ConnectorKey < releasedProviders[j].ConnectorKey
+	})
 	operations := integrationsdk.IntegrationHTTPAdapterContract().OpenAPI
 	routes, err := integrationRoutes()
 	if err != nil {
@@ -71,7 +78,7 @@ func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, valid
 		}
 		documents = append(documents, document)
 	}
-	connectorProjections, err := integrationConnectorProjections(definitions)
+	connectorProjections, err := integrationConnectorProjections(definitions, releasedProviders)
 	if err != nil {
 		return nil, err
 	}
@@ -88,13 +95,11 @@ func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, valid
 		})
 	}
 	provided := []string{"integration.api_keys", "integration.connections", "integration.delivery", "integration.events", "integration.external_identities", "integration.invocations", "integration.secrets", "integration.web_push", "integration.webhook_subscriptions"}
-	for _, definition := range definitions {
-		provided = append(provided, "connector_definition."+definition.Key)
-		for _, provider := range definition.Providers {
-			provided = append(provided, "connector."+definition.Key+"."+provider.Key)
-			for _, operation := range provider.OperationKeys {
-				provided = append(provided, "connector."+definition.Key+"."+provider.Key+"."+operation)
-			}
+	for _, provider := range releasedProviders {
+		provided = append(provided, "connector_definition."+provider.ConnectorKey)
+		provided = append(provided, "connector."+provider.ConnectorKey+"."+provider.ProviderKey)
+		for _, operation := range provider.Operations {
+			provided = append(provided, "connector."+provider.ConnectorKey+"."+provider.ProviderKey+"."+operation.Key)
 		}
 	}
 	provided = uniqueIntegrationStrings(provided)
@@ -121,10 +126,14 @@ func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, valid
 	return modulecapability.NewStaticBinding(summary, documents, validator)
 }
 
-func integrationConnectorProjections(definitions []connectorscatalog.ConnectorSchema) ([]modulecapability.SourceProjection, error) {
+func integrationConnectorProjections(definitions []connectorscatalog.ConnectorSchema, releasedProviders []connectorscatalog.ProviderEntry) ([]modulecapability.SourceProjection, error) {
 	result := make([]modulecapability.SourceProjection, 0, len(definitions))
 	for _, definition := range definitions {
-		payload, err := modulecapability.CanonicalJSON(trimConnectorProjection(definition))
+		projection, err := trimConnectorProjection(definition, releasedProviders)
+		if err != nil {
+			return nil, err
+		}
+		payload, err := modulecapability.CanonicalJSON(projection)
 		if err != nil {
 			return nil, err
 		}
@@ -140,6 +149,7 @@ type connectorProjection struct {
 	Key                   string                `json:"key"`
 	Name                  string                `json:"name,omitempty"`
 	Description           string                `json:"description,omitempty"`
+	Availability          string                `json:"availability"`
 	Type                  string                `json:"type"`
 	Provider              string                `json:"provider,omitempty"`
 	Version               string                `json:"version,omitempty"`
@@ -193,32 +203,72 @@ type fieldProjection struct {
 	DefaultValue any                               `json:"default_value,omitempty"`
 }
 
-func trimConnectorProjection(value connectorscatalog.ConnectorSchema) connectorProjection {
-	providers := make([]providerProjection, len(value.Providers))
-	for index, provider := range value.Providers {
-		providers[index] = providerProjection{
-			Key: provider.Key, ProviderRevision: provider.ProviderRevision, Name: provider.Name, Description: provider.Description,
-			ConfigFields: trimConnectorFields(provider.ConfigFields), SecretFields: trimConnectorFields(provider.SecretFields), OperationKeys: append([]string(nil), provider.OperationKeys...),
-		}
+func trimConnectorProjection(value connectorscatalog.ConnectorSchema, releasedProviders []connectorscatalog.ProviderEntry) (connectorProjection, error) {
+	providerDefinitions := make(map[string]connectorscatalog.ConnectorProviderSchema, len(value.Providers))
+	for _, provider := range value.Providers {
+		providerDefinitions[provider.Key] = provider
 	}
-	operations := make([]operationProjection, len(value.Operations))
-	for index, operation := range value.Operations {
-		operations[index] = operationProjection{
+	providers := []providerProjection{}
+	releasedOperations := map[string]connectorscatalog.OperationEntry{}
+	for _, released := range releasedProviders {
+		if released.ConnectorKey != value.Key {
+			continue
+		}
+		provider, found := providerDefinitions[released.ProviderKey]
+		if !found {
+			return connectorProjection{}, fmt.Errorf("released Provider %s/%s has no Connector definition", value.Key, released.ProviderKey)
+		}
+		operationKeys := make([]string, 0, len(released.Operations))
+		for _, operation := range released.Operations {
+			if previous, found := releasedOperations[operation.Key]; found && previous.Mode != operation.Mode {
+				return connectorProjection{}, fmt.Errorf("released Provider operation %s/%s has conflicting modes", value.Key, operation.Key)
+			}
+			operationKeys = append(operationKeys, operation.Key)
+			releasedOperations[operation.Key] = operation
+		}
+		providers = append(providers, providerProjection{
+			Key: released.ProviderKey, ProviderRevision: released.ProviderRevision, Name: provider.Name, Description: provider.Description,
+			ConfigFields: trimConnectorFields(provider.ConfigFields), SecretFields: trimConnectorFields(provider.SecretFields), OperationKeys: operationKeys,
+		})
+	}
+	operations := make([]operationProjection, 0, len(releasedOperations))
+	for _, operation := range value.Operations {
+		if _, found := releasedOperations[operation.Key]; !found {
+			continue
+		}
+		operations = append(operations, operationProjection{
 			Key: operation.Key, Name: operation.Name, Description: operation.Description, Method: operation.Method,
 			ExecutionMode: operation.ExecutionMode, SideEffect: operation.SideEffect,
 			Input: trimConnectorFields(operation.Input), Output: trimConnectorFields(operation.Output),
 			TimeoutDefaultSeconds: operation.TimeoutDefaultSeconds, TimeoutMaxSeconds: operation.TimeoutMaxSeconds,
 			IdempotencySupported: operation.IdempotencySupported, CompensationOperation: operation.CompensationOperation,
 			TestSupported: operation.TestSupported, DryRunSupported: operation.DryRunSupported,
-		}
+		})
+		delete(releasedOperations, operation.Key)
+	}
+	missingOperationKeys := make([]string, 0, len(releasedOperations))
+	for key := range releasedOperations {
+		missingOperationKeys = append(missingOperationKeys, key)
+	}
+	sort.Strings(missingOperationKeys)
+	for _, key := range missingOperationKeys {
+		operations = append(operations, operationProjection{
+			Key: key, Name: strings.ReplaceAll(key, "_", " "), ExecutionMode: releasedOperations[key].Mode,
+		})
+	}
+	availability := "definition_only"
+	if value.Classification == "runtime_native" && value.LifecycleStatus == "reclassified" {
+		availability = "runtime_native"
+	} else if len(providers) != 0 {
+		availability = "released"
 	}
 	return connectorProjection{
-		Key: value.Key, Name: value.Name, Description: value.Description, Type: value.Type, Provider: value.Provider,
+		Key: value.Key, Name: value.Name, Description: value.Description, Availability: availability, Type: value.Type, Provider: value.Provider,
 		Version: value.Version, MinimumRuntimeVersion: value.MinimumRuntimeVersion,
 		FeatureFlags: append([]string(nil), value.FeatureFlags...), Classification: value.Classification,
 		LifecycleStatus: value.LifecycleStatus, ReplacementCapability: value.ReplacementCapability,
 		Capabilities: append([]string(nil), value.Capabilities...), Providers: providers, Operations: operations,
-	}
+	}, nil
 }
 
 func trimConnectorFields(values []connectorscatalog.FieldSchema) []fieldProjection {
@@ -301,7 +351,7 @@ type integrationEventMappingAuthoringFragment struct {
 	Payload           map[string]any                                    `json:"payload,omitempty"`
 }
 
-func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest, definitions []connectorscatalog.ConnectorSchema) (modulecapability.ValidationResult, error) {
+func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest, definitions []connectorscatalog.ConnectorSchema, releasedProviders []connectorscatalog.ProviderEntry) (modulecapability.ValidationResult, error) {
 	result := modulecapability.ValidationResult{Diagnostics: []modulecapability.Diagnostic{}}
 	invalid := func(rule, field string, err error) (modulecapability.ValidationResult, error) {
 		message := "Integration candidate is invalid"
@@ -334,7 +384,7 @@ func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.V
 		if err := value.Validate(); err != nil {
 			return invalid("integration.connection_requirement.invalid", "$.candidate.value", err)
 		}
-		definition, provider, err := integrationConnectorProvider(definitions, value.ConnectorKey, value.ProviderKey)
+		definition, provider, err := integrationConnectorProvider(definitions, releasedProviders, value.ConnectorKey, value.ProviderKey)
 		if err != nil {
 			return invalid("integration.connection_requirement.provider_not_found", "$.candidate.value.provider_key", err)
 		}
@@ -415,8 +465,18 @@ func validateIntegrationOperation(definitions []connectorscatalog.ConnectorSchem
 	return fmt.Errorf("connector operation %s/%s/%s is not declared by the official catalog", connectorKey, providerKey, operationKey)
 }
 
-func integrationConnectorProvider(definitions []connectorscatalog.ConnectorSchema, connectorKey, providerKey string) (connectorscatalog.ConnectorSchema, connectorscatalog.ConnectorProviderSchema, error) {
+func integrationConnectorProvider(definitions []connectorscatalog.ConnectorSchema, releasedProviders []connectorscatalog.ProviderEntry, connectorKey, providerKey string) (connectorscatalog.ConnectorSchema, connectorscatalog.ConnectorProviderSchema, error) {
 	connectorKey, providerKey = strings.TrimSpace(connectorKey), strings.TrimSpace(providerKey)
+	released := false
+	for _, provider := range releasedProviders {
+		if provider.ConnectorKey == connectorKey && provider.ProviderKey == providerKey {
+			released = true
+			break
+		}
+	}
+	if !released {
+		return connectorscatalog.ConnectorSchema{}, connectorscatalog.ConnectorProviderSchema{}, fmt.Errorf("provider %s/%s is not released by the official catalog", connectorKey, providerKey)
+	}
 	for _, definition := range definitions {
 		if definition.Key != connectorKey {
 			continue

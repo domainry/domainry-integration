@@ -21,8 +21,12 @@ func Open(inputs Inputs) (*modulecapability.StaticBinding, error) {
 	if err != nil {
 		return nil, err
 	}
-	validator := func(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
-		return integrationhttp.ValidateCapabilityCandidate(ctx, request, definitions)
+	releaseCatalog, err := connectorscatalog.Load()
+	if err != nil {
+		return nil, err
 	}
-	return integrationhttp.NewCapabilityBinding(definitions, validator)
+	validator := func(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
+		return integrationhttp.ValidateCapabilityCandidate(ctx, request, definitions, releaseCatalog.Providers)
+	}
+	return integrationhttp.NewCapabilityBinding(definitions, releaseCatalog.Providers, validator)
 }
