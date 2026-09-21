@@ -159,7 +159,7 @@ func connectionsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 }
 
 func connectionAccountsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, "_integration_connection_accounts", key("id"), scope("workspace_id"), scope("connection_key"), key("scope"), key("owner_user_id"), key("created_by"), key("created_at"), key("updated_at")).Unique("workspace_id", "connection_key")
+	return table(r, "_integration_connection_accounts", key("id"), scope("workspace_id"), scope("connection_key"), req("scope", ormschema.TextKey(32)), req("owner_user_id", ormschema.TextKey(191)), key("created_by"), key("created_at"), key("updated_at")).Unique("workspace_id", "connection_key")
 }
 
 func connectionAccountSecretsTable(r modulehost.Dialect) *ormschema.TableBuilder {
