@@ -1,13 +1,13 @@
-package module
+package capability
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
 	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
 	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulecapability/contracttest"
+	integrationhttp "github.com/domainry/domainry-integration/internal/transport/http/module"
 )
 
 func TestIntegrationCapabilityTracksRoutesConnectorsAndValidation(t *testing.T) {
@@ -23,9 +23,7 @@ func TestIntegrationCapabilityTracksRoutesConnectorsAndValidation(t *testing.T) 
 		ConnectorKey: "crm", ProviderKey: "probe", ProviderRevision: "1.0.0",
 		Operations: []connectorscatalog.OperationEntry{{Key: "lookup", Mode: "call"}},
 	}}
-	binding, err := NewCapabilityBinding(definitions, releasedProviders, func(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
-		return ValidateCapabilityCandidate(ctx, request, definitions, releasedProviders)
-	})
+	binding, err := buildContract(definitions, releasedProviders)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +37,7 @@ func TestIntegrationCapabilityTracksRoutesConnectorsAndValidation(t *testing.T) 
 		operations += category.OperationCount
 		projections += category.ProjectionCount
 	}
-	routes, err := integrationRoutes()
+	routes, err := integrationhttp.CapabilityRoutes()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +60,7 @@ func TestIntegrationCapabilityTracksRoutesConnectorsAndValidation(t *testing.T) 
 	if connector.Availability != "released" || len(connector.Providers) != 1 || connector.Providers[0].Key != "probe" || len(connector.Operations) != 1 || connector.Operations[0].Key != "lookup" {
 		t.Fatalf("Connector projection=%+v", connector)
 	}
-	for _, capability := range summary.Scenarios.ProvidedCapabilities {
+	for _, capability := range summary.Composition.ProvidedCapabilities {
 		if capability == "connector.crm.planned" {
 			t.Fatalf("unreleased Provider leaked into provided capabilities: %q", capability)
 		}

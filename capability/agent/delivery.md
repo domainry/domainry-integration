@@ -8,6 +8,8 @@
 
 - Notification decides to email a user while Integration invokes the configured email provider.
 - A payment or CRM Handler records authorized intent while Integration performs the provider protocol and captures its outcome.
+- A post-commit ERP write can finish as confirmed success, retryable failure, uncertain outcome, or permanent rejection, each with different recovery.
+- Compensation is available only when the released Provider explicitly publishes an inverse Operation.
 
 ## Use when
 
@@ -32,7 +34,7 @@ The business owner emits typed intent. Integration resolves a governed connectio
 
 ## Example
 
-Notification decides that a user should receive email; Integration invokes the configured email provider. A payment Handler decides the amount and eligibility; Integration performs the provider protocol.
+For an approved invoice, the Handler commits local intent `erp.invoice.create:invoice-88:v3` and returns; after commit, Integration resolves `erp_primary`, invokes the typed Provider Operation with that stable identity, and stores the receipt. A confirmed success completes reconciliation. A provider-declared transient pre-effect failure retries with the same identity. A timeout after request acceptance is `uncertain`, so Integration queries provider status or waits for a webhook before retrying. A permanent validation rejection becomes terminal and exposes remediation. Only a published inverse Operation may compensate a confirmed external write; a local database rollback cannot undo it. For email, Notification still owns recipient/content/channel while Integration owns only connection, protocol, retry, and receipt.
 
 ## Permissions and scope
 

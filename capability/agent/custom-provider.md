@@ -2,12 +2,13 @@
 
 ## Problems solved
 
-- Extends the external capability catalog for a proprietary or unsupported Provider without bypassing Runtime transport, credential governance, typed operation contracts, or startup validation.
+- Extends the external capability catalog when the released catalog has no matching Provider or Operation, without bypassing Runtime transport, credential governance, typed operation contracts, or startup validation.
 
 ## Business scenarios
 
 - An enterprise product must call a private ERP API that has no released Domainry Provider.
 - A supported Connector category needs one additional vendor-specific Operation that the released Provider does not declare.
+- A released Provider already covers the protocol but the project only needs different field mapping or credentials, which does not justify custom code.
 
 ## Use when
 
@@ -24,7 +25,7 @@ Do not build a custom Provider when a released contract already fits. Do not use
 3. Declare a stable Connector key, Provider key and revision, typed Operations, configuration fields, write-only secret fields, allowed execution modes, side effects, idempotency, reconciliation, compensation, timeout, test, and dry-run behavior.
 4. Construct the Provider with the supplied `connector.Transport` and register it through `backend/connectors/registry.go` in `ProviderSet`. Never create a second HTTP, SQL, secret, or retry subsystem.
 5. Test descriptor validation, duplicate registration, configuration validation, bounded transport, error classification, idempotency, uncertain outcomes, and reconciliation behavior.
-6. Require an authorable connection requirement and an operation-specific generated client before a Business Handler uses the Provider. If either is absent from the current compiler contract, report a Contract Gap and leave the Handler free of direct network calls.
+6. Require an authorable connection requirement and an operation-specific generated client before a Business Handler uses the Provider. If either is absent, implement that typed compiler adapter and keep the Handler free of direct network calls.
 
 ## Adaptation cookbook
 
@@ -33,11 +34,11 @@ Do not build a custom Provider when a released contract already fits. Do not use
 | Call a private ERP that is absent from the released catalog | Project-owned Provider implementing the closest stable Connector contract, or a new contract when no semantic match exists | Declare typed read/write Operations, bounded configuration and secret fields, construct with Runtime transport, and register through `ProviderSet` | Embedding the ERP base URL and API token in a Business Handler |
 | Add one vendor-specific lookup to an existing Connector category | Custom Provider Operation with a distinct stable key and read-only reliability contract | Model typed input/output, natural idempotency, timeout and error classification while reusing the public Connector SDK | Claiming an undeclared official Operation exists or returning untyped provider JSON |
 | Use a released Provider with different Workspace credentials | A governed Integration connection, not a custom Provider | Select the released Provider and configure an authorized connection through Integration-owned surfaces | Forking Provider code just to store another credential |
-| Compiler cannot bind the chosen Operation to a Handler | Contract Gap | Report the missing connection/operation binding and wait for compiler-generated authority | Calling the generic Connector gateway or direct HTTP to work around the missing binding |
+| Compiler cannot yet bind the chosen Operation to a Handler | Typed compiler extension | Add the connection/operation schema, semantic checks, lowering, generated capability and client, then prove an authorized call and a denied call | Calling the generic Connector gateway, direct HTTP, or abandoning the required integration |
 
 ## Example
 
-A private ERP exposes `lookup_customer` and `create_invoice`. The project Provider declares separate typed read and write Operations, gives `create_invoice` an explicit idempotency and reconciliation contract, receives Runtime-owned transport, and registers through `ProviderSet`. The Business Handler may call it only after the compiler generates a client for that exact Operation.
+A private ERP exposes `lookup_customer` and `create_invoice`. The source contract first reaches `definition_only`: typed schemas, authentication references, read/write effect, timeout, idempotency, uncertain-outcome reconciliation, optional compensation, tests, and dry-run semantics are known, but it is not executable. After implementation, bounded transport tests, configuration/secret validation, duplicate-registration checks, and publication review, the Provider becomes `released` in the locked Integration catalog. The same delivery then exposes the exact Connection and Operation compiler binding in Plane/Deck and generates the operation-specific client. Definition, released Provider, and compiler binding are three required implementation layers, not three reasons to leave the business requirement unfinished. A different field mapping uses Mapping; one missing Operation extends only that Operation instead of cloning the Provider.
 
 ## Permissions and scope
 

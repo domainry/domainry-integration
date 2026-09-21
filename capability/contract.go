@@ -1,4 +1,4 @@
-package module
+package capability
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
+	integrationhttp "github.com/domainry/domainry-integration/internal/transport/http/module"
 )
 
 const (
@@ -21,7 +22,19 @@ const (
 	integrationSubscriptionsCategory = integrationsdk.CapabilityIntegrationSubscriptions
 )
 
-func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, releasedProviders []connectorscatalog.ProviderEntry, validator modulecapability.Validator) (*modulecapability.StaticBinding, error) {
+func openContract(_ Inputs) (*modulecapability.StaticBinding, error) {
+	definitions, err := connectorscatalog.DefinitionDocuments()
+	if err != nil {
+		return nil, err
+	}
+	releaseCatalog, err := connectorscatalog.Load()
+	if err != nil {
+		return nil, err
+	}
+	return buildContract(definitions, releaseCatalog.Providers)
+}
+
+func buildContract(definitions []connectorscatalog.ConnectorSchema, releasedProviders []connectorscatalog.ProviderEntry) (*modulecapability.StaticBinding, error) {
 	definitions = append([]connectorscatalog.ConnectorSchema(nil), definitions...)
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Key < definitions[j].Key })
 	releasedProviders = append([]connectorscatalog.ProviderEntry(nil), releasedProviders...)
@@ -32,7 +45,7 @@ func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, relea
 		return releasedProviders[i].ConnectorKey < releasedProviders[j].ConnectorKey
 	})
 	operations := integrationsdk.IntegrationHTTPAdapterContract().OpenAPI
-	routes, err := integrationRoutes()
+	routes, err := integrationhttp.CapabilityRoutes()
 	if err != nil {
 		return nil, err
 	}
@@ -106,10 +119,7 @@ func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, relea
 	summary := modulecapability.ModuleSummary{
 		Identity: modulecapability.ModuleIdentity{Key: "integration", SourceOwner: "integration", ModuleVersion: integrationsdk.ProtocolVersionV1, ValidationRevision: "integration-owner-validation-v1", SupportedDeploymentModes: []modulecapability.DeploymentMode{modulecapability.DeploymentModeModule, modulecapability.DeploymentModeSaaS}},
 		Name:     "Integration", Description: "Connector catalog and provider registry, governed connections and credentials, provider operations, webhooks, external identities, and delivery evidence.",
-		Scenarios: modulecapability.AdaptationScenarios{
-			UseWhen:              []string{"A PRD requires calling an external provider, receiving verified webhooks, managing connector credentials, synchronizing external identities, or browser push delivery"},
-			DoNotUseWhen:         []string{"The requirement is entirely internal domain behavior with no provider protocol, external credential, webhook, or delivery boundary"},
-			RequirementSignals:   []string{"third-party API", "connector", "provider credentials", "webhook", "external identity", "web push", "outbound delivery", "provider reconciliation"},
+		Composition: modulecapability.ModuleComposition{
 			ProvidedCapabilities: provided, RequiredModules: []string{"identity"}, OptionalModules: []string{"audit", "notification", "scheduler"}, ConflictingModules: []string{},
 			AssemblyChains: []string{
 				"identity_subject_to_connection_account", "oauth_grant_to_account_read", "account_read_to_sensitive_invocation",
@@ -118,10 +128,11 @@ func NewCapabilityBinding(definitions []connectorscatalog.ConnectorSchema, relea
 				"provider_webhook_to_integration_event", "integration_event_mapping_to_runtime_execution", "notification_delivery_to_web_push_provider",
 				"integration_provider_call_to_invocation", "integration_event_to_runtime_execution_receipt",
 			},
-			ValidationScopes:  []string{"integration.connection_requirement", "integration.event_mapping"},
-			SelectionExamples: []modulecapability.ScenarioExample{{Requirement: "Send order updates to a configured CRM and ingest signed CRM webhooks into a workflow", Reason: "Integration owns provider connections, operation delivery, webhook verification, durable events, and Runtime trigger handoff"}},
-			RejectionExamples: []modulecapability.ScenarioExample{{Requirement: "Notify an in-app user when an approval is completed", Reason: "Notification owns in-app user communication; Integration is selected only if an external delivery provider or webhook is also needed"}},
+			ValidationScopes: []string{"integration.connection_requirement", "integration.event_mapping"},
 		},
+	}
+	validator := func(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
+		return validateCapabilityCandidate(ctx, request, definitions, releasedProviders)
 	}
 	return modulecapability.NewStaticBinding(summary, documents, validator)
 }
@@ -351,7 +362,7 @@ type integrationEventMappingAuthoringFragment struct {
 	Payload           map[string]any                                    `json:"payload,omitempty"`
 }
 
-func ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest, definitions []connectorscatalog.ConnectorSchema, releasedProviders []connectorscatalog.ProviderEntry) (modulecapability.ValidationResult, error) {
+func validateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest, definitions []connectorscatalog.ConnectorSchema, releasedProviders []connectorscatalog.ProviderEntry) (modulecapability.ValidationResult, error) {
 	result := modulecapability.ValidationResult{Diagnostics: []modulecapability.Diagnostic{}}
 	invalid := func(rule, field string, err error) (modulecapability.ValidationResult, error) {
 		message := "Integration candidate is invalid"

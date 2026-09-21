@@ -3,11 +3,7 @@
 package capability
 
 import (
-	"context"
-
-	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
 	"github.com/domainry/domainry-foundation/modulecapability"
-	integrationhttp "github.com/domainry/domainry-integration/internal/transport/http/module"
 )
 
 // Inputs is intentionally empty. The official Connectors catalog is the
@@ -16,17 +12,5 @@ import (
 type Inputs struct{}
 
 func Open(inputs Inputs) (*modulecapability.StaticBinding, error) {
-	_ = inputs
-	definitions, err := connectorscatalog.DefinitionDocuments()
-	if err != nil {
-		return nil, err
-	}
-	releaseCatalog, err := connectorscatalog.Load()
-	if err != nil {
-		return nil, err
-	}
-	validator := func(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
-		return integrationhttp.ValidateCapabilityCandidate(ctx, request, definitions, releaseCatalog.Providers)
-	}
-	return integrationhttp.NewCapabilityBinding(definitions, releaseCatalog.Providers, validator)
+	return openContract(inputs)
 }

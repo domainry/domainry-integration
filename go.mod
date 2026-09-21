@@ -3,8 +3,8 @@ module github.com/domainry/domainry-integration
 go 1.26.0
 
 require (
-	github.com/domainry/domainry-foundation v0.1.0
-	github.com/domainry/domainry-identity-sdk v0.1.11
+	github.com/domainry/domainry-foundation v0.1.1
+	github.com/domainry/domainry-identity-sdk v0.1.12
 	github.com/domainry/domainry-integration-sdk v0.1.7
 	github.com/domainry/domainry-orm v0.1.30
 	modernc.org/sqlite v1.57.0

@@ -150,6 +150,12 @@ func integrationRoutes() ([]modulehttp.Route, error) {
 	return routes, nil
 }
 
+// CapabilityRoutes exposes the immutable source-owned route facts used by the
+// public capability contract without exporting the executable HTTP adapter.
+func CapabilityRoutes() ([]modulehttp.Route, error) {
+	return integrationRoutes()
+}
+
 type handler struct {
 	oauthApplications   integrationsdk.OAuthApplications
 	oauthAuthorizations integrationsdk.OAuthAuthorizations
