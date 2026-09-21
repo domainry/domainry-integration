@@ -19,9 +19,27 @@ import (
 // Integration's query index before registered provider descriptors overlay
 // connectors that have an executable provider in this host.
 func SyncBuiltinCatalog(ctx context.Context, database modulehost.Database, dialect modulehost.Dialect, definitions []connectorscatalog.ConnectorDefinition) error {
-	existing, err := loadBuiltinConnectors(ctx, database, dialect)
+	existing, err := loadBuiltinConnectors(ctx, database, dialect, false)
 	if err != nil {
 		return err
+	}
+	needsProviderPayloads := false
+	for _, connector := range existing {
+		if strings.TrimSpace(connector.sourceKind) == "connectors+provider" {
+			needsProviderPayloads = true
+			break
+		}
+	}
+	if needsProviderPayloads {
+		payloads, err := loadProviderOverlayPayloads(ctx, database, dialect)
+		if err != nil {
+			return err
+		}
+		for key, payload := range payloads {
+			connector := existing[key]
+			connector.payload = payload
+			existing[key] = connector
+		}
 	}
 	for _, definition := range definitions {
 		if err := syncBuiltinConnector(ctx, database, dialect, definition, existing[definition.Key]); err != nil {
@@ -38,8 +56,12 @@ type persistedBuiltinConnector struct {
 	sourceKind string
 }
 
-func loadBuiltinConnectors(ctx context.Context, database modulehost.Database, dialect modulehost.Dialect) (map[string]persistedBuiltinConnector, error) {
-	statement, args, err := query.NewSelectBuilder(dialect, "_integration_connector_definitions").Columns("resource_key", "id", "payload_json", "schema_hash", "source_kind").Build()
+func loadBuiltinConnectors(ctx context.Context, database modulehost.Database, dialect modulehost.Dialect, includePayload bool) (map[string]persistedBuiltinConnector, error) {
+	columns := []string{"resource_key", "id", "schema_hash", "source_kind"}
+	if includePayload {
+		columns = append(columns, "payload_json")
+	}
+	statement, args, err := query.NewSelectBuilder(dialect, "_integration_connector_definitions").Columns(columns...).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +74,11 @@ func loadBuiltinConnectors(ctx context.Context, database modulehost.Database, di
 	for rows.Next() {
 		var key string
 		var connector persistedBuiltinConnector
-		if err := rows.Scan(&key, &connector.id, &connector.payload, &connector.schemaHash, &connector.sourceKind); err != nil {
+		values := []any{&key, &connector.id, &connector.schemaHash, &connector.sourceKind}
+		if includePayload {
+			values = append(values, &connector.payload)
+		}
+		if err := rows.Scan(values...); err != nil {
 			return nil, fmt.Errorf("scan Integration connector: %w", err)
 		}
 		existing[key] = connector
@@ -61,6 +87,31 @@ func loadBuiltinConnectors(ctx context.Context, database modulehost.Database, di
 		return nil, fmt.Errorf("iterate Integration connectors: %w", err)
 	}
 	return existing, nil
+}
+
+func loadProviderOverlayPayloads(ctx context.Context, database modulehost.Database, dialect modulehost.Dialect) (map[string]string, error) {
+	statement, args, err := query.NewSelectBuilder(dialect, "_integration_connector_definitions").
+		Columns("resource_key", "payload_json").Where(query.Equal("source_kind", "connectors+provider")).Build()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := database.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load Integration provider connector payloads: %w", err)
+	}
+	defer rows.Close()
+	payloads := map[string]string{}
+	for rows.Next() {
+		var key, payload string
+		if err := rows.Scan(&key, &payload); err != nil {
+			return nil, fmt.Errorf("scan Integration provider connector payload: %w", err)
+		}
+		payloads[key] = payload
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Integration provider connector payloads: %w", err)
+	}
+	return payloads, nil
 }
 
 func syncBuiltinConnector(ctx context.Context, database modulehost.Database, dialect modulehost.Dialect, definition connectorscatalog.ConnectorDefinition, existing persistedBuiltinConnector) error {

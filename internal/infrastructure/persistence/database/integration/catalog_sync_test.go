@@ -55,7 +55,7 @@ func TestProviderOverlayPreservesConnectorsOwnedDefinition(t *testing.T) {
 	if err := SyncProviderCatalog(t.Context(), database, dialect, []connector.ProviderDescriptor{descriptor}); err != nil {
 		t.Fatal(err)
 	}
-	existing, err := loadBuiltinConnectors(t.Context(), database, dialect)
+	existing, err := loadBuiltinConnectors(t.Context(), database, dialect, true)
 	if err != nil {
 		t.Fatal(err)
 	}
