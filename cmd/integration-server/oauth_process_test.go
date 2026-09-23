@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/domainry/domainry-foundation/modulecapability"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/remote"
 )
@@ -51,15 +50,15 @@ func TestStandaloneOAuthConfigurationAndSessionSurviveProcessRestart(t *testing.
 		done = make(chan error, 1)
 		go func(command *exec.Cmd) { done <- command.Wait() }(child)
 		client := &http.Client{Timeout: time.Second}
-		var summary modulecapability.ModuleSummary
+		var descriptor integrationsdk.Descriptor
 		deadline := time.Now().Add(10 * time.Second)
 		for {
-			request, _ := http.NewRequest("GET", baseURL+modulecapability.SummaryPath, nil)
+			request, _ := http.NewRequest("GET", baseURL+"/integration/v1/descriptor", nil)
 			request.Header.Set("Authorization", "Bearer isolated-service-token")
 			request.Header.Set("X-Domainry-Runtime-ID", "product")
 			response, err := client.Do(request)
 			if err == nil {
-				err = json.NewDecoder(response.Body).Decode(&summary)
+				err = json.NewDecoder(response.Body).Decode(&descriptor)
 				response.Body.Close()
 				if err == nil && response.StatusCode == 200 {
 					break
@@ -75,7 +74,7 @@ func TestStandaloneOAuthConfigurationAndSessionSurviveProcessRestart(t *testing.
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		binding, err = remote.NewFactory(remote.Options{BaseURL: baseURL, Token: "isolated-service-token", HTTPClient: client, CapabilityContractSHA256: summary.Identity.ContractSHA256}).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "product"}, nil)
+		binding, err = remote.NewFactory(remote.Options{BaseURL: baseURL, Token: "isolated-service-token", HTTPClient: client}).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "product"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -5,17 +5,18 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
-	connector "github.com/domainry/domainry-connector-sdk"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	connector "github.com/domainry/domainry-connector-sdk"
 	"github.com/domainry/domainry-foundation/requestcontext"
 	sdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/remote"
 	saas "github.com/domainry/domainry-integration/internal/assembly/saas"
+	"github.com/domainry/domainry-integration/internal/testsupport/definitionfixture"
 	"github.com/domainry/domainry-integration/module"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	"github.com/domainry/domainry-orm/query"
@@ -37,23 +38,22 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 			if _, err = rand.Read(cipherKey[:]); err != nil {
 				t.Fatal(err)
 			}
-			host := &rotationHost{db: db, dialect: d.WithSchema(""), provider: &rotationProvider{}, key: cipherKey}
+			host := &rotationHost{db: db, dialect: d.WithSchema(""), provider: &rotationProvider{}, key: cipherKey, definitions: definitionfixture.NewStore()}
 			var binding sdk.Binding
+			var ownerBinding sdk.Binding
 			if mode == "module" {
 				binding, err = module.NewFactory().OpenModule(t.Context(), sdk.ApplicationRef{RuntimeID: "erasure-runtime"}, host)
+				ownerBinding = binding
 			} else {
 				owner, e := saas.Open(t.Context(), sdk.ApplicationRef{RuntimeID: "owner"}, host, "owner-service-token")
 				if e != nil {
 					t.Fatal(e)
 				}
 				defer owner.Close(context.Background())
+				ownerBinding = owner.Binding
 				server := httptest.NewServer(owner.Handler)
 				defer server.Close()
-				summary, e := owner.Binding.CapabilitySummary(t.Context())
-				if e != nil {
-					t.Fatal(e)
-				}
-				binding, err = saas.NewFactory(remote.NewFactory(remote.Options{BaseURL: server.URL, Token: "owner-service-token", HTTPClient: server.Client(), CapabilityContractSHA256: summary.Identity.ContractSHA256})).OpenSaaS(t.Context(), sdk.ApplicationRef{RuntimeID: "runtime"}, nil)
+				binding, err = saas.NewFactory(remote.NewFactory(remote.Options{BaseURL: server.URL, Token: "owner-service-token", HTTPClient: server.Client()})).OpenSaaS(t.Context(), sdk.ApplicationRef{RuntimeID: "runtime"}, nil)
 				// Privileged routes must reject anonymous callers even with a body.
 				res, e := server.Client().Post(server.URL+"/integration/v1/subjects/erase", "application/json", strings.NewReader(`{}`))
 				if e != nil {
@@ -68,6 +68,22 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer binding.Close(context.Background())
+			subjects := binding.(sdk.SubjectLifecycleBinding).SubjectLifecycle()
+			trusted := requestcontext.WithWorkspaceID(t.Context(), "ws")
+			if _, err = subjects.PreviewSubject(trusted, sdk.SubjectErasureRequest{WorkspaceID: "ws", SubjectID: "alice"}); err == nil {
+				t.Fatal("unbound shared subject lifecycle persistence accepted")
+			}
+			persistence, ok := ownerBinding.(sdk.SubjectLifecyclePersistenceBinding)
+			if !ok {
+				t.Fatal("owner binding exposes no shared subject lifecycle persistence")
+			}
+			if err = persistence.BindSubjectLifecyclePersistence(t.Context()); err == nil {
+				t.Fatal("shared subject lifecycle persistence bound before Lifecycle schema installation")
+			}
+			installIntegrationSharedSubjectLifecycle(t, db)
+			if err = persistence.BindSubjectLifecyclePersistence(t.Context()); err != nil {
+				t.Fatal(err)
+			}
 			management := binding.(sdk.ManagementBinding).Management()
 			admin := binding.(sdk.ConnectionAccountAdministrationBinding).ConnectionAccountAdministration()
 			for _, item := range []struct {
@@ -83,6 +99,11 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 				if _, err = admin.RegisterConnectionAccount(t.Context(), item.ws, item.key, "operator", sdk.ConnectionAccountRegistration{Scope: item.scope, OwnerUserID: item.user}); err != nil {
 					t.Fatal(err)
 				}
+				if item.user != "" {
+					if _, err = management.CreateAPIKey(t.Context(), item.ws, item.key+"-api", sdk.APIKeyInput{Key: item.key + "-api", ActorID: item.user, RoleKey: "member", Scopes: []string{"integration.read"}}); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			messageIDs := []string{"message-alice", "message-bob"}
 			for i, id := range messageIDs {
@@ -92,7 +113,7 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 				}
 			}
 			// Seed actual source-owned tables using their migrated column shapes.
-			tables := []string{"_integration_oauth_sessions", "_integration_web_push_subscriptions", "_integration_api_keys", "_integration_external_identities", "_integration_connector_provider_states", "_integration_connector_provider_commits", "_integration_credential_refresh_leases", "_integration_webhook_subscriptions", "_integration_events", "_integration_event_mapping_intents"}
+			tables := []string{"_integration_oauth_sessions", "_integration_web_push_subscriptions", "_integration_external_identities", "_integration_provider_runs", "_integration_webhook_subscriptions", "_integration_events"}
 			for _, table := range tables {
 				for _, subject := range []string{"alice", "bob"} {
 					for _, workspace := range []string{"ws", "other"} {
@@ -132,10 +153,11 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 			}
 			// The sourced event ID is a real Integration ID, not a payload search.
 			eventID := "_integration_events-ws-alice"
-			execIntegration(t, db, "UPDATE _integration_event_mapping_intents SET event_id=? WHERE id=?", eventID, "_integration_event_mapping_intents-ws-alice")
+			var aliceAPIKeyID string
+			if err = db.QueryRow("SELECT id FROM _integration_secrets WHERE workspace_id='ws' AND credential_type='api_key' AND actor_id='alice'").Scan(&aliceAPIKeyID); err != nil {
+				t.Fatal(err)
+			}
 			request := sdk.SubjectErasureRequest{WorkspaceID: "ws", SubjectID: "alice", RequestID: "erase-alice", PublicationMessageIDs: []string{"message-alice"}, EventIDs: []string{eventID}, Resources: []sdk.SubjectRecordReference{{ObjectKey: "member_profile", RecordID: "profile-alice"}}}
-			subjects := binding.(sdk.SubjectLifecycleBinding).SubjectLifecycle()
-			trusted := requestcontext.WithWorkspaceID(t.Context(), "ws")
 			if _, err = subjects.PrepareSubjectErasure(t.Context(), request); err == nil {
 				t.Fatal("untrusted workspace accepted")
 			}
@@ -144,6 +166,8 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 			if _, err = subjects.PrepareSubjectErasure(trusted, held); err == nil {
 				t.Fatal("legal hold accepted")
 			}
+			execIntegration(t, db, "INSERT INTO _subject_requests(id,workspace_id,request_type,kind,resolved_identity) VALUES(?,?,'subject_request','erase',?)", request.RequestID, request.WorkspaceID, request.SubjectID)
+			execIntegration(t, db, "INSERT INTO _subject_steps(workspace_id,request_id,owner,operation,payload_json,completed_at) VALUES(?,?,'lifecycle','erase_fence','{}',?)", request.WorkspaceID, request.RequestID, time.Now().UTC().Format(time.RFC3339Nano))
 			// In-flight synchronous delivery blocks cleanup before any owner fence.
 			execIntegration(t, db, "UPDATE _integration_invocations SET status='running' WHERE request_ref='message-alice'")
 			if _, err = subjects.PrepareSubjectErasure(trusted, request); err == nil {
@@ -163,6 +187,9 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 			}
 			if !strings.Contains(string(plan), managerInvocationID) {
 				t.Fatal("manager/shared connection invocation missed source member")
+			}
+			if !strings.Contains(string(plan), aliceAPIKeyID) {
+				t.Fatal("typed API-key credential missed subject erasure plan")
 			}
 			changed := request
 			changed.PublicationMessageIDs = []string{"message-bob"}
@@ -236,7 +263,27 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 			if _, err = admin.RegisterConnectionAccount(trusted, "ws", "shared", "operator", sdk.ConnectionAccountRegistration{Scope: sdk.ConnectionAccountScopePersonal, OwnerUserID: "alice"}); err == nil {
 				t.Fatal("erased user gained another account")
 			}
+			var sharedSteps int
+			if err = db.QueryRow("SELECT COUNT(*) FROM _subject_steps WHERE workspace_id=? AND request_id=? AND owner='integration'", request.WorkspaceID, request.RequestID).Scan(&sharedSteps); err != nil || sharedSteps != 2 {
+				t.Fatal("shared Integration subject steps", sharedSteps, err)
+			}
+			for _, retired := range []string{"_integration_subject_erasure_fences", "_integration_subject_erasure_receipts"} {
+				var count int
+				if err = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", retired).Scan(&count); err != nil || count != 0 {
+					t.Fatal("retired Integration subject table exists", retired, count, err)
+				}
+			}
 		})
+	}
+}
+
+func installIntegrationSharedSubjectLifecycle(t *testing.T, db *sql.DB) {
+	t.Helper()
+	for _, statement := range []string{
+		`CREATE TABLE _subject_requests (id TEXT NOT NULL, workspace_id TEXT NOT NULL, request_type TEXT NOT NULL, kind TEXT NOT NULL, resolved_identity TEXT NOT NULL, PRIMARY KEY(workspace_id,id))`,
+		`CREATE TABLE _subject_steps (workspace_id TEXT NOT NULL, request_id TEXT NOT NULL, owner TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, completed_at TEXT NOT NULL, PRIMARY KEY(workspace_id,request_id,owner,operation))`,
+	} {
+		execIntegration(t, db, statement)
 	}
 }
 
@@ -326,7 +373,7 @@ func integrationSubjectRowJSON(t *testing.T, host *rotationHost, table, id strin
 }
 func integrationPeerSnapshot(t *testing.T, host *rotationHost) string {
 	t.Helper()
-	tables := []string{"_integration_connections", "_integration_connection_accounts", "_integration_connection_account_secrets", "_integration_connection_grants", "_integration_secrets", "_integration_secret_materials", "_integration_oauth_sessions", "_integration_web_push_subscriptions", "_integration_api_keys", "_integration_external_identities", "_integration_connector_provider_states", "_integration_connector_provider_commits", "_integration_credential_refresh_leases", "_integration_webhook_subscriptions", "_integration_invocations", "_integration_events", "_integration_event_mapping_intents"}
+	tables := []string{"_integration_connections", "_integration_connection_accounts", "_integration_connection_account_secrets", "_integration_connection_grants", "_integration_secrets", "_integration_secret_materials", "_integration_oauth_sessions", "_integration_web_push_subscriptions", "_integration_external_identities", "_integration_provider_runs", "_integration_webhook_subscriptions", "_integration_invocations", "_integration_events"}
 	all := []string{}
 	for _, table := range tables {
 		stmt, args, err := query.NewSelectBuilder(host.dialect, table).Columns("id").Where(query.Or(query.Equal("workspace_id", "other"), query.Equal("workspace_id", "ws"))).OrderBy(query.Ascending("id")).Build()

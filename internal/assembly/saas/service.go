@@ -73,6 +73,21 @@ func (s *Service) StartWorkers(ctx context.Context, interval time.Duration, limi
 	}()
 	return done
 }
+
+// BindSubjectLifecyclePersistence enables owner-side subject erasure only after
+// the SaaS deployment has installed Lifecycle's shared request and step tables
+// in this service's database.
+func (s *Service) BindSubjectLifecyclePersistence(ctx context.Context) error {
+	if s == nil || s.Binding == nil {
+		return fmt.Errorf("Integration SaaS binding is unavailable")
+	}
+	binder, ok := s.Binding.(integrationsdk.SubjectLifecyclePersistenceBinding)
+	if !ok {
+		return fmt.Errorf("Integration SaaS binding exposes no shared subject lifecycle persistence binder")
+	}
+	return binder.BindSubjectLifecyclePersistence(ctx)
+}
+
 func (s *Service) Close(ctx context.Context) error {
 	if s == nil || s.Binding == nil {
 		return nil

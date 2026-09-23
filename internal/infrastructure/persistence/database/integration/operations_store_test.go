@@ -49,7 +49,10 @@ type operationsTriggerProbe struct {
 	request integrationsdk.TriggerRequest
 }
 
-type backgroundOperationsTestProvider struct{ calls int }
+type backgroundOperationsTestProvider struct {
+	calls       int
+	commitCalls int
+}
 
 func (*backgroundOperationsTestProvider) Descriptor() connector.ProviderDescriptor {
 	return connector.ProviderDescriptor{ConnectorKey: "crm", ProviderKey: "background", ProviderRevision: "1.0.0", Operations: []connector.OperationDescriptor{{
@@ -57,8 +60,9 @@ func (*backgroundOperationsTestProvider) Descriptor() connector.ProviderDescript
 		Reliability: connector.ReliabilityContract{Effect: connector.EffectWrite, Idempotency: connector.IdempotencyContract{Strategy: connector.IdempotencyNatural}, Reconciliation: connector.ReconciliationNone, Compensation: connector.CompensationContract{Mode: connector.CompensationNone}},
 	}}}
 }
-func (*backgroundOperationsTestProvider) Call(context.Context, connector.CallRequest) (connector.CallResult, error) {
-	return connector.CallResult{}, nil
+func (p *backgroundOperationsTestProvider) Call(context.Context, connector.CallRequest) (connector.CallResult, error) {
+	p.commitCalls++
+	return connector.CallResult{ResponseRef: "background-commit-receipt"}, nil
 }
 func (*backgroundOperationsTestProvider) BackgroundTasks(connector.Connection) []connector.BackgroundTaskDescriptor {
 	return []connector.BackgroundTaskDescriptor{{Key: "poll", StateVersion: 1}}
@@ -68,6 +72,7 @@ func (p *backgroundOperationsTestProvider) ProcessBackground(context.Context, co
 	return connector.BackgroundResult{
 		State: json.RawMessage(`{"cursor":"next"}`), NextDueAt: time.Now().UTC().Add(time.Hour),
 		Events: []connector.BackgroundEvent{{ExternalID: "polled-1", EventType: "contact.changed", Payload: json.RawMessage(`{"contact":{"id":"contact-2"}}`)}},
+		Commit: []connector.BackgroundCommit{{OperationKey: "ack", ContractSHA256: strings.Repeat("e", 64), Payload: json.RawMessage(`{"external_id":"polled-1"}`)}},
 	}, nil
 }
 
@@ -113,8 +118,9 @@ func TestOperationsStoreOwnsCallWebhookMappingAndRuntimeReceipt(t *testing.T) {
 	providers := deliveryTestProviders{provider: provider}
 	delivery := NewDeliveryStore(database, dialect, providers, deliveryTestSecrets{})
 	trigger := &operationsTriggerProbe{}
-	store := NewOperationsStore(database, dialect, delivery, trigger)
-	requirements := NewRequirementsStore(database, dialect, providers)
+	definitions := newTestDefinitionStore()
+	store := NewOperationsStore(database, dialect, delivery, trigger, definitions)
+	requirements := NewRequirementsStore(database, dialect, providers, definitions)
 	if err := requirements.SynchronizeEventMappings(t.Context(), []integrationmodel.EventMappingRequirement{{
 		Key: "contact-change", WorkspaceID: "workspace-a", Provider: "probe", ConnectionKey: "primary",
 		EventType: "contact.changed", CommandPrefix: "contact.", TargetType: "action", ObjectKey: "contact",
@@ -198,8 +204,9 @@ func TestOperationsStoreMapsVerifiedEventToFiniteAgentTargetAndCurrentIdentity(t
 	providers := deliveryTestProviders{provider: provider}
 	delivery := NewDeliveryStore(database, dialect, providers, deliveryTestSecrets{})
 	trigger := &operationsTriggerProbe{}
-	store := NewOperationsStore(database, dialect, delivery, trigger)
-	requirements := NewRequirementsStore(database, dialect, providers)
+	definitions := newTestDefinitionStore()
+	store := NewOperationsStore(database, dialect, delivery, trigger, definitions)
+	requirements := NewRequirementsStore(database, dialect, providers, definitions)
 	if err = requirements.SynchronizeEventMappings(t.Context(), []integrationmodel.EventMappingRequirement{{
 		Key: "contact-agent", WorkspaceID: "workspace-a", Provider: "probe", ConnectionKey: "primary", EventType: "contact.changed", TargetType: "agent_task",
 		AgentID: "support-agent", ConversationID: "conversation-support", AgentTaskMode: "start", AgentInput: map[string]string{"customer_name": "contact.name"},
@@ -256,7 +263,7 @@ func TestOperationsStoreSensitiveCallNeverPersistsPlaintext(t *testing.T) {
 		duringCallReadErr = database.QueryRowContext(t.Context(), "SELECT metadata_json FROM _integration_invocations WHERE request_ref = ?", "otp-1").Scan(&duringCallMetadata)
 	}
 	delivery := NewDeliveryStore(database, dialect, deliveryTestProviders{provider: provider}, deliveryTestSecrets{})
-	store := NewOperationsStore(database, dialect, delivery, nil)
+	store := NewOperationsStore(database, dialect, delivery, nil, newTestDefinitionStore())
 	request := integrationmodel.ProviderCallRequest{
 		RequestID: "otp-1", WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "primary", Operation: "lookup",
 		Payload: json.RawMessage(`{"pin":"917204","destination":"+15555550123"}`), PersistenceMode: integrationmodel.ProviderCallPersistenceSensitive, MaskedDestination: "+1*******0123",
@@ -320,8 +327,9 @@ func TestLocalWorkersPersistProviderStateBeforeDispatchingEvent(t *testing.T) {
 	providers := deliveryTestProviders{provider: provider}
 	delivery := NewDeliveryStore(database, dialect, providers, emptyDeliveryTestSecrets{})
 	trigger := &operationsTriggerProbe{}
-	operations := NewOperationsStore(database, dialect, delivery, trigger)
-	requirements := NewRequirementsStore(database, dialect, providers)
+	definitions := newTestDefinitionStore()
+	operations := NewOperationsStore(database, dialect, delivery, trigger, definitions)
+	requirements := NewRequirementsStore(database, dialect, providers, definitions)
 	if err := requirements.SynchronizeEventMappings(t.Context(), []integrationmodel.EventMappingRequirement{{Key: "contact-change", WorkspaceID: "workspace-a", Provider: "background", EventType: "contact.changed", TargetType: "action", ObjectKey: "contact", RecordIDPath: "contact.id", ActionKey: "sync", EventFields: []integrationmodel.EventFieldRequirement{{Path: "contact.id", Type: "text", Required: true}}, Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}
@@ -338,15 +346,25 @@ func TestLocalWorkersPersistProviderStateBeforeDispatchingEvent(t *testing.T) {
 		return time.Date(2026, 9, 11, 10, 0, 0, nanos, time.UTC)
 	}
 	processed, err := workers.ProcessDueProviderTasks(t.Context(), 10)
-	if err != nil || processed != 1 || provider.calls != 1 {
-		t.Fatalf("processed=%d provider_calls=%d err=%v", processed, provider.calls, err)
+	if err != nil || processed != 2 || provider.calls != 1 || provider.commitCalls != 1 {
+		t.Fatalf("processed=%d provider_calls=%d commit_calls=%d err=%v", processed, provider.calls, provider.commitCalls, err)
 	}
 	var state, status string
-	if err := database.QueryRowContext(t.Context(), "SELECT payload_json,status FROM _integration_connector_provider_states WHERE task_key=?", "poll").Scan(&state, &status); err != nil {
+	if err := database.QueryRowContext(t.Context(), "SELECT payload_json,status FROM _integration_provider_runs WHERE run_kind=? AND run_key=?", providerRunKindState, "poll").Scan(&state, &status); err != nil {
 		t.Fatal(err)
 	}
 	if state != `{"cursor":"next"}` || status != "ready" {
 		t.Fatalf("state=%s status=%s", state, status)
+	}
+	var stateRuns, commitRuns int
+	if err := database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM _integration_provider_runs WHERE run_kind=?", providerRunKindState).Scan(&stateRuns); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM _integration_provider_runs WHERE run_kind=?", providerRunKindCommit).Scan(&commitRuns); err != nil {
+		t.Fatal(err)
+	}
+	if stateRuns != 1 || commitRuns != 1 {
+		t.Fatalf("provider run kinds state=%d commit=%d", stateRuns, commitRuns)
 	}
 	processed, err = workers.ProcessDueEvents(t.Context(), 10)
 	if err != nil || processed != 1 || trigger.calls != 1 || trigger.request.Target.RecordID != "contact-2" {
@@ -358,12 +376,12 @@ func TestLocalWorkersPersistProviderStateBeforeDispatchingEvent(t *testing.T) {
 		{"2026-09-11T10:00:00.1232Z", ""},
 		{"2026-09-11T10:00:00.123Z", "2026-09-11T10:00:00.1232Z"},
 	} {
-		if _, err := database.ExecContext(t.Context(), "UPDATE _integration_connector_provider_states SET due_at=?,lease_expires_at=? WHERE task_key=?", deadline.due, deadline.lease, "poll"); err != nil {
+		if _, err := database.ExecContext(t.Context(), "UPDATE _integration_provider_runs SET due_at=?,lease_expires_at=? WHERE run_kind=? AND run_key=?", deadline.due, deadline.lease, providerRunKindState, "poll"); err != nil {
 			t.Fatal(err)
 		}
 		processed, err := workers.processProviderTasks(t.Context(), 10)
-		if err != nil || processed != 0 || provider.calls != 1 {
-			t.Fatalf("future work claimed: processed=%d calls=%d err=%v", processed, provider.calls, err)
+		if err != nil || processed != 0 || provider.calls != 1 || provider.commitCalls != 1 {
+			t.Fatalf("future work claimed: processed=%d calls=%d commit_calls=%d err=%v", processed, provider.calls, provider.commitCalls, err)
 		}
 	}
 

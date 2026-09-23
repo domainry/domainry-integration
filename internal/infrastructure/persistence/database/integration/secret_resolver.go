@@ -18,10 +18,11 @@ import (
 )
 
 type SecretResolver struct {
-	database     sqlhost.DBTX
-	transactions modulehost.Database
-	dialect      modulehost.Dialect
-	cipher       modulehost.SecretMaterialCipher
+	database         sqlhost.DBTX
+	transactions     modulehost.Database
+	dialect          modulehost.Dialect
+	cipher           modulehost.SecretMaterialCipher
+	subjectLifecycle *SubjectLifecyclePersistence
 }
 
 func (s *SecretResolver) ApplySecretUpdates(ctx context.Context, workspaceID string, references, updates map[string]string) error {
@@ -105,7 +106,7 @@ type currentProviderSecret struct {
 func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspaceID string, prepared []preparedProviderSecretUpdate) error {
 	current := make([]currentProviderSecret, 0, len(prepared))
 	for _, item := range prepared {
-		statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status", "value_ref", "fingerprint", "updated_at").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey))).Limit(1).Build()
+		statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status", "value_ref", "fingerprint", "updated_at").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", item.secretKey))).Limit(1).Build()
 		if err != nil {
 			return err
 		}
@@ -138,8 +139,8 @@ func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspa
 	}
 	updatedAt := now.Format(time.RFC3339Nano)
 	for _, item := range current {
-		where := query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey), query.Equal("status", "active"), query.Equal("value_ref", "material:"+item.secretKey), query.Equal("fingerprint", item.fingerprint), query.Equal("updated_at", item.updatedAt))
-		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("fingerprint", item.preparedProviderSecretUpdate.fingerprint).Set("rotated_at", updatedAt).Set("updated_at", updatedAt).Where(query.And(subjectRowWriteAllowed("_integration_secrets"), where)).Build()
+		where := query.And(query.Equal("workspace_id", workspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", item.secretKey), query.Equal("status", "active"), query.Equal("value_ref", "material:"+item.secretKey), query.Equal("fingerprint", item.fingerprint), query.Equal("updated_at", item.updatedAt))
+		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("fingerprint", item.preparedProviderSecretUpdate.fingerprint).Set("rotated_at", updatedAt).Set("updated_at", updatedAt).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_secrets", ownerID("secret_", workspaceID, item.secretKey)), where)).Build()
 		if err != nil {
 			return err
 		}
@@ -150,7 +151,7 @@ func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspa
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			return fmt.Errorf("%w: %s", errProviderSecretChanged, item.fieldKey)
 		}
-		statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", item.ciphertext).Set("updated_at", updatedAt).Where(query.And(subjectRowWriteAllowed("_integration_secret_materials"), query.And(query.Equal("id", item.materialID), query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey)))).Build()
+		statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", item.ciphertext).Set("updated_at", updatedAt).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_secret_materials", item.materialID), query.And(query.Equal("id", item.materialID), query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey)))).Build()
 		if err != nil {
 			return err
 		}
@@ -165,8 +166,8 @@ func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspa
 	return nil
 }
 
-func NewSecretResolver(database modulehost.Database, dialect modulehost.Dialect, cipher modulehost.SecretMaterialCipher) *SecretResolver {
-	return &SecretResolver{database: database, transactions: database, dialect: dialect, cipher: cipher}
+func NewSecretResolver(database modulehost.Database, dialect modulehost.Dialect, cipher modulehost.SecretMaterialCipher, subjectLifecycle ...*SubjectLifecyclePersistence) *SecretResolver {
+	return &SecretResolver{database: database, transactions: database, dialect: dialect, cipher: cipher, subjectLifecycle: subjectLifecyclePersistence(subjectLifecycle)}
 }
 
 func (s *SecretResolver) ResolveSecretReferences(ctx context.Context, workspaceID string, references map[string]string) (map[string]string, error) {
@@ -206,7 +207,7 @@ func (s *SecretResolver) resolveReferenceSnapshot(ctx context.Context, workspace
 		return "", nil, fmt.Errorf("secret reference is invalid")
 	}
 	secretKey := strings.TrimSpace(strings.TrimPrefix(reference, "secret:"))
-	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status", "value_ref", "expires_at", "fingerprint", "updated_at").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", secretKey))).Build()
+	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status", "value_ref", "expires_at", "fingerprint", "updated_at").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", secretKey))).Build()
 	if err != nil {
 		return "", nil, err
 	}

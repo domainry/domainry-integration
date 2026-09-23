@@ -111,7 +111,7 @@ func TestCredentialRotationPersistsIndependentlyOfProviderOutcome(t *testing.T) 
 				switch operation {
 				case "call":
 					ctx = scope("integration.providers.call")
-					result, err = NewOperationsStore(db, dialect, delivery, nil).Call(ctx, integrationmodel.ProviderCallRequest{RequestID: "rotation", WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "owned-connection", Operation: "lookup", Payload: json.RawMessage(`{}`), ActorID: "user-a"})
+					result, err = NewOperationsStore(db, dialect, delivery, nil, newTestDefinitionStore()).Call(ctx, integrationmodel.ProviderCallRequest{RequestID: "rotation", WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "owned-connection", Operation: "lookup", Payload: json.RawMessage(`{}`), ActorID: "user-a"})
 				case "delivery":
 					ctx = scope("integration.deliveries.accept")
 					result, err = delivery.Accept(ctx, integrationmodel.DeliveryRequest{MessageID: "rotation", WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "owned-connection", Operation: "lookup", Payload: json.RawMessage(`{}`)})
@@ -283,7 +283,7 @@ func TestProviderCallCannotReactivateCredentialRevokedDuringRequest(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	result, err := NewOperationsStore(db, dialect, delivery, nil).Call(t.Context(), integrationmodel.ProviderCallRequest{RequestID: "revoke-during-call", WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "account", Operation: "lookup", Payload: json.RawMessage(`{}`), ActorID: "user-a"})
+	result, err := NewOperationsStore(db, dialect, delivery, nil, newTestDefinitionStore()).Call(t.Context(), integrationmodel.ProviderCallRequest{RequestID: "revoke-during-call", WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "account", Operation: "lookup", Payload: json.RawMessage(`{}`), ActorID: "user-a"})
 	if !errors.Is(err, errProviderSecretChanged) || result.Invocation.Status != "failed" || provider.calls != 1 {
 		t.Fatal("late provider result did not retain revocation", result, provider.calls, err)
 	}
@@ -337,7 +337,7 @@ func TestConcurrentProviderRefreshCannotOverwriteNewerResult(t *testing.T) {
 	if _, err := management.UpsertConnection(t.Context(), "workspace-a", "account", "user-a", integrationsdk.ConnectionInput{ConnectorKey: "crm", ProviderKey: "probe", Status: "active", SecretRefs: refs}); err != nil {
 		t.Fatal(err)
 	}
-	store := NewOperationsStore(db, dialect, delivery, nil)
+	store := NewOperationsStore(db, dialect, delivery, nil, newTestDefinitionStore())
 	type outcome struct {
 		result integrationmodel.ProviderCallResult
 		err    error

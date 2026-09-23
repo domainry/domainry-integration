@@ -9,7 +9,6 @@ import (
 	foundationhttp "github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
-	integrationcapability "github.com/domainry/domainry-integration/capability"
 	"github.com/domainry/domainry-integration/internal/adapter/accountwrite"
 	integrationsdkadapter "github.com/domainry/domainry-integration/internal/adapter/integrationsdk"
 	integrationapplication "github.com/domainry/domainry-integration/internal/application/integration"
@@ -43,7 +42,7 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	if err := application.Validate(); err != nil {
 		return nil, err
 	}
-	if host == nil || host.Database() == nil || host.Dialect() == nil || host.Migrations() == nil || host.Providers() == nil || host.SecretCipher() == nil || host.RuntimeTriggers() == nil {
+	if host == nil || host.Database() == nil || host.Dialect() == nil || host.Migrations() == nil || host.Providers() == nil || host.SecretCipher() == nil || host.DefinitionStore() == nil || host.RuntimeTriggers() == nil {
 		return nil, fmt.Errorf("Integration Module host is incomplete")
 	}
 	migrations, err := databaseschema.SchemaMigrations(host.Migrations().Driver(), host.Migrations().Schema())
@@ -57,37 +56,31 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	if err != nil {
 		return nil, err
 	}
-	if err := integrationpersistence.SyncBuiltinCatalog(ctx, host.Database(), host.Dialect(), builtinCatalog); err != nil {
-		return nil, fmt.Errorf("synchronize Integration built-in catalog: %w", err)
+	if err := integrationpersistence.SyncConnectorCatalog(ctx, host.DefinitionStore(), builtinCatalog, host.Providers().Descriptors()); err != nil {
+		return nil, fmt.Errorf("synchronize Integration connector Definitions: %w", err)
 	}
-	if err := integrationpersistence.SyncProviderCatalog(ctx, host.Database(), host.Dialect(), host.Providers().Descriptors()); err != nil {
-		return nil, fmt.Errorf("synchronize Integration provider catalog: %w", err)
-	}
-	webPush := integrationpersistence.NewWebPushSubscriptionStore(host.Database(), host.Dialect())
-	resolver := integrationpersistence.NewSecretResolver(host.Database(), host.Dialect(), host.SecretCipher())
-	delivery := integrationpersistence.NewDeliveryStore(host.Database(), host.Dialect(), host.Providers(), resolver, webPush)
-	operations := integrationpersistence.NewOperationsStore(host.Database(), host.Dialect(), delivery, host.RuntimeTriggers())
-	workers := integrationpersistence.NewWorkerStore(host.Database(), host.Dialect(), delivery, operations, application.RuntimeID)
+	subjectLifecyclePersistence := integrationpersistence.NewSubjectLifecyclePersistence()
+	webPush := integrationpersistence.NewWebPushSubscriptionStore(host.Database(), host.Dialect(), subjectLifecyclePersistence)
+	resolver := integrationpersistence.NewSecretResolver(host.Database(), host.Dialect(), host.SecretCipher(), subjectLifecyclePersistence)
+	delivery := integrationpersistence.NewDeliveryStoreWithSubjectLifecycle(host.Database(), host.Dialect(), host.Providers(), resolver, webPush, subjectLifecyclePersistence)
+	operations := integrationpersistence.NewOperationsStore(host.Database(), host.Dialect(), delivery, host.RuntimeTriggers(), host.DefinitionStore(), subjectLifecyclePersistence)
+	workers := integrationpersistence.NewWorkerStore(host.Database(), host.Dialect(), delivery, operations, application.RuntimeID, subjectLifecyclePersistence)
 	domain := integrationservice.New(
-		integrationpersistence.NewCatalogStore(host.Database(), host.Dialect()),
-		integrationpersistence.NewRequirementsStore(host.Database(), host.Dialect(), host.Providers()),
+		integrationpersistence.NewCatalogStore(host.DefinitionStore()),
+		integrationpersistence.NewRequirementsStore(host.Database(), host.Dialect(), host.Providers(), host.DefinitionStore(), subjectLifecyclePersistence),
 		delivery,
 		webPush,
 		operations,
 	)
-	management := integrationpersistence.NewManagementStore(host.Database(), host.Dialect(), host.SecretCipher(), delivery)
+	management := integrationpersistence.NewManagementStore(host.Database(), host.Dialect(), host.SecretCipher(), delivery, subjectLifecyclePersistence)
 	applicationService := integrationapplication.New(domain)
-	capability, err := integrationcapability.Open(integrationcapability.Inputs{})
-	if err != nil {
-		return nil, fmt.Errorf("build Integration capability disclosure: %w", err)
-	}
-	binding, err := integrationsdkadapter.NewBinding(mode, applicationService, management, capability, workers)
+	binding, err := integrationsdkadapter.NewBinding(mode, applicationService, management, workers)
 	if err != nil {
 		return nil, err
 	}
 	binding.SetConnectionAccountReads(integrationapplication.NewAccountReadService(management, domain))
 	binding.SetConnectionAccountWrites(integrationapplication.NewAccountWriteService(management, accountwrite.Codec{}, operations, operations))
-	binding.SetSubjectLifecycle(integrationsdkadapter.NewSubjectLifecycleBinding(integrationapplication.NewSubjectLifecycleService(integrationpersistence.NewSubjectLifecycleStore(host.Database(), host.Dialect()))))
+	binding.SetSubjectLifecycle(integrationsdkadapter.NewSubjectLifecycleBinding(integrationapplication.NewSubjectLifecycleService(integrationpersistence.NewSubjectLifecycleStore(host.Database(), host.Dialect(), host.DefinitionStore(), subjectLifecyclePersistence))))
 	if mode == integrationsdk.DeploymentModeModule {
 		adapter, err := modulehttp.NewAdapter(binding)
 		if err != nil {

@@ -25,7 +25,7 @@ func (s *OperationsStore) guardInboundSubject(ctx context.Context, request model
 	if subject != "" {
 		refs = append(refs, subjectFenceReference{"external", subjectProvider, oauthHash(subject)})
 	}
-	return guardSubjectWrite(ctx, s.database, s.dialect, request.WorkspaceID, refs...)
+	return guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, request.WorkspaceID, refs...)
 }
 func verifiedInboundPayload(raw json.RawMessage, external *connector.WebhookExternalIdentity) (json.RawMessage, error) {
 	if external == nil || strings.TrimSpace(external.Subject) == "" {

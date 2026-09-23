@@ -69,7 +69,7 @@ func (f *webReadFixture) open() {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	host := webReadHost{accountSaaSHost: accountSaaSHost{testHost{database: f.db, dialect: dialect.WithSchema("")}}, registry: registry, cipher: cipher}
+	host := webReadHost{accountSaaSHost: accountSaaSHost{newTestHost(f.db, dialect.WithSchema(""))}, registry: registry, cipher: cipher}
 	if f.mode == "module" {
 		f.binding, err = moduleassembly.NewFactory().OpenModule(f.t.Context(), sdk.ApplicationRef{RuntimeID: "web-module"}, host)
 	} else {
@@ -78,11 +78,7 @@ func (f *webReadFixture) open() {
 			f.t.Fatal(err)
 		}
 		f.backend = httptest.NewServer(f.owner.Handler)
-		summary, e := f.owner.Binding.CapabilitySummary(f.t.Context())
-		if e != nil {
-			f.t.Fatal(e)
-		}
-		f.binding, err = NewFactory(remote.NewFactory(remote.Options{BaseURL: f.backend.URL, Token: "web-owner-token", HTTPClient: f.backend.Client(), CapabilityContractSHA256: summary.Identity.ContractSHA256})).OpenSaaS(f.t.Context(), sdk.ApplicationRef{RuntimeID: "web-product"}, nil)
+		f.binding, err = NewFactory(remote.NewFactory(remote.Options{BaseURL: f.backend.URL, Token: "web-owner-token", HTTPClient: f.backend.Client()})).OpenSaaS(f.t.Context(), sdk.ApplicationRef{RuntimeID: "web-product"}, nil)
 	}
 	if err != nil {
 		f.t.Fatal(err)

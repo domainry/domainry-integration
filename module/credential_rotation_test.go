@@ -15,7 +15,9 @@ import (
 	connector "github.com/domainry/domainry-connector-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
+	"github.com/domainry/domainry-integration/internal/testsupport/definitionfixture"
 	"github.com/domainry/domainry-integration/module"
+	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	"github.com/domainry/domainry-orm/migration"
 	"github.com/domainry/domainry-orm/query"
@@ -46,7 +48,7 @@ func TestPublicModuleRetainsRotatedCredentialsAcrossRestart(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				host := &rotationHost{db: db, dialect: d.WithSchema(""), provider: &rotationProvider{}, key: key}
+				host := &rotationHost{db: db, dialect: d.WithSchema(""), provider: &rotationProvider{}, key: key, definitions: definitionfixture.NewStore()}
 				binding, err := module.NewFactory().OpenModule(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "rotation-runtime"}, host)
 				if err != nil {
 					t.Fatal(err)
@@ -151,10 +153,11 @@ func (p *rotationProvider) TestConnection(ctx context.Context, request connector
 }
 
 type rotationHost struct {
-	db       *sql.DB
-	dialect  modulehost.Dialect
-	provider *rotationProvider
-	key      [32]byte
+	db          *sql.DB
+	dialect     modulehost.Dialect
+	provider    *rotationProvider
+	key         [32]byte
+	definitions metadatasdk.DefinitionStore
 }
 
 func (h *rotationHost) Database() modulehost.Database                 { return h.db }
@@ -163,6 +166,7 @@ func (h *rotationHost) Migrations() modulehost.MigrationRegistrar     { return h
 func (h *rotationHost) Providers() modulehost.ProviderRegistry        { return h }
 func (h *rotationHost) SecretCipher() modulehost.SecretMaterialCipher { return h }
 func (h *rotationHost) RuntimeTriggers() integrationsdk.TriggerSink   { return h }
+func (h *rotationHost) DefinitionStore() metadatasdk.DefinitionStore  { return h.definitions }
 func (*rotationHost) Driver() string                                  { return "sqlite" }
 func (*rotationHost) Schema() string                                  { return "" }
 func (h *rotationHost) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {

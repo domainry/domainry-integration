@@ -56,7 +56,7 @@ func (s *OperationsStore) ProcessDueEvents(ctx context.Context, workerID string,
 		claim, claimArgs, err := query.NewUpdateBuilder(s.dialect, "_integration_events").
 			Set("status", "processing").Set("lease_owner", workerID).Set("lease_expires_at", now.Add(30*time.Second).Format(time.RFC3339Nano)).
 			Set("fencing_token", candidate.fencingToken+1).Set("updated_at", nowText).
-			Where(query.And(subjectRowWriteAllowed("_integration_events"), query.And(query.Equal("id", candidate.id), query.Equal("workspace_id", candidate.workspaceID), query.Equal("status", candidate.status), query.Equal("fencing_token", candidate.fencingToken)))).Build()
+			Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, "_integration_events", candidate.id), query.And(query.Equal("id", candidate.id), query.Equal("workspace_id", candidate.workspaceID), query.Equal("status", candidate.status), query.Equal("fencing_token", candidate.fencingToken)))).Build()
 		if err != nil {
 			return processed, err
 		}

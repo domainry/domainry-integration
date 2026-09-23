@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	model "github.com/domainry/domainry-integration/internal/domain/integration/model"
+	metadatamodulehost "github.com/domainry/domainry-metadata-sdk/modulehost"
 	"github.com/domainry/domainry-orm/query"
 )
 
@@ -84,30 +85,7 @@ func (s *SubjectLifecycleStore) subjectEvents(ctx context.Context, tx *sql.Tx, r
 		return external[i].SubjectSHA256 < external[j].SubjectSHA256
 	})
 	external = slices.Compact(external)
-	mappings := []model.EventMappingRequirement{}
-	stmt, args, err = query.NewSelectBuilder(s.dialect, "_integration_event_mapping_definitions").Columns("payload_json").Where(query.And(query.Equal("object_key", r.WorkspaceID), query.IsNull("disabled_at"))).OrderBy(query.Ascending("resource_key")).Build()
-	if err != nil {
-		return nil, nil, err
-	}
-	rows, err = tx.QueryContext(ctx, stmt, args...)
-	if err != nil {
-		return nil, nil, err
-	}
-	for rows.Next() {
-		var raw string
-		if err = rows.Scan(&raw); err != nil {
-			rows.Close()
-			return nil, nil, err
-		}
-		var mapping model.EventMappingRequirement
-		if err = json.Unmarshal([]byte(raw), &mapping); err != nil {
-			rows.Close()
-			return nil, nil, err
-		}
-		mappings = append(mappings, mapping)
-	}
-	err = rows.Err()
-	rows.Close()
+	mappings, err := listEventMappingDefinitions(metadatamodulehost.WithExecutor(ctx, tx), s.definitions, r.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -17,13 +17,14 @@ import (
 )
 
 type WebPushSubscriptionStore struct {
-	database     sqlhost.DBTX
-	transactions modulehost.Database
-	dialect      modulehost.Dialect
+	database         sqlhost.DBTX
+	transactions     modulehost.Database
+	dialect          modulehost.Dialect
+	subjectLifecycle *SubjectLifecyclePersistence
 }
 
-func NewWebPushSubscriptionStore(database modulehost.Database, dialect modulehost.Dialect) *WebPushSubscriptionStore {
-	return &WebPushSubscriptionStore{database: database, transactions: database, dialect: dialect}
+func NewWebPushSubscriptionStore(database modulehost.Database, dialect modulehost.Dialect, subjectLifecycle ...*SubjectLifecyclePersistence) *WebPushSubscriptionStore {
+	return &WebPushSubscriptionStore{database: database, transactions: database, dialect: dialect, subjectLifecycle: subjectLifecyclePersistence(subjectLifecycle)}
 }
 
 func (s *WebPushSubscriptionStore) withTransaction(ctx context.Context, operation func(*WebPushSubscriptionStore) error) error {
@@ -84,7 +85,7 @@ func (s *WebPushSubscriptionStore) Readiness(ctx context.Context, workspaceID st
 		result.Reason = "private_key_unbound"
 		return result, nil
 	}
-	secretQuery, secretArgs, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", secretKey))).Limit(1).Build()
+	secretQuery, secretArgs, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", secretKey))).Limit(1).Build()
 	if err != nil {
 		return integrationmodel.WebPushReadiness{}, fmt.Errorf("build Integration Web Push secret readiness: %w", err)
 	}
@@ -160,7 +161,7 @@ func (s *WebPushSubscriptionStore) Upsert(ctx context.Context, workspaceID, user
 			return integrationmodel.WebPushSubscription{}, fmt.Errorf("Integration Web Push subscription expiry is invalid")
 		}
 	}
-	if err := guardSubjectWrite(ctx, s.database, s.dialect, workspaceID, subjectFenceReference{"subject", "", userID}); err != nil {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, workspaceID, subjectFenceReference{"subject", "", userID}); err != nil {
 		return integrationmodel.WebPushSubscription{}, err
 	}
 	hash := sha256.Sum256([]byte(endpoint))
@@ -179,7 +180,7 @@ func (s *WebPushSubscriptionStore) Upsert(ctx context.Context, workspaceID, user
 		if whereErr != nil {
 			return integrationmodel.WebPushSubscription{}, whereErr
 		}
-		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint_hash", endpointHash).Set("endpoint", endpoint).Set("p256dh", strings.TrimSpace(input.P256DH)).Set("auth_secret", strings.TrimSpace(input.Auth)).Set("status", "active").Set("expires_at", input.ExpiresAt).Set("updated_at", now).Set("revoked_at", "").Where(query.And(subjectRowWriteAllowed("_integration_web_push_subscriptions"), where)).Build()
+		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint_hash", endpointHash).Set("endpoint", endpoint).Set("p256dh", strings.TrimSpace(input.P256DH)).Set("auth_secret", strings.TrimSpace(input.Auth)).Set("status", "active").Set("expires_at", input.ExpiresAt).Set("updated_at", now).Set("revoked_at", "").Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_web_push_subscriptions", id), where)).Build()
 		if err != nil {
 			return integrationmodel.WebPushSubscription{}, err
 		}
@@ -225,7 +226,7 @@ func (s *WebPushSubscriptionStore) Revoke(ctx context.Context, workspaceID, user
 	if err != nil {
 		return integrationmodel.WebPushSubscription{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint", "").Set("p256dh", "").Set("auth_secret", "").Set("status", "revoked").Set("updated_at", now).Set("revoked_at", now).Where(query.And(subjectRowWriteAllowed("_integration_web_push_subscriptions"), where)).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint", "").Set("p256dh", "").Set("auth_secret", "").Set("status", "revoked").Set("updated_at", now).Set("revoked_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_web_push_subscriptions", id), where)).Build()
 	if err != nil {
 		return integrationmodel.WebPushSubscription{}, err
 	}
@@ -287,7 +288,7 @@ func (s *WebPushSubscriptionStore) CleanupExpired(ctx context.Context, workspace
 		if err != nil {
 			return 0, err
 		}
-		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint", "").Set("p256dh", "").Set("auth_secret", "").Set("status", "expired").Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_web_push_subscriptions"), chunkWhere)).Build()
+		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint", "").Set("p256dh", "").Set("auth_secret", "").Set("status", "expired").Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, strings.TrimSpace(workspaceID), "_integration_web_push_subscriptions", ids[start:end]...), chunkWhere)).Build()
 		if err != nil {
 			return 0, err
 		}

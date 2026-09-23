@@ -15,7 +15,6 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
-	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
@@ -23,7 +22,9 @@ import (
 	"github.com/domainry/domainry-integration-sdk/remote"
 	"github.com/domainry/domainry-integration-sdk/saashost"
 	saasassembly "github.com/domainry/domainry-integration/internal/assembly/saas"
+	"github.com/domainry/domainry-integration/internal/testsupport/definitionfixture"
 	integrationmodule "github.com/domainry/domainry-integration/module"
+	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	_ "modernc.org/sqlite"
 )
@@ -36,8 +37,6 @@ const (
 )
 
 type publicFlowOutcome struct {
-	CapabilityJSON       string
-	ValidationJSON       string
 	ProviderProjected    bool
 	RequirementStatus    string
 	FailureStatus        integrationsdk.DeliveryStatus
@@ -95,16 +94,8 @@ func openSaaSFlow(t *testing.T) publicFlowTopology {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(service.Handler)
-	summary, err := service.Binding.CapabilitySummary(t.Context())
-	if err != nil {
-		server.Close()
-		_ = service.Close(context.Background())
-		host.close()
-		t.Fatal(err)
-	}
 	remoteFactory := integrationmodule.NewSaaSFactory(remote.NewFactory(remote.Options{
 		BaseURL: server.URL, Token: "service-token", HTTPClient: server.Client(),
-		CapabilityContractSHA256: summary.Identity.ContractSHA256,
 	}))
 	factory, ok := remoteFactory.(saashost.Factory)
 	if !ok {
@@ -132,37 +123,6 @@ func runPublicFlow(t *testing.T, topology publicFlowTopology) publicFlowOutcome 
 	t.Helper()
 	defer topology.close()
 	if err := topology.binding.Descriptor().Validate(); err != nil {
-		t.Fatal(err)
-	}
-
-	summary, err := topology.binding.CapabilitySummary(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	capabilityJSON, err := modulecapability.CanonicalJSON(summary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	validation := modulecapability.ValidationRequest{
-		ContractVersion: modulecapability.ValidationContractVersion,
-		ModuleKey:       "integration",
-		CategoryKey:     integrationsdk.CapabilityIntegrationConnections,
-		ContractSHA256:  summary.Identity.ContractSHA256,
-		Kind:            "integration.connection_requirement",
-		Candidate: modulecapability.AuthoringFragment{
-			Collection: "integrations.connections", Key: "invalid-provider",
-			Value: json.RawMessage(`{"key":"invalid-provider","connector_key":"crm","provider_key":"missing"}`),
-		},
-	}
-	validationResult, err := topology.binding.ValidateCapabilityCandidate(t.Context(), validation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(validationResult.Diagnostics) == 0 {
-		t.Fatal("invalid provider produced no source-owned validation diagnostic")
-	}
-	validationJSON, err := modulecapability.CanonicalJSON(validationResult)
-	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -275,7 +235,7 @@ func runPublicFlow(t *testing.T, topology publicFlowTopology) publicFlowOutcome 
 	}
 
 	return publicFlowOutcome{
-		CapabilityJSON: string(capabilityJSON), ValidationJSON: string(validationJSON), ProviderProjected: providerProjected,
+		ProviderProjected: providerProjected,
 		RequirementStatus: manifestConnection.Status, FailureStatus: failed.Status, FailureErrorCode: failed.ErrorCode,
 		SuccessStatus: succeeded.Status, SuccessResultRef: succeeded.ResultRef, InvocationCount: invocationCount,
 		ProviderCalls: providerCalls, ResolvedSecret: resolvedSecret, PersistedCiphertext: ciphertext,
@@ -355,10 +315,11 @@ func publicFlowPrincipal(workspaceID, permissionKey string) identitysdk.Principa
 }
 
 type publicFlowHost struct {
-	database  *sql.DB
-	dialect   modulehost.Dialect
-	registrar publicFlowRegistrar
-	provider  *publicFlowProvider
+	database    *sql.DB
+	dialect     modulehost.Dialect
+	registrar   publicFlowRegistrar
+	provider    *publicFlowProvider
+	definitions metadatasdk.DefinitionStore
 }
 
 func newPublicFlowHost(t *testing.T, topology string) *publicFlowHost {
@@ -373,7 +334,7 @@ func newPublicFlowHost(t *testing.T, topology string) *publicFlowHost {
 		_ = database.Close()
 		t.Fatal(err)
 	}
-	host := &publicFlowHost{database: database, dialect: rawDialect.WithSchema(""), provider: &publicFlowProvider{}}
+	host := &publicFlowHost{database: database, dialect: rawDialect.WithSchema(""), provider: &publicFlowProvider{}, definitions: definitionfixture.NewStore()}
 	host.registrar = publicFlowRegistrar{database: database}
 	return host
 }
@@ -384,9 +345,10 @@ func (h *publicFlowHost) Migrations() modulehost.MigrationRegistrar { return h.r
 func (h *publicFlowHost) Providers() modulehost.ProviderRegistry {
 	return publicFlowProviders{provider: h.provider}
 }
-func (*publicFlowHost) SecretCipher() modulehost.SecretMaterialCipher { return publicFlowCipher{} }
-func (*publicFlowHost) RuntimeTriggers() integrationsdk.TriggerSink   { return publicFlowTrigger{} }
-func (h *publicFlowHost) close()                                      { _ = h.database.Close() }
+func (*publicFlowHost) SecretCipher() modulehost.SecretMaterialCipher  { return publicFlowCipher{} }
+func (*publicFlowHost) RuntimeTriggers() integrationsdk.TriggerSink    { return publicFlowTrigger{} }
+func (h *publicFlowHost) DefinitionStore() metadatasdk.DefinitionStore { return h.definitions }
+func (h *publicFlowHost) close()                                       { _ = h.database.Close() }
 
 type publicFlowRegistrar struct{ database *sql.DB }
 

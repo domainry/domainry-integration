@@ -65,7 +65,7 @@ func TestBackgroundProviderPersistsRotationOnFailureAndHonorsRevocation(t *testi
 					}
 				}
 			}
-			workers := NewWorkerStore(db, dialect, delivery, NewOperationsStore(db, dialect, delivery, nil), "runtime-a")
+			workers := NewWorkerStore(db, dialect, delivery, NewOperationsStore(db, dialect, delivery, nil, newTestDefinitionStore()), "runtime-a")
 			processed, err := workers.ProcessDueProviderTasks(t.Context(), 1)
 			if processed != 1 || !errors.Is(err, refreshFollowupFailure) || provider.calls != 1 {
 				t.Fatal("background provider outcome was lost", processed, provider.calls, err)
@@ -131,7 +131,7 @@ func TestReconciliationPersistsRotationForFailedOutcomeAndProviderError(t *testi
 			if _, err := management.UpsertConnection(t.Context(), "workspace-a", "account", "user-a", integrationsdk.ConnectionInput{ConnectorKey: "crm", ProviderKey: "refresh_reconcile", Status: "active", SecretRefs: refs}); err != nil {
 				t.Fatal(err)
 			}
-			operations := NewOperationsStore(db, dialect, delivery, nil)
+			operations := NewOperationsStore(db, dialect, delivery, nil, newTestDefinitionStore())
 			_, callErr := operations.Call(t.Context(), integrationmodel.ProviderCallRequest{RequestID: "uncertain-call", WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "account", Operation: "create", Payload: json.RawMessage(`{}`), ActorID: "user-a"})
 			if callErr == nil {
 				t.Fatal("initial uncertain call unexpectedly succeeded")

@@ -39,7 +39,7 @@ func TestWebPushReadinessUsesIntegrationOwnedConnectionAndSecretState(t *testing
 	if _, err := database.ExecContext(t.Context(), connection, args...); err != nil {
 		t.Fatal(err)
 	}
-	secret, args, err := query.NewInsertBuilder(dialect, "_integration_secrets").Columns("id", "secret_key", "workspace_id", "kind", "status", "description", "value_ref", "fingerprint", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_tested_at", "last_test_status", "last_test_error").Values("secret-1", "vapid-private", "workspace-a", "private_key", "active", nil, nil, nil, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", nil, "", "", "", "", "", "").Build()
+	secret, args, err := query.NewInsertBuilder(dialect, "_integration_secrets").Columns("id", "secret_key", "workspace_id", "credential_type", "kind", "status", "description", "value_ref", "fingerprint", "scopes_json", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_used_at", "last_tested_at", "last_test_status", "last_test_error").Values("secret-1", "vapid-private", "workspace-a", "secret", "private_key", "active", nil, nil, nil, "[]", "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", nil, "", "", "", "", "", "", "").Build()
 	if err != nil {
 		t.Fatal(err)
 	}

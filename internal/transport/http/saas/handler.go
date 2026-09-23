@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/domainry/domainry-foundation/modulecapability"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 )
 
@@ -55,13 +54,6 @@ func NewHandler(binding integrationsdk.Binding, serviceToken string) (http.Handl
 	h.registerAccountWrites()
 	h.registerSubjectLifecycle()
 	h.registerOAuth()
-	capability, err := modulecapability.NewHTTPHandler(binding, func(*http.Request) error { return nil })
-	if err != nil {
-		return nil, err
-	}
-	h.mux.Handle(modulecapability.SummaryPath, capability)
-	h.mux.Handle(modulecapability.CategoriesPath, capability)
-	h.mux.Handle(modulecapability.ValidationPath, capability)
 	h.register()
 	return h, nil
 }
@@ -94,6 +86,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 func (h *handler) register() {
+	h.mux.HandleFunc("GET /integration/v1/descriptor", h.descriptor)
 	h.mux.HandleFunc("GET /integration/v1/connector-definitions", h.catalog)
 	h.mux.HandleFunc("PUT /integration/v1/application-requirements/connections", h.requirements)
 	h.mux.HandleFunc("PUT /integration/v1/application-requirements/event-mappings", h.eventMappingRequirements)
@@ -106,6 +99,11 @@ func (h *handler) register() {
 	h.mux.HandleFunc("POST /integration/v1/web-push-subscriptions/cleanup-expired", h.cleanupWebPush)
 	h.registerManagement()
 	h.registerOperations()
+}
+func (h *handler) descriptor(w http.ResponseWriter, r *http.Request) {
+	descriptor := h.binding.Descriptor()
+	descriptor.Audience = strings.TrimSpace(r.Header.Get("X-Domainry-Runtime-ID"))
+	respond(w, descriptor, nil)
 }
 func (h *handler) eventMappingRequirements(w http.ResponseWriter, r *http.Request) {
 	var v struct {

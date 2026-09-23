@@ -16,12 +16,24 @@ type SubjectLifecycleService struct {
 func NewSubjectLifecycleService(store repository.SubjectLifecycleRepository) *SubjectLifecycleService {
 	return &SubjectLifecycleService{store: store}
 }
+
+func (s *SubjectLifecycleService) BindSubjectLifecyclePersistence(ctx context.Context) error {
+	binder, ok := s.store.(repository.SubjectLifecyclePersistenceBinder)
+	if !ok {
+		return fmt.Errorf("Integration shared subject lifecycle persistence unavailable")
+	}
+	return binder.BindSubjectLifecyclePersistence(ctx)
+}
 func (s *SubjectLifecycleService) validate(ctx context.Context, r model.SubjectErasureRequest, erase bool) error {
 	if err := r.Validate(erase); err != nil {
 		return err
 	}
 	if s.store == nil || requestcontext.WorkspaceID(ctx) != r.WorkspaceID {
 		return fmt.Errorf("Integration subject lifecycle scope mismatch")
+	}
+	binder, ok := s.store.(repository.SubjectLifecyclePersistenceBinder)
+	if !ok || !binder.SubjectLifecyclePersistenceBound() {
+		return fmt.Errorf("Integration shared subject lifecycle persistence is not bound")
 	}
 	return nil
 }

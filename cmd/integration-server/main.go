@@ -21,9 +21,12 @@ import (
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	saasassembly "github.com/domainry/domainry-integration/internal/assembly/saas"
 	"github.com/domainry/domainry-integration/internal/infrastructure/connectortransport"
+	integrationmigration "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/migration"
 	"github.com/domainry/domainry-integration/internal/infrastructure/security"
+	metadatasdk "github.com/domainry/domainry-metadata-sdk"
+	metadatamodulehost "github.com/domainry/domainry-metadata-sdk/modulehost"
+	metadatamodule "github.com/domainry/domainry-metadata/module"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
-	ormmigration "github.com/domainry/domainry-orm/migration"
 	_ "modernc.org/sqlite"
 )
 
@@ -66,11 +69,28 @@ func run() error {
 	database.SetMaxOpenConns(1)
 	dialect, _ := ormdialect.New(ormdialect.SQLite)
 	host := &standaloneHost{database: database, dialect: dialect.WithSchema(""), providers: registry, cipher: cipher}
+	metadataBinding, err := metadatamodule.NewFactory().OpenModule(context.Background(), metadatasdk.ApplicationRef{InstallationID: application.RuntimeID}, standaloneMetadataHost{host})
+	if err != nil {
+		return fmt.Errorf("open Metadata Module for Integration Definitions: %w", err)
+	}
+	defer metadataBinding.Close(context.Background())
+	host.definitions = metadataBinding.DefinitionStore()
 	service, err := saasassembly.Open(context.Background(), application, host, token)
 	if err != nil {
 		return err
 	}
 	defer service.Close(context.Background())
+	switch persistence := strings.TrimSpace(os.Getenv("INTEGRATION_SUBJECT_LIFECYCLE_PERSISTENCE")); persistence {
+	case "":
+		// Subject lifecycle endpoints remain fail-closed until a deployment that
+		// shares Lifecycle's schema opts in explicitly.
+	case "shared":
+		if err := service.BindSubjectLifecyclePersistence(context.Background()); err != nil {
+			return fmt.Errorf("bind shared Subject Lifecycle persistence: %w", err)
+		}
+	default:
+		return fmt.Errorf("INTEGRATION_SUBJECT_LIFECYCLE_PERSISTENCE must be empty or shared")
+	}
 	address := strings.TrimSpace(os.Getenv("INTEGRATION_HTTP_ADDRESS"))
 	if address == "" {
 		address = ":8080"
@@ -102,6 +122,7 @@ type standaloneHost struct {
 	migrationMu sync.Mutex
 	providers   modulehost.ProviderRegistry
 	cipher      modulehost.SecretMaterialCipher
+	definitions metadatasdk.DefinitionStore
 }
 
 func (h *standaloneHost) Database() modulehost.Database                 { return h.database }
@@ -110,19 +131,26 @@ func (h *standaloneHost) Migrations() modulehost.MigrationRegistrar     { return
 func (h *standaloneHost) Providers() modulehost.ProviderRegistry        { return h.providers }
 func (h *standaloneHost) SecretCipher() modulehost.SecretMaterialCipher { return h.cipher }
 func (*standaloneHost) RuntimeTriggers() integrationsdk.TriggerSink     { return unavailableTrigger{} }
+func (h *standaloneHost) DefinitionStore() metadatasdk.DefinitionStore  { return h.definitions }
 func (*standaloneHost) Driver() string                                  { return "sqlite" }
 func (*standaloneHost) Schema() string                                  { return "" }
 func (h *standaloneHost) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {
-	if owner != "integration" {
+	if owner != "integration" && owner != "metadata" {
 		return fmt.Errorf("unsupported migration owner %q", owner)
 	}
 	h.migrationMu.Lock()
 	defer h.migrationMu.Unlock()
-	runner, err := ormmigration.NewRunner(h.database, h.dialect, ormmigration.Options{LedgerTable: "_schema_migrations"})
-	if err != nil {
-		return err
-	}
-	return runner.Apply(ctx, migrations)
+	return integrationmigration.ApplyOwnedMigrations(ctx, h.database, h.dialect, owner, migrations)
+}
+
+type standaloneMetadataHost struct{ *standaloneHost }
+
+func (h standaloneMetadataHost) Database() metadatamodulehost.Database {
+	return h.standaloneHost.database
+}
+func (h standaloneMetadataHost) Dialect() metadatamodulehost.Dialect { return h.standaloneHost.dialect }
+func (h standaloneMetadataHost) Migrations() metadatamodulehost.MigrationRegistrar {
+	return h.standaloneHost
 }
 
 type unavailableTrigger struct{}

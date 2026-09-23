@@ -147,7 +147,7 @@ func TestCalendarReadOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 						t.Fatal(err)
 					}
 					registry.Freeze()
-					host := oauthFlowHost{accountSaaSHost: accountSaaSHost{testHost{database: db, dialect: dialect.WithSchema("")}}, registry: registry}
+					host := oauthFlowHost{accountSaaSHost: accountSaaSHost{newTestHost(db, dialect.WithSchema(""))}, registry: registry}
 					if mode == "module" {
 						binding, err = moduleassembly.NewFactory().OpenModule(t.Context(), sdk.ApplicationRef{RuntimeID: "calendar-module"}, host)
 					} else {
@@ -156,11 +156,7 @@ func TestCalendarReadOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 							t.Fatal(err)
 						}
 						backend = httptest.NewServer(owner.Handler)
-						summary, e := owner.Binding.CapabilitySummary(t.Context())
-						if e != nil {
-							t.Fatal(e)
-						}
-						binding, err = NewFactory(remote.NewFactory(remote.Options{BaseURL: backend.URL, Token: "test-service-token", HTTPClient: backend.Client(), CapabilityContractSHA256: summary.Identity.ContractSHA256})).OpenSaaS(t.Context(), sdk.ApplicationRef{RuntimeID: "calendar-product"}, nil)
+						binding, err = NewFactory(remote.NewFactory(remote.Options{BaseURL: backend.URL, Token: "test-service-token", HTTPClient: backend.Client()})).OpenSaaS(t.Context(), sdk.ApplicationRef{RuntimeID: "calendar-product"}, nil)
 					}
 					if err != nil {
 						t.Fatal(err)

@@ -68,7 +68,7 @@ func accountWriteFixture(t *testing.T) (*ManagementStore, *OperationsStore, *acc
 			t.Fatal(err)
 		}
 	}
-	ops := NewOperationsStore(store.transactions, store.dialect, store.delivery, nil)
+	ops := NewOperationsStore(store.transactions, store.dialect, store.delivery, nil, newTestDefinitionStore())
 	service := app.NewAccountWriteService(store, accountwrite.Codec{}, ops, ops)
 	subject := model.ConnectionAccountSubject{WorkspaceID: "workspace-a", UserID: "user-a", Access: model.ConnectionAccountAccess{Personal: true, Workspace: true}}
 	access, err := service.AuthorizeConnectionAccountWrite(t.Context(), subject, "shared", model.ConnectionAccountWriteOperation{Operation: mailwrite.SendOperationKey, ContractSHA256: mailwrite.OperationSHA256(mailwrite.SendOperationKey)})
@@ -362,7 +362,7 @@ func TestAccountWriteFailuresNeverEnterOrStarveLegacyReconciliation(t *testing.T
 	if err := store.delivery.insertInvocation(t.Context(), "call:legacy", model.DeliveryRequest{MessageID: "legacy", WorkspaceID: subject.WorkspaceID, ConnectorKey: "crm", ConnectionKey: "shared", Operation: mailwrite.SendOperationKey}, deliveryConnection{Key: "shared", ProviderKey: "probe"}, []byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.delivery.finishInvocation(t.Context(), "call:legacy", "failed", "", ""); err != nil {
+	if err := store.delivery.finishInvocation(t.Context(), "workspace-a", "call:legacy", "failed", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	worker := NewWorkerStore(store.transactions, store.dialect, store.delivery, ops, "worker")

@@ -157,7 +157,7 @@ func TestOAuthModuleAndSaaSHTTPUseGoogleProviderAndDurableOneTimeSessions(t *tes
 					t.Fatal(err)
 				}
 				registry.Freeze()
-				host := oauthFlowHost{accountSaaSHost: accountSaaSHost{testHost{database: database, dialect: dialect.WithSchema("")}}, registry: registry}
+				host := oauthFlowHost{accountSaaSHost: accountSaaSHost{newTestHost(database, dialect.WithSchema(""))}, registry: registry}
 				if mode == "module" {
 					binding, err = moduleassembly.NewFactory().OpenModule(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "oauth-module"}, host)
 				} else {
@@ -166,11 +166,7 @@ func TestOAuthModuleAndSaaSHTTPUseGoogleProviderAndDurableOneTimeSessions(t *tes
 						t.Fatal(err)
 					}
 					backend = httptest.NewServer(service.Handler)
-					summary, e := service.Binding.CapabilitySummary(t.Context())
-					if e != nil {
-						t.Fatal(e)
-					}
-					binding, err = NewFactory(remote.NewFactory(remote.Options{BaseURL: backend.URL, Token: "oauth-service-token", HTTPClient: backend.Client(), CapabilityContractSHA256: summary.Identity.ContractSHA256})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "oauth-product"}, nil)
+					binding, err = NewFactory(remote.NewFactory(remote.Options{BaseURL: backend.URL, Token: "oauth-service-token", HTTPClient: backend.Client()})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "oauth-product"}, nil)
 				}
 				if err != nil {
 					t.Fatal(err)

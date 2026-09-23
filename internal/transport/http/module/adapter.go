@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -18,9 +17,8 @@ import (
 )
 
 type adapter struct {
-	handler    http.Handler
-	routes     []modulehttp.Route
-	operations map[string]map[string]any
+	handler http.Handler
+	routes  []modulehttp.Route
 }
 
 func (*adapter) ContractVersion() string      { return modulehttp.ContractVersion }
@@ -65,35 +63,26 @@ func NewAdapter(binding integrationsdk.Binding) (modulehttp.Adapter, error) {
 		return nil, err
 	}
 	handlers := h.handlers()
-	operations := integrationsdk.IntegrationHTTPAdapterContract().OpenAPI
 	for _, route := range routes {
 		key := strings.TrimSpace(route.Action.Key)
 		implementation, found := handlers[key]
 		if !found {
 			return nil, fmt.Errorf("Integration Action %q has no HTTP handler", key)
 		}
-		if _, found := operations[route.Pattern()]; !found {
-			return nil, fmt.Errorf("Integration Action %q has no OpenAPI operation", key)
-		}
 		if key != integrationsdk.ActionIntegrationWebhooksIngest {
 			implementation = authorizeAction(key, implementation)
 		}
 		h.mux.HandleFunc(route.Pattern(), implementation)
 		delete(handlers, key)
-		delete(operations, route.Pattern())
 	}
-	if len(handlers) != 0 || len(operations) != 0 {
-		keys := make([]string, 0, len(handlers)+len(operations))
+	if len(handlers) != 0 {
+		keys := make([]string, 0, len(handlers))
 		for key := range handlers {
-			keys = append(keys, "handler:"+key)
+			keys = append(keys, key)
 		}
-		for pattern := range operations {
-			keys = append(keys, "openapi:"+pattern)
-		}
-		sort.Strings(keys)
-		return nil, fmt.Errorf("Integration implementations have no Action manifest entries: %v", keys)
+		return nil, fmt.Errorf("Integration HTTP handlers have no Action route entries: %v", keys)
 	}
-	return &adapter{handler: h.mux, routes: routes, operations: integrationsdk.IntegrationHTTPAdapterContract().OpenAPI}, nil
+	return &adapter{handler: h.mux, routes: routes}, nil
 }
 
 func authorizeAction(permissionKey string, next http.HandlerFunc) http.HandlerFunc {

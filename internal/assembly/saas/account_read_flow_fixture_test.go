@@ -52,7 +52,7 @@ func (f *accountReadFlowFixture) open() {
 		f.t.Fatal(err)
 	}
 	r.Freeze()
-	host := oauthFlowHost{accountSaaSHost: accountSaaSHost{testHost{database: f.db, dialect: dialect.WithSchema("")}}, registry: r}
+	host := oauthFlowHost{accountSaaSHost: accountSaaSHost{newTestHost(f.db, dialect.WithSchema(""))}, registry: r}
 	if f.mode == "module" {
 		f.binding, err = moduleassembly.NewFactory().OpenModule(f.t.Context(), sdk.ApplicationRef{RuntimeID: "mail-module"}, host)
 	} else {
@@ -61,11 +61,7 @@ func (f *accountReadFlowFixture) open() {
 			f.t.Fatal(err)
 		}
 		f.backend = httptest.NewServer(f.owner.Handler)
-		summary, e := f.owner.Binding.CapabilitySummary(f.t.Context())
-		if e != nil {
-			f.t.Fatal(e)
-		}
-		f.binding, err = NewFactory(remote.NewFactory(remote.Options{BaseURL: f.backend.URL, Token: "test-service-token", HTTPClient: f.backend.Client(), CapabilityContractSHA256: summary.Identity.ContractSHA256})).OpenSaaS(f.t.Context(), sdk.ApplicationRef{RuntimeID: "mail-product"}, nil)
+		f.binding, err = NewFactory(remote.NewFactory(remote.Options{BaseURL: f.backend.URL, Token: "test-service-token", HTTPClient: f.backend.Client()})).OpenSaaS(f.t.Context(), sdk.ApplicationRef{RuntimeID: "mail-product"}, nil)
 	}
 	if err != nil {
 		f.t.Fatal(err)

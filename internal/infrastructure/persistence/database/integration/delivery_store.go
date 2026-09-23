@@ -17,11 +17,12 @@ import (
 )
 
 type DeliveryStore struct {
-	database  modulehost.Database
-	dialect   modulehost.Dialect
-	providers modulehost.ProviderRegistry
-	secrets   SecretReferenceResolver
-	webPush   *WebPushSubscriptionStore
+	database         modulehost.Database
+	dialect          modulehost.Dialect
+	providers        modulehost.ProviderRegistry
+	secrets          SecretReferenceResolver
+	webPush          *WebPushSubscriptionStore
+	subjectLifecycle *SubjectLifecyclePersistence
 }
 
 type SecretReferenceResolver interface {
@@ -50,11 +51,15 @@ type ConditionalSecretUpdateWriter interface {
 }
 
 func NewDeliveryStore(database modulehost.Database, dialect modulehost.Dialect, providers modulehost.ProviderRegistry, secrets SecretReferenceResolver, webPush ...*WebPushSubscriptionStore) *DeliveryStore {
-	store := &DeliveryStore{database: database, dialect: dialect, providers: providers, secrets: secrets}
+	store := &DeliveryStore{database: database, dialect: dialect, providers: providers, secrets: secrets, subjectLifecycle: NewSubjectLifecyclePersistence()}
 	if len(webPush) != 0 {
 		store.webPush = webPush[0]
 	}
 	return store
+}
+
+func NewDeliveryStoreWithSubjectLifecycle(database modulehost.Database, dialect modulehost.Dialect, providers modulehost.ProviderRegistry, secrets SecretReferenceResolver, webPush *WebPushSubscriptionStore, subjectLifecycle *SubjectLifecyclePersistence) *DeliveryStore {
+	return &DeliveryStore{database: database, dialect: dialect, providers: providers, secrets: secrets, webPush: webPush, subjectLifecycle: subjectLifecyclePersistence([]*SubjectLifecyclePersistence{subjectLifecycle})}
 }
 
 type deliveryConnection struct {
@@ -109,7 +114,7 @@ func (s *DeliveryStore) Accept(ctx context.Context, request integrationmodel.Del
 	if callErr != nil {
 		status, errorText = "failed", callErr.Error()
 	}
-	if err := s.finishInvocation(ctx, id, status, result.ResponseRef, errorText); err != nil {
+	if err := s.finishInvocation(ctx, request.WorkspaceID, id, status, result.ResponseRef, errorText); err != nil {
 		return integrationmodel.DeliveryReceipt{}, err
 	}
 	receipt := integrationmodel.DeliveryReceipt{MessageID: request.MessageID, InvocationID: id, Status: status, ResultRef: result.ResponseRef}
@@ -208,7 +213,7 @@ func (s *DeliveryStore) prepareInvocation(ctx context.Context, id string, reques
 }
 
 func (s *DeliveryStore) prepareInvocationWithMetadata(ctx context.Context, id string, request integrationmodel.DeliveryRequest, connection deliveryConnection, metadataValue map[string]any) error {
-	if err := guardSubjectWrite(ctx, s.database, s.dialect, request.WorkspaceID, subjectFenceReference{"connection", "", connection.Key}, subjectFenceReference{"message", "", request.MessageID}, subjectFenceReference{"row", "_integration_invocations", id}); err != nil {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, request.WorkspaceID, subjectFenceReference{"connection", "", connection.Key}, subjectFenceReference{"message", "", request.MessageID}, subjectFenceReference{"row", "_integration_invocations", id}); err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -220,7 +225,7 @@ func (s *DeliveryStore) prepareInvocationWithMetadata(ctx context.Context, id st
 	var current string
 	err = s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&current)
 	if err == nil {
-		update, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("metadata_json", string(metadata)).Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_invocations"), query.Equal("id", id))).Build()
+		update, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("metadata_json", string(metadata)).Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, request.WorkspaceID, "_integration_invocations", id), query.Equal("id", id))).Build()
 		if buildErr != nil {
 			return buildErr
 		}
@@ -246,7 +251,7 @@ func (s *DeliveryStore) prepareInvocationWithMetadata(ctx context.Context, id st
 // insertInvocation claims one identity with a unique primary-key insert. The
 // synchronous sensitive-call path must not use the delivery retry transition.
 func (s *DeliveryStore) insertInvocation(ctx context.Context, id string, request integrationmodel.DeliveryRequest, connection deliveryConnection, metadata []byte) error {
-	if err := guardSubjectWrite(ctx, s.database, s.dialect, request.WorkspaceID, subjectFenceReference{"connection", "", connection.Key}, subjectFenceReference{"message", "", request.MessageID}, subjectFenceReference{"row", "_integration_invocations", id}); err != nil {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, request.WorkspaceID, subjectFenceReference{"connection", "", connection.Key}, subjectFenceReference{"message", "", request.MessageID}, subjectFenceReference{"row", "_integration_invocations", id}); err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -268,8 +273,8 @@ func (s *DeliveryStore) insertInvocation(ctx context.Context, id string, request
 	return nil
 }
 
-func (s *DeliveryStore) finishInvocation(ctx context.Context, id, status, responseRef, errorText string) error {
-	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_invocations"), query.Equal("id", id))).Build()
+func (s *DeliveryStore) finishInvocation(ctx context.Context, workspaceID, id, status, responseRef, errorText string) error {
+	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_invocations", id), query.Equal("id", id))).Build()
 	if err != nil {
 		return err
 	}

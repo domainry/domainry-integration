@@ -15,6 +15,9 @@ type subjectLifecycleBinding struct {
 func NewSubjectLifecycleBinding(service *application.SubjectLifecycleService) sdk.SubjectLifecycle {
 	return subjectLifecycleBinding{service}
 }
+func (b subjectLifecycleBinding) BindSubjectLifecyclePersistence(ctx context.Context) error {
+	return b.service.BindSubjectLifecyclePersistence(ctx)
+}
 func (b subjectLifecycleBinding) PreviewSubject(ctx context.Context, r sdk.SubjectErasureRequest) (json.RawMessage, error) {
 	v, err := convert[model.SubjectErasureRequest](r, nil)
 	if err != nil {

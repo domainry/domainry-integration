@@ -47,7 +47,7 @@ func TestProviderCommitDeadlinePrecisionAndLeaseGuard(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, dialect := webPushTestDatabase(t, "provider-commit-deadline")
-			_, err := db.ExecContext(t.Context(), `INSERT INTO _integration_connector_provider_commits (id,workspace_id,connector_key,provider_key,connection_key,task_key,operation_key,contract_sha256,payload_json,status,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "commit", "w", "crm", "probe", "missing", "poll", "ack", "contract", `{}`, "pending", 0, tc.due, "", tc.lease, 0, tc.due, tc.due)
+			_, err := db.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "commit", "w", providerRunKindCommit, "commit", "crm", "probe", "missing", "poll", 0, "ack", "contract", `{}`, "pending", "", 0, tc.due, "", tc.lease, 0, tc.due, tc.due)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -56,7 +56,7 @@ func TestProviderCommitDeadlinePrecisionAndLeaseGuard(t *testing.T) {
 			worker.clock = func() time.Time { return time.Date(2026, 9, 11, 10, 0, 0, 123100000, time.UTC) }
 			processed, err := worker.processProviderCommits(t.Context(), 10)
 			var fence int
-			if e := db.QueryRowContext(t.Context(), "SELECT fencing_token FROM _integration_connector_provider_commits WHERE id=?", "commit").Scan(&fence); e != nil {
+			if e := db.QueryRowContext(t.Context(), "SELECT fencing_token FROM _integration_provider_runs WHERE run_kind=? AND id=?", providerRunKindCommit, "commit").Scan(&fence); e != nil {
 				t.Fatal(e)
 			}
 			if tc.claimed {

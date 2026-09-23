@@ -22,9 +22,9 @@ func (s *ManagementStore) ListAPIKeys(ctx context.Context, workspaceID string) (
 	if err != nil {
 		return nil, err
 	}
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_api_keys").Columns(
-		"api_key", "workspace_id", "name", "token_prefix", "actor_id", "role_key", "scopes_json", "status", "expires_at", "last_used_at", "created_by", "created_at", "updated_at", "disabled_at",
-	).Where(where).OrderBy(query.Ascending("api_key")).Build()
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns(
+		"secret_key", "workspace_id", "name", "display_prefix", "actor_id", "role_key", "scopes_json", "status", "expires_at", "last_used_at", "created_by", "created_at", "updated_at", "disabled_at",
+	).Where(query.And(where, query.Equal("credential_type", "api_key"))).OrderBy(query.Ascending("secret_key")).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -59,12 +59,12 @@ func scanAPIKey(row rowScanner) (integrationsdk.APIKey, error) {
 }
 
 func (s *ManagementStore) getAPIKey(ctx context.Context, workspaceID, key string) (integrationsdk.APIKey, error) {
-	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("api_key", strings.TrimSpace(key)))
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("credential_type", "api_key"), query.Equal("secret_key", strings.TrimSpace(key)))
 	if err != nil {
 		return integrationsdk.APIKey{}, err
 	}
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_api_keys").Columns(
-		"api_key", "workspace_id", "name", "token_prefix", "actor_id", "role_key", "scopes_json", "status", "expires_at", "last_used_at", "created_by", "created_at", "updated_at", "disabled_at",
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns(
+		"secret_key", "workspace_id", "name", "display_prefix", "actor_id", "role_key", "scopes_json", "status", "expires_at", "last_used_at", "created_by", "created_at", "updated_at", "disabled_at",
 	).Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.APIKey{}, err
@@ -106,7 +106,7 @@ func (s *ManagementStore) CreateAPIKey(ctx context.Context, workspaceID, actorID
 		})
 		return value, err
 	}
-	if err := guardSubjectWrite(ctx, s.database, s.dialect, workspaceID, subjectFenceReference{"subject", "", input.ActorID}); err != nil {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, workspaceID, subjectFenceReference{"subject", "", input.ActorID}); err != nil {
 		return integrationsdk.APIKeyCredential{}, err
 	}
 	workspaceID, err := requiredOwnerValue("workspace ID", workspaceID)
@@ -135,9 +135,9 @@ func (s *ManagementStore) CreateAPIKey(ctx context.Context, workspaceID, actorID
 	if len(prefix) > 12 {
 		prefix = prefix[:12]
 	}
-	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_api_keys").Columns(
-		"id", "api_key", "workspace_id", "name", "token_prefix", "token_hash", "actor_id", "role_key", "scopes_json", "status", "expires_at", "last_used_at", "created_by", "created_at", "updated_at", "disabled_at",
-	).Values(ownerID("api_key_", workspaceID, key), key, workspaceID, input.Name, prefix, tokenHash, input.ActorID, input.RoleKey, scopesJSON, "active", input.ExpiresAt, "", actorID, now, now, "").Build()
+	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_secrets").Columns(
+		"id", "secret_key", "workspace_id", "credential_type", "kind", "status", "name", "description", "value_ref", "fingerprint", "display_prefix", "lookup_hash", "actor_id", "role_key", "scopes_json", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_used_at", "last_tested_at", "last_test_status", "last_test_error",
+	).Values(ownerID("api_key_", workspaceID, key), key, workspaceID, "api_key", "api_key", "active", input.Name, nil, nil, nil, prefix, tokenHash, input.ActorID, input.RoleKey, scopesJSON, actorID, now, now, "", input.ExpiresAt, "", "", "", "", "", "").Build()
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
 	}
@@ -165,11 +165,11 @@ func (s *ManagementStore) DisableAPIKey(ctx context.Context, workspaceID, key, _
 		return integrationsdk.APIKey{}, err
 	}
 	now := ownerNow()
-	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("api_key", strings.TrimSpace(key)))
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("credential_type", "api_key"), query.Equal("secret_key", strings.TrimSpace(key)))
 	if err != nil {
 		return integrationsdk.APIKey{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_api_keys").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_api_keys"), where)).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, strings.TrimSpace(workspaceID), "_integration_secrets", ownerID("api_key_", workspaceID, key)), where)).Build()
 	if err != nil {
 		return integrationsdk.APIKey{}, err
 	}
@@ -209,11 +209,11 @@ func (s *ManagementStore) RotateAPIKey(ctx context.Context, workspaceID, key, _ 
 		prefix = prefix[:12]
 	}
 	now := ownerNow()
-	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("api_key", strings.TrimSpace(key)))
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("credential_type", "api_key"), query.Equal("secret_key", strings.TrimSpace(key)))
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_api_keys").Set("token_prefix", prefix).Set("token_hash", tokenHash).Set("status", "active").Set("disabled_at", "").Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_api_keys"), where)).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("display_prefix", prefix).Set("lookup_hash", tokenHash).Set("status", "active").Set("disabled_at", "").Set("rotated_at", now).Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, strings.TrimSpace(workspaceID), "_integration_secrets", ownerID("api_key_", workspaceID, key)), where)).Build()
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
 	}

@@ -3,35 +3,39 @@ package saas
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
-	"github.com/domainry/domainry-foundation/modulecapability"
-	"github.com/domainry/domainry-foundation/modulecapability/contracttest"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	"github.com/domainry/domainry-integration-sdk/remote"
+	"github.com/domainry/domainry-integration/internal/testsupport/definitionfixture"
+	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	_ "modernc.org/sqlite"
 )
 
 type testHost struct {
-	database *sql.DB
-	dialect  modulehost.Dialect
+	database    *sql.DB
+	dialect     modulehost.Dialect
+	definitions metadatasdk.DefinitionStore
 }
 
-func (h testHost) Database() modulehost.Database               { return h.database }
-func (h testHost) Dialect() modulehost.Dialect                 { return h.dialect }
-func (h testHost) Migrations() modulehost.MigrationRegistrar   { return testRegistrar{h} }
-func (testHost) Providers() modulehost.ProviderRegistry        { return testProviders{} }
-func (testHost) SecretCipher() modulehost.SecretMaterialCipher { return testCipher{} }
-func (testHost) RuntimeTriggers() integrationsdk.TriggerSink   { return testTrigger{} }
+func newTestHost(database *sql.DB, dialect modulehost.Dialect) testHost {
+	return testHost{database: database, dialect: dialect, definitions: definitionfixture.NewStore()}
+}
+
+func (h testHost) Database() modulehost.Database                { return h.database }
+func (h testHost) Dialect() modulehost.Dialect                  { return h.dialect }
+func (h testHost) Migrations() modulehost.MigrationRegistrar    { return testRegistrar{h} }
+func (testHost) Providers() modulehost.ProviderRegistry         { return testProviders{} }
+func (testHost) SecretCipher() modulehost.SecretMaterialCipher  { return testCipher{} }
+func (testHost) RuntimeTriggers() integrationsdk.TriggerSink    { return testTrigger{} }
+func (h testHost) DefinitionStore() metadatasdk.DefinitionStore { return h.definitions }
 
 type testTrigger struct{}
 
@@ -93,58 +97,22 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 	database.SetMaxOpenConns(1)
 	defer database.Close()
 	dialect, _ := ormdialect.New(ormdialect.SQLite)
-	service, err := Open(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, testHost{database: database, dialect: dialect.WithSchema("")}, "service-token")
+	service, err := Open(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, newTestHost(database, dialect.WithSchema("")), "service-token")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer service.Close(t.Context())
 	server := httptest.NewServer(service.Handler)
 	defer server.Close()
-	directSummary, err := service.Binding.CapabilitySummary(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	binding, err := NewFactory(remote.NewFactory(remote.Options{BaseURL: server.URL, Token: "service-token", HTTPClient: server.Client(), CapabilityContractSHA256: directSummary.Identity.ContractSHA256})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, nil)
+	binding, err := NewFactory(remote.NewFactory(remote.Options{BaseURL: server.URL, Token: "service-token", HTTPClient: server.Client()})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if binding.Descriptor().Mode != integrationsdk.DeploymentModeSaaS {
 		t.Fatalf("mode=%q", binding.Descriptor().Mode)
 	}
-	contracttest.VerifyBinding(t, binding)
-	remoteSummary, err := binding.CapabilitySummary(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	directJSON, _ := modulecapability.CanonicalJSON(directSummary)
-	remoteJSON, _ := modulecapability.CanonicalJSON(remoteSummary)
-	if string(directJSON) != string(remoteJSON) {
-		t.Fatalf("Integration Module/SaaS capability differs")
-	}
-	if _, err := NewFactory(remote.NewFactory(remote.Options{BaseURL: server.URL, Token: "service-token", HTTPClient: server.Client(), CapabilityContractSHA256: strings.Repeat("0", 64)})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, nil); err == nil {
-		t.Fatal("Integration Remote accepted a stale capability digest")
-	}
-	projectionCount := 0
-	for _, category := range remoteSummary.Categories {
-		projectionCount += category.ProjectionCount
-	}
-	if projectionCount < 50 {
-		t.Fatalf("Integration connector projections=%d", projectionCount)
-	}
-	validation := modulecapability.ValidationRequest{
-		ContractVersion: modulecapability.ValidationContractVersion, ModuleKey: "integration", CategoryKey: "integration.connections",
-		ContractSHA256: remoteSummary.Identity.ContractSHA256, Kind: "integration.connection_requirement",
-		Candidate: modulecapability.AuthoringFragment{
-			Collection: "integrations.connections", Key: "primary",
-			Value: json.RawMessage(`{"key":"primary","connector_key":"crm","provider_key":"missing"}`),
-		},
-	}
-	directResult, directErr := service.Binding.ValidateCapabilityCandidate(t.Context(), validation)
-	remoteResult, remoteErr := binding.ValidateCapabilityCandidate(t.Context(), validation)
-	directJSON, _ = modulecapability.CanonicalJSON(directResult)
-	remoteJSON, _ = modulecapability.CanonicalJSON(remoteResult)
-	if fmt.Sprint(directErr) != fmt.Sprint(remoteErr) || string(directJSON) != string(remoteJSON) {
-		t.Fatalf("Integration Module/SaaS validation differs direct=%s/%v remote=%s/%v", directJSON, directErr, remoteJSON, remoteErr)
+	if err := binding.Descriptor().Validate(); err != nil || binding.Descriptor().Audience != "runtime-a" {
+		t.Fatalf("remote descriptor=%+v err=%v", binding.Descriptor(), err)
 	}
 	provider, ok := binding.(modulehttp.Provider)
 	if !ok || len(provider.HTTPAdapters()) != 1 || len(provider.HTTPAdapters()[0].Routes()) != 51 {
@@ -187,5 +155,34 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 	readiness, err := binding.(integrationsdk.WebPushBinding).WebPushSubscriptions().Readiness(t.Context(), "workspace-a")
 	if err != nil || readiness.Status != "unconfigured" {
 		t.Fatalf("readiness=%#v err=%v", readiness, err)
+	}
+}
+
+func TestServiceBindsSubjectLifecycleOnlyAfterSharedSchemaExists(t *testing.T) {
+	database, err := sql.Open("sqlite", t.TempDir()+"/subject-lifecycle.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	database.SetMaxOpenConns(1)
+	defer database.Close()
+	dialect, _ := ormdialect.New(ormdialect.SQLite)
+	service, err := Open(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-subjects"}, newTestHost(database, dialect.WithSchema("")), "service-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(t.Context())
+	if err := service.BindSubjectLifecyclePersistence(t.Context()); err == nil {
+		t.Fatal("SaaS owner bound missing shared Subject Lifecycle schema")
+	}
+	for _, statement := range []string{
+		`CREATE TABLE _subject_requests (id TEXT NOT NULL, workspace_id TEXT NOT NULL, request_type TEXT NOT NULL, kind TEXT NOT NULL, resolved_identity TEXT NOT NULL, PRIMARY KEY(workspace_id,id))`,
+		`CREATE TABLE _subject_steps (workspace_id TEXT NOT NULL, request_id TEXT NOT NULL, owner TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, completed_at TEXT NOT NULL, PRIMARY KEY(workspace_id,request_id,owner,operation))`,
+	} {
+		if _, err := database.ExecContext(t.Context(), statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := service.BindSubjectLifecyclePersistence(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }

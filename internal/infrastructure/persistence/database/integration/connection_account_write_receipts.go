@@ -28,7 +28,7 @@ func (s *OperationsStore) FinishAccountWrite(ctx context.Context, claim model.Ac
 	if err != nil {
 		return model.ConnectionAccountWriteResult{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", outcome.Status).Set("metadata_json", string(raw)).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_invocations"), query.And(
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", outcome.Status).Set("metadata_json", string(raw)).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, claim.Subject.WorkspaceID, "_integration_invocations", claim.InvocationID), query.And(
 		query.Equal("workspace_id", claim.Subject.WorkspaceID), query.Equal("id", claim.InvocationID), query.Equal("status", "running"), query.Equal("metadata_json", string(initial)),
 	))).Build()
 	if err != nil {
@@ -91,7 +91,7 @@ func (s *OperationsStore) ReadAccountWrite(ctx context.Context, claim model.Acco
 }
 
 func (s *OperationsStore) ClaimAccountWrite(ctx context.Context, claim model.AccountWriteClaim) (model.ConnectionAccountWriteResult, bool, error) {
-	if err := guardSubjectWrite(ctx, s.database, s.dialect, claim.Subject.WorkspaceID, subjectFenceReference{"subject", "", claim.Subject.UserID}); err != nil {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, claim.Subject.WorkspaceID, subjectFenceReference{"subject", "", claim.Subject.UserID}); err != nil {
 		return model.ConnectionAccountWriteResult{}, false, err
 	}
 	current, err := s.ReadAccountWrite(ctx, claim)

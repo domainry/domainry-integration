@@ -57,7 +57,7 @@ func accountReadFixture(t *testing.T) (*ManagementStore, *OperationsStore, *acco
 			t.Fatal(err)
 		}
 	}
-	ops := NewOperationsStore(store.transactions, store.dialect, store.delivery, nil)
+	ops := NewOperationsStore(store.transactions, store.dialect, store.delivery, nil, newTestDefinitionStore())
 	service := app.NewAccountReadService(store, ops)
 	subject := model.ConnectionAccountSubject{WorkspaceID: "workspace-a", UserID: "user-a", Access: model.ConnectionAccountAccess{Personal: true, Workspace: true}}
 	request := model.ConnectionAccountReadRequest{RequestID: "read-1", Operation: "lookup", ContractSHA256: strings.Repeat("c", 64), Payload: json.RawMessage(`{"query":"private query text"}`)}

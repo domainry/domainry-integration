@@ -14,17 +14,45 @@ import (
 
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	model "github.com/domainry/domainry-integration/internal/domain/integration/model"
+	lifecyclemodel "github.com/domainry/domainry-lifecycle-sdk/model"
+	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	"github.com/domainry/domainry-orm/query"
-	"github.com/domainry/domainry-orm/sqlhost"
 )
 
 type SubjectLifecycleStore struct {
-	db      modulehost.Database
-	dialect modulehost.Dialect
+	db               modulehost.Database
+	dialect          modulehost.Dialect
+	subjectLifecycle *SubjectLifecyclePersistence
+	definitions      metadatasdk.DefinitionStore
 }
 
-func NewSubjectLifecycleStore(db modulehost.Database, dialect modulehost.Dialect) *SubjectLifecycleStore {
-	return &SubjectLifecycleStore{db: db, dialect: dialect}
+func NewSubjectLifecycleStore(db modulehost.Database, dialect modulehost.Dialect, definitions metadatasdk.DefinitionStore, subjectLifecycle ...*SubjectLifecyclePersistence) *SubjectLifecycleStore {
+	return &SubjectLifecycleStore{db: db, dialect: dialect, definitions: definitions, subjectLifecycle: subjectLifecyclePersistence(subjectLifecycle)}
+}
+
+func (s *SubjectLifecycleStore) BindSubjectLifecyclePersistence(ctx context.Context) error {
+	for table, columns := range map[string][]string{
+		"_subject_requests": {"workspace_id", "id", "request_type", "kind", "resolved_identity"},
+		"_subject_steps":    {"workspace_id", "request_id", "owner", "operation", "payload_json", "completed_at"},
+	} {
+		statement, args, err := query.NewSelectBuilder(s.dialect, table).Columns(columns...).Where(query.AlwaysFalse()).Limit(1).Build()
+		if err != nil {
+			return err
+		}
+		rows, err := s.db.QueryContext(ctx, statement, args...)
+		if err != nil {
+			return fmt.Errorf("Integration shared subject lifecycle table %s is unavailable: %w", table, err)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+	}
+	s.subjectLifecycle.Bind()
+	return nil
+}
+
+func (s *SubjectLifecycleStore) SubjectLifecyclePersistenceBound() bool {
+	return s != nil && s.subjectLifecycle.Bound()
 }
 
 type subjectRow struct {
@@ -37,6 +65,16 @@ type subjectPlan struct {
 	SecretKeys     []string                    `json:"secret_keys"`
 	ExternalFences []subjectExternalFence      `json:"external_fences"`
 	Rows           []subjectRow                `json:"rows"`
+	Fences         []subjectFenceReference     `json:"fences"`
+}
+
+type subjectStepQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type subjectStepExecutor interface {
+	subjectStepQueryer
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 type subjectSpec struct {
 	table, status string
@@ -51,19 +89,15 @@ var subjectSpecs = []subjectSpec{
 	{table: "_integration_connections", status: "status", values: map[string]any{"name": "", "config_json": "{}", "secret_refs_json": "{}", "created_by": "anonymous", "status": "revoked"}},
 	{table: "_integration_connection_account_secrets", erase: true},
 	{table: "_integration_connection_grants", erase: true},
-	{table: "_integration_connector_provider_states", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "status": "cancelled", "lease_owner": "", "lease_expires_at": "", "due_at": "", "last_error_code": "integration.subject_erased"}},
-	{table: "_integration_connector_provider_commits", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "status": "cancelled", "lease_owner": "", "lease_expires_at": "", "due_at": ""}},
-	{table: "_integration_credential_refresh_leases", status: "lease_expires_at", erase: true},
+	{table: "_integration_provider_runs", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "status": "cancelled", "lease_owner": "", "lease_expires_at": "", "due_at": "", "last_error_code": "integration.subject_erased"}},
 	{table: "_integration_webhook_subscriptions", status: "status", values: map[string]any{"name": "", "description": "", "event_types_json": "[]", "created_by": "anonymous", "status": "disabled"}},
 	{table: "_integration_oauth_sessions", status: "status", busy: []string{"exchanging"}, erase: true},
 	{table: "_integration_web_push_subscriptions", status: "status", erase: true},
-	{table: "_integration_api_keys", status: "status", erase: true},
 	{table: "_integration_external_identities", status: "status", erase: true},
 	{table: "_integration_secrets", status: "status", erase: true},
 	{table: "_integration_secret_materials", erase: true},
 	{table: "_integration_invocations", status: "status", busy: []string{"running", "processing", "reconciling"}, values: map[string]any{"metadata_json": "{}", "request_ref": "", "response_ref": "", "error": "", "status": "failed"}},
-	{table: "_integration_events", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "error": "", "status": "cancelled", "next_retry_at": "", "lease_owner": "", "lease_expires_at": ""}},
-	{table: "_integration_event_mapping_intents", status: "status", values: map[string]any{"payload_json": "{}", "status": "cancelled"}},
+	{table: "_integration_events", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "mapping_key": "", "target_type": "", "execution_json": "{}", "error": "", "status": "cancelled", "next_retry_at": "", "lease_owner": "", "lease_expires_at": ""}},
 }
 
 func subjectIn(column string, ids []string) query.Predicate {
@@ -101,30 +135,81 @@ func normalizeSubjectRequest(r model.SubjectErasureRequest) model.SubjectErasure
 	r.EventIDs = slices.Compact(r.EventIDs)
 	return r
 }
-func (s *SubjectLifecycleStore) receipt(ctx context.Context, db sqlhost.Queryer, r model.SubjectErasureRequest) (string, string, error) {
-	stmt, args, err := query.NewWorkspaceSelectBuilder(s.dialect, "_integration_subject_erasure_receipts", r.WorkspaceID).Columns("subject_id", "plan_json", "result_json").Where(query.Equal("request_id", r.RequestID)).Build()
+func (s *SubjectLifecycleStore) sharedStep(ctx context.Context, db subjectStepQueryer, r model.SubjectErasureRequest, operation string) (json.RawMessage, bool, error) {
+	stmt, args, err := query.NewWorkspaceSelectBuilder(s.dialect, sharedSubjectExecutionStepsTable, r.WorkspaceID).Columns("payload_json").Where(query.And(
+		query.Equal("request_id", r.RequestID),
+		query.Equal("owner", integrationSubjectOwner),
+		query.Equal("operation", operation),
+	)).Build()
 	if err != nil {
-		return "", "", err
+		return nil, false, err
 	}
-	var subject, p, result string
-	err = db.QueryRowContext(ctx, stmt, args...).Scan(&subject, &p, &result)
-	if err == nil && subject != r.SubjectID {
-		return "", "", fmt.Errorf("Integration erasure receipt subject mismatch")
+	var raw string
+	if err = db.QueryRowContext(ctx, stmt, args...).Scan(&raw); errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	} else if err != nil {
+		return nil, false, err
 	}
-	return p, result, err
+	var step lifecyclemodel.SubjectExecutionStep
+	if json.Unmarshal([]byte(raw), &step) != nil || step.WorkspaceID != r.WorkspaceID || step.RequestID != r.RequestID || step.Owner != integrationSubjectOwner || step.Operation != operation || !json.Valid(step.Payload) {
+		return nil, false, fmt.Errorf("Integration shared subject execution step invalid")
+	}
+	return append(json.RawMessage(nil), step.Payload...), true, nil
 }
 
-func subjectReceiptPlan(r model.SubjectErasureRequest, saved string) (json.RawMessage, error) {
+func (s *SubjectLifecycleStore) saveSharedStep(ctx context.Context, db subjectStepExecutor, r model.SubjectErasureRequest, operation string, payload json.RawMessage) error {
+	if !json.Valid(payload) {
+		return fmt.Errorf("Integration shared subject execution payload invalid")
+	}
+	if previous, found, err := s.sharedStep(ctx, db, r, operation); err != nil {
+		return err
+	} else if found {
+		if !bytes.Equal(previous, payload) {
+			return fmt.Errorf("Integration shared subject execution step payload conflict")
+		}
+		return nil
+	}
+	completedAt := time.Now().UTC()
+	step := lifecyclemodel.SubjectExecutionStep{WorkspaceID: r.WorkspaceID, RequestID: r.RequestID, Owner: integrationSubjectOwner, Operation: operation, Payload: append(json.RawMessage(nil), payload...), CompletedAt: completedAt}
+	raw, err := json.Marshal(step)
+	if err != nil {
+		return err
+	}
+	stmt, args, err := query.NewWorkspaceInsertBuilder(s.dialect, sharedSubjectExecutionStepsTable, r.WorkspaceID).
+		Columns("request_id", "owner", "operation", "payload_json", "completed_at").
+		Values(r.RequestID, integrationSubjectOwner, operation, string(raw), completedAt.Format(time.RFC3339Nano)).Build()
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, stmt, args...)
+	return err
+}
+
+func (s *SubjectLifecycleStore) requireSharedFence(ctx context.Context, db subjectStepQueryer, r model.SubjectErasureRequest) error {
+	stmt, args, err := sharedSubjectFenceRequests(s.dialect, r.WorkspaceID, r.SubjectID, r.RequestID).Build()
+	if err != nil {
+		return err
+	}
+	var requestID string
+	if err = db.QueryRowContext(ctx, stmt, args...).Scan(&requestID); errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("Integration erasure requires Lifecycle fence")
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
+
+func subjectReceiptPlan(r model.SubjectErasureRequest, saved json.RawMessage) (json.RawMessage, error) {
 	var p subjectPlan
-	if json.Unmarshal([]byte(saved), &p) != nil {
-		return nil, fmt.Errorf("Integration source receipt invalid")
+	if json.Unmarshal(saved, &p) != nil {
+		return nil, fmt.Errorf("Integration shared erasure plan invalid")
 	}
 	expected, _ := json.Marshal(normalizeSubjectRequest(r))
 	actual, _ := json.Marshal(p.Request)
 	if !bytes.Equal(expected, actual) {
 		return nil, fmt.Errorf("Integration erasure request provenance conflicts")
 	}
-	return json.RawMessage(saved), nil
+	return append(json.RawMessage(nil), saved...), nil
 }
 func (s *SubjectLifecycleStore) selectIDs(ctx context.Context, tx *sql.Tx, r model.SubjectErasureRequest, sp subjectSpec, predicate query.Predicate, prepare bool) ([]subjectRow, error) {
 	cols := []string{"id"}
@@ -153,12 +238,6 @@ func (s *SubjectLifecycleStore) selectIDs(ctx context.Context, tx *sql.Tx, r mod
 		}
 		if prepare && slices.Contains(sp.busy, status.String) {
 			return nil, fmt.Errorf("integration.subject_busy: %s", sp.table)
-		}
-		if prepare && sp.table == "_integration_credential_refresh_leases" && status.String != "" {
-			deadline, e := time.Parse(time.RFC3339Nano, status.String)
-			if e != nil || deadline.After(time.Now().UTC()) {
-				return nil, fmt.Errorf("integration.subject_busy: credential refresh")
-			}
 		}
 		result = append(result, subjectRow{sp.table, id})
 		if len(result) > 10000 {
@@ -304,16 +383,16 @@ func (s *SubjectLifecycleStore) collect(ctx context.Context, tx *sql.Tx, r model
 		switch sp.table {
 		case "_integration_oauth_sessions", "_integration_web_push_subscriptions":
 			predicate = query.Equal("user_id", r.SubjectID)
-		case "_integration_api_keys", "_integration_external_identities":
+		case "_integration_external_identities":
 			predicate = query.Equal("actor_id", r.SubjectID)
-		case "_integration_secrets", "_integration_secret_materials":
+		case "_integration_secrets":
+			predicate = query.Or(subjectIn("secret_key", p.SecretKeys), query.And(query.Equal("credential_type", "api_key"), query.Equal("actor_id", r.SubjectID)))
+		case "_integration_secret_materials":
 			predicate = subjectIn("secret_key", p.SecretKeys)
 		case "_integration_invocations":
 			predicate = query.Or(predicate, subjectIn("id", actorInvocations), subjectIn("request_ref", r.PublicationMessageIDs), subjectIn("event_id", eventIDs), subjectResources(r.Resources))
 		case "_integration_events":
 			predicate = subjectIn("id", eventIDs)
-		case "_integration_event_mapping_intents":
-			predicate = subjectIn("event_id", eventIDs)
 		}
 		found, e := s.selectIDs(ctx, tx, r, sp, predicate, prepare)
 		if e != nil {
@@ -338,87 +417,73 @@ func (s *SubjectLifecycleStore) PreviewSubject(ctx context.Context, r model.Subj
 	}
 	return json.Marshal(map[string]any{"owner": "integration", "records": len(p.Rows), "personal_connections": len(p.ConnectionKeys), "private_credentials": len(p.SecretKeys)})
 }
-func (s *SubjectLifecycleStore) fence(ctx context.Context, tx *sql.Tx, r model.SubjectErasureRequest, kind, object, id string) error {
-	stmt, args, err := query.NewWorkspaceSelectBuilder(s.dialect, "_integration_subject_erasure_fences", r.WorkspaceID).Columns("id").Where(query.And(query.Equal("kind", kind), query.Equal("object_key", object), query.Equal("resource_id", id))).Build()
-	if err != nil {
-		return err
+
+func subjectPlanFences(p subjectPlan) []subjectFenceReference {
+	refs := make([]subjectFenceReference, 0, len(p.ConnectionKeys)+len(p.SecretKeys)+len(p.Request.PublicationMessageIDs)+len(p.Request.Resources)+len(p.ExternalFences)+len(p.Rows))
+	for _, key := range p.ConnectionKeys {
+		refs = append(refs, subjectFenceReference{Kind: "connection", ID: key})
 	}
-	var found string
-	err = tx.QueryRowContext(ctx, stmt, args...).Scan(&found)
-	if err == nil {
-		return nil
+	for _, key := range p.SecretKeys {
+		refs = append(refs, subjectFenceReference{Kind: "secret", ID: key})
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return err
+	for _, id := range p.Request.PublicationMessageIDs {
+		refs = append(refs, subjectFenceReference{Kind: "message", ID: id})
 	}
-	stmt, args, err = query.NewWorkspaceInsertBuilder(s.dialect, "_integration_subject_erasure_fences", r.WorkspaceID).Columns("id", "kind", "object_key", "resource_id", "request_id").Values(ownerID("erasure-fence:", r.WorkspaceID, kind+"\x00"+object+"\x00"+id), kind, object, id, r.RequestID).Build()
-	if err != nil {
-		return err
+	for _, ref := range p.Request.Resources {
+		refs = append(refs, subjectFenceReference{Kind: "resource", Object: ref.ObjectKey, ID: ref.RecordID})
 	}
-	_, err = tx.ExecContext(ctx, stmt, args...)
-	return err
+	for _, ref := range p.ExternalFences {
+		refs = append(refs, subjectFenceReference{Kind: "external", Object: ref.Provider, ID: ref.SubjectSHA256})
+	}
+	for _, row := range p.Rows {
+		refs = append(refs, subjectFenceReference{Kind: "row", Object: row.Table, ID: row.ID})
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Kind != refs[j].Kind {
+			return refs[i].Kind < refs[j].Kind
+		}
+		if refs[i].Object != refs[j].Object {
+			return refs[i].Object < refs[j].Object
+		}
+		return refs[i].ID < refs[j].ID
+	})
+	return slices.Compact(refs)
 }
+
 func (s *SubjectLifecycleStore) PrepareSubjectErasure(ctx context.Context, r model.SubjectErasureRequest) (json.RawMessage, error) {
-	if saved, _, err := s.receipt(ctx, s.db, r); err == nil {
-		return subjectReceiptPlan(r, saved)
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	if !s.SubjectLifecyclePersistenceBound() {
+		return nil, fmt.Errorf("Integration shared subject lifecycle persistence is not bound")
+	}
+	if saved, found, err := s.sharedStep(ctx, s.db, r, subjectErasePlanOperation); err != nil {
 		return nil, err
+	} else if found {
+		return subjectReceiptPlan(r, saved)
 	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if saved, _, err := s.receipt(ctx, tx, r); err == nil {
+	if saved, found, err := s.sharedStep(ctx, tx, r, subjectErasePlanOperation); err != nil {
+		return nil, err
+	} else if found {
 		return subjectReceiptPlan(r, saved)
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	}
+	if err = s.requireSharedFence(ctx, tx, r); err != nil {
 		return nil, err
 	}
 	p, err := s.collect(ctx, tx, r, true)
 	if err != nil {
 		return nil, err
 	}
+	p.Fences = subjectPlanFences(p)
 	raw, err := json.Marshal(p)
 	if err != nil {
 		return nil, err
 	}
-	if err = s.fence(ctx, tx, r, "subject", "", r.SubjectID); err != nil {
-		return nil, err
-	}
-	for _, key := range p.ConnectionKeys {
-		if err = s.fence(ctx, tx, r, "connection", "", key); err != nil {
-			return nil, err
-		}
-	}
-	for _, key := range p.SecretKeys {
-		if err = s.fence(ctx, tx, r, "secret", "", key); err != nil {
-			return nil, err
-		}
-	}
-	for _, id := range r.PublicationMessageIDs {
-		if err = s.fence(ctx, tx, r, "message", "", id); err != nil {
-			return nil, err
-		}
-	}
-	for _, ref := range r.Resources {
-		if err = s.fence(ctx, tx, r, "resource", ref.ObjectKey, ref.RecordID); err != nil {
-			return nil, err
-		}
-	}
-	for _, ref := range p.ExternalFences {
-		if err = s.fence(ctx, tx, r, "external", ref.Provider, ref.SubjectSHA256); err != nil {
-			return nil, err
-		}
-	}
 	for _, row := range p.Rows {
-		if err = s.fence(ctx, tx, r, "row", row.Table, row.ID); err != nil {
-			return nil, err
-		}
 		for _, sp := range subjectSpecs {
 			if sp.table != row.Table || sp.status == "" {
-				continue
-			}
-			if sp.table == "_integration_credential_refresh_leases" {
 				continue
 			}
 			b := query.NewWorkspaceUpdateBuilder(s.dialect, sp.table, r.WorkspaceID).Set(sp.status, "erasing").Where(query.Equal("id", row.ID))
@@ -434,11 +499,7 @@ func (s *SubjectLifecycleStore) PrepareSubjectErasure(ctx context.Context, r mod
 			}
 		}
 	}
-	stmt, args, err := query.NewWorkspaceInsertBuilder(s.dialect, "_integration_subject_erasure_receipts", r.WorkspaceID).Columns("id", "request_id", "subject_id", "plan_json", "result_json").Values(ownerID("erasure-receipt:", r.WorkspaceID, r.RequestID), r.RequestID, r.SubjectID, string(raw), "").Build()
-	if err != nil {
-		return nil, err
-	}
-	if _, err = tx.ExecContext(ctx, stmt, args...); err != nil {
+	if err = s.saveSharedStep(ctx, tx, r, subjectErasePlanOperation, raw); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -447,6 +508,9 @@ func (s *SubjectLifecycleStore) PrepareSubjectErasure(ctx context.Context, r mod
 	return raw, nil
 }
 func (s *SubjectLifecycleStore) ErasePreparedSubject(ctx context.Context, r model.SubjectErasureRequest, raw json.RawMessage) (json.RawMessage, error) {
+	if !s.SubjectLifecyclePersistenceBound() {
+		return nil, fmt.Errorf("Integration shared subject lifecycle persistence is not bound")
+	}
 	var p subjectPlan
 	if json.Unmarshal(raw, &p) != nil {
 		return nil, fmt.Errorf("Integration erasure plan invalid")
@@ -465,15 +529,17 @@ func (s *SubjectLifecycleStore) ErasePreparedSubject(ctx context.Context, r mode
 		return nil, err
 	}
 	defer tx.Rollback()
-	saved, result, err := s.receipt(ctx, tx, r)
+	saved, found, err := s.sharedStep(ctx, tx, r, subjectErasePlanOperation)
 	if err != nil {
 		return nil, err
 	}
-	if !bytes.Equal([]byte(saved), raw) {
-		return nil, fmt.Errorf("Integration erasure plan differs from source receipt")
+	if !found || !bytes.Equal(saved, raw) {
+		return nil, fmt.Errorf("Integration erasure plan differs from shared Lifecycle step")
 	}
-	if result != "" {
-		return json.RawMessage(result), nil
+	if result, completed, err := s.sharedStep(ctx, tx, r, subjectEraseOperation); err != nil {
+		return nil, err
+	} else if completed {
+		return result, nil
 	}
 	for _, row := range p.Rows {
 		var sp *subjectSpec
@@ -513,11 +579,7 @@ func (s *SubjectLifecycleStore) ErasePreparedSubject(ctx context.Context, r mode
 	if err != nil {
 		return nil, err
 	}
-	stmt, args, err := query.NewWorkspaceUpdateBuilder(s.dialect, "_integration_subject_erasure_receipts", r.WorkspaceID).Set("result_json", string(out)).Where(query.Equal("request_id", r.RequestID)).Build()
-	if err != nil {
-		return nil, err
-	}
-	if _, err = tx.ExecContext(ctx, stmt, args...); err != nil {
+	if err = s.saveSharedStep(ctx, tx, r, subjectEraseOperation, out); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {

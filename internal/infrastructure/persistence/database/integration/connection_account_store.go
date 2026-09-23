@@ -207,7 +207,7 @@ func (s *ManagementStore) TestConnectionAccount(ctx context.Context, subject int
 }
 
 func (s *ManagementStore) RegisterConnectionAccount(ctx context.Context, workspaceID, key, actorID string, input integrationsdk.ConnectionAccountRegistration) (integrationsdk.ConnectionAccount, error) {
-	if err := guardSubjectWrite(ctx, s.database, s.dialect, workspaceID, subjectFenceReference{"subject", "", input.OwnerUserID}, subjectFenceReference{"connection", "", key}); err != nil {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, workspaceID, subjectFenceReference{"subject", "", input.OwnerUserID}, subjectFenceReference{"connection", "", key}); err != nil {
 		return integrationsdk.ConnectionAccount{}, err
 	}
 	workspaceID, key, actorID = strings.TrimSpace(workspaceID), strings.TrimSpace(key), strings.TrimSpace(actorID)
@@ -312,7 +312,7 @@ func (s *ManagementStore) syncConnectionAccountSecrets(ctx context.Context, conn
 		return err
 	}
 	for _, key := range keys {
-		statement, values, buildErr := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status", "value_ref").Where(query.And(query.Equal("workspace_id", connection.WorkspaceID), query.Equal("secret_key", key))).Limit(1).Build()
+		statement, values, buildErr := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status", "value_ref").Where(query.And(query.Equal("workspace_id", connection.WorkspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", key))).Limit(1).Build()
 		if buildErr != nil {
 			return buildErr
 		}
@@ -379,7 +379,7 @@ func (s *ManagementStore) RevokeConnectionAccount(ctx context.Context, subject i
 	}
 	now := ownerNow()
 	connectionWhere := query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("connection_key", account.Key), query.Equal("updated_at", expectedUpdatedAt))
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", "revoked").Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_connections"), connectionWhere)).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", "revoked").Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, subject.WorkspaceID, "_integration_connections", ownerID("connection_", subject.WorkspaceID, account.Key)), connectionWhere)).Build()
 	if err != nil {
 		return integrationsdk.ConnectionAccount{}, err
 	}
@@ -415,8 +415,8 @@ func (s *ManagementStore) RevokeConnectionAccount(ctx context.Context, subject i
 		return integrationsdk.ConnectionAccount{}, err
 	}
 	for _, secret := range secrets {
-		secretWhere := query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("secret_key", secret), query.Equal("status", "active"))
-		update, values, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("status", "revoked").Set("revoked_at", now).Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_secrets"), secretWhere)).Build()
+		secretWhere := query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", secret), query.Equal("status", "active"))
+		update, values, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("status", "revoked").Set("revoked_at", now).Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, subject.WorkspaceID, "_integration_secrets", ownerID("secret_", subject.WorkspaceID, secret)), secretWhere)).Build()
 		if buildErr != nil {
 			return integrationsdk.ConnectionAccount{}, buildErr
 		}

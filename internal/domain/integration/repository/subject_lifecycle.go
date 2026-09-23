@@ -11,3 +11,8 @@ type SubjectLifecycleRepository interface {
 	PrepareSubjectErasure(context.Context, model.SubjectErasureRequest) (json.RawMessage, error)
 	ErasePreparedSubject(context.Context, model.SubjectErasureRequest, json.RawMessage) (json.RawMessage, error)
 }
+
+type SubjectLifecyclePersistenceBinder interface {
+	BindSubjectLifecyclePersistence(context.Context) error
+	SubjectLifecyclePersistenceBound() bool
+}

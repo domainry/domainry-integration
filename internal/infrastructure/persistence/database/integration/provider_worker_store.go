@@ -17,17 +17,24 @@ import (
 	"github.com/domainry/domainry-orm/query"
 )
 
+const (
+	providerRunTable      = "_integration_provider_runs"
+	providerRunKindState  = "state"
+	providerRunKindCommit = "commit"
+)
+
 type WorkerStore struct {
-	database   modulehost.Database
-	dialect    modulehost.Dialect
-	delivery   *DeliveryStore
-	operations *OperationsStore
-	workerID   string
-	clock      func() time.Time
+	database         modulehost.Database
+	dialect          modulehost.Dialect
+	delivery         *DeliveryStore
+	operations       *OperationsStore
+	workerID         string
+	clock            func() time.Time
+	subjectLifecycle *SubjectLifecyclePersistence
 }
 
-func NewWorkerStore(database modulehost.Database, dialect modulehost.Dialect, delivery *DeliveryStore, operations *OperationsStore, workerID string) *WorkerStore {
-	return &WorkerStore{database: database, dialect: dialect, delivery: delivery, operations: operations, workerID: strings.TrimSpace(workerID) + ":integration"}
+func NewWorkerStore(database modulehost.Database, dialect modulehost.Dialect, delivery *DeliveryStore, operations *OperationsStore, workerID string, subjectLifecycle ...*SubjectLifecyclePersistence) *WorkerStore {
+	return &WorkerStore{database: database, dialect: dialect, delivery: delivery, operations: operations, workerID: strings.TrimSpace(workerID) + ":integration", subjectLifecycle: subjectLifecyclePersistence(subjectLifecycle)}
 }
 
 func (s *WorkerStore) ProcessDueEvents(ctx context.Context, limit int) (int, error) {
@@ -93,7 +100,7 @@ func (s *WorkerStore) synchronizeProviderTasks(ctx context.Context) error {
 }
 
 func (s *WorkerStore) upsertProviderTask(ctx context.Context, connection connector.Connection, task connector.BackgroundTaskDescriptor) error {
-	lookup, args, err := query.NewSelectBuilder(s.dialect, "_integration_connector_provider_states").Columns("id", "state_version").Where(query.And(query.Equal("workspace_id", connection.WorkspaceID), query.Equal("connection_key", connection.Key), query.Equal("task_key", task.Key))).Build()
+	lookup, args, err := query.NewSelectBuilder(s.dialect, providerRunTable).Columns("id", "state_version").Where(query.And(query.Equal("run_kind", providerRunKindState), query.Equal("workspace_id", connection.WorkspaceID), query.Equal("connection_key", connection.Key), query.Equal("run_key", task.Key))).Build()
 	if err != nil {
 		return err
 	}
@@ -103,7 +110,9 @@ func (s *WorkerStore) upsertProviderTask(ctx context.Context, connection connect
 	now := s.now().Format(time.RFC3339Nano)
 	if err == sql.ErrNoRows {
 		id = ownerID("provider_task_", connection.WorkspaceID, connection.Key+"\x00"+task.Key)
-		statement, values, buildErr := query.NewInsertBuilder(s.dialect, "_integration_connector_provider_states").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "payload_json", "status", "due_at", "last_error_code", "attempt_count", "lease_owner", "lease_expires_at", "fencing_token", "updated_at").Values(id, connection.WorkspaceID, connection.ConnectorKey, connection.ProviderKey, connection.Key, task.Key, task.StateVersion, `{}`, "ready", now, "", 0, "", "", 0, now).Build()
+		statement, values, buildErr := query.NewInsertBuilder(s.dialect, providerRunTable).
+			Columns("id", "workspace_id", "run_kind", "run_key", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "operation_key", "contract_sha256", "payload_json", "status", "last_error_code", "attempt_count", "due_at", "lease_owner", "lease_expires_at", "fencing_token", "created_at", "updated_at").
+			Values(id, connection.WorkspaceID, providerRunKindState, task.Key, connection.ConnectorKey, connection.ProviderKey, connection.Key, task.Key, task.StateVersion, "", "", `{}`, "ready", "", 0, now, "", "", 0, now, now).Build()
 		if buildErr != nil {
 			return buildErr
 		}
@@ -116,7 +125,7 @@ func (s *WorkerStore) upsertProviderTask(ctx context.Context, connection connect
 	if stateVersion == task.StateVersion {
 		return nil
 	}
-	statement, values, err := query.NewUpdateBuilder(s.dialect, "_integration_connector_provider_states").Set("state_version", task.StateVersion).Set("payload_json", `{}`).Set("status", "ready").Set("due_at", now).Set("last_error_code", "").Set("attempt_count", 0).Set("lease_owner", "").Set("lease_expires_at", "").Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_connector_provider_states"), query.Equal("id", id))).Build()
+	statement, values, err := query.NewUpdateBuilder(s.dialect, providerRunTable).Set("state_version", task.StateVersion).Set("payload_json", `{}`).Set("status", "ready").Set("due_at", now).Set("last_error_code", "").Set("attempt_count", 0).Set("lease_owner", "").Set("lease_expires_at", "").Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, connection.WorkspaceID, providerRunTable, id), query.Equal("run_kind", providerRunKindState), query.Equal("id", id))).Build()
 	if err != nil {
 		return err
 	}
@@ -138,8 +147,8 @@ func (s *WorkerStore) processProviderTasks(ctx context.Context, limit int) (int,
 	}
 	now := s.now()
 	nowText := providerDeadlineScanEnd(now)
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_connector_provider_states").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "payload_json", "status", "attempt_count", "fencing_token", "due_at", "lease_expires_at").Where(query.And(
-		query.In("status", "ready", "failed"), query.LessThan("due_at", nowText), query.Or(query.Equal("lease_expires_at", ""), query.LessThan("lease_expires_at", nowText)),
+	statement, args, err := query.NewSelectBuilder(s.dialect, providerRunTable).Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "payload_json", "status", "attempt_count", "fencing_token", "due_at", "lease_expires_at").Where(query.And(
+		query.Equal("run_kind", providerRunKindState), query.In("status", "ready", "failed"), query.LessThan("due_at", nowText), query.Or(query.Equal("lease_expires_at", ""), query.LessThan("lease_expires_at", nowText)),
 	)).OrderBy(query.Ascending("due_at")).Limit(limit).Build()
 	if err != nil {
 		return 0, err
@@ -191,7 +200,7 @@ func (s *WorkerStore) processProviderTasks(ctx context.Context, limit int) (int,
 }
 
 func (s *WorkerStore) claimProviderTask(ctx context.Context, candidate providerTaskCandidate, now time.Time) (bool, error) {
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connector_provider_states").Set("status", "processing").Set("lease_owner", s.workerID).Set("lease_expires_at", now.Add(time.Minute).Format(time.RFC3339Nano)).Set("fencing_token", candidate.fencingToken+1).Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_connector_provider_states"), query.And(query.Equal("id", candidate.id), query.Equal("status", candidate.status), query.Equal("fencing_token", candidate.fencingToken), query.Equal("due_at", candidate.dueAt), query.Equal("lease_expires_at", candidate.leaseExpiresAt)))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, providerRunTable).Set("status", "processing").Set("lease_owner", s.workerID).Set("lease_expires_at", now.Add(time.Minute).Format(time.RFC3339Nano)).Set("fencing_token", candidate.fencingToken+1).Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, providerRunTable, candidate.id), query.And(query.Equal("run_kind", providerRunKindState), query.Equal("id", candidate.id), query.Equal("status", candidate.status), query.Equal("fencing_token", candidate.fencingToken), query.Equal("due_at", candidate.dueAt), query.Equal("lease_expires_at", candidate.leaseExpiresAt)))).Build()
 	if err != nil {
 		return false, err
 	}
@@ -253,7 +262,7 @@ func (s *WorkerStore) commitProviderTaskResult(ctx context.Context, candidate pr
 	if dueAt.IsZero() {
 		dueAt = now.Add(5 * time.Minute)
 	}
-	update, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connector_provider_states").Set("payload_json", string(result.State)).Set("status", "ready").Set("due_at", dueAt.UTC().Format(time.RFC3339Nano)).Set("last_error_code", "").Set("attempt_count", 0).Set("lease_owner", "").Set("lease_expires_at", "").Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_connector_provider_states"), query.And(query.Equal("id", candidate.id), query.Equal("lease_owner", s.workerID), query.Equal("fencing_token", candidate.fencingToken+1)))).Build()
+	update, args, err := query.NewUpdateBuilder(s.dialect, providerRunTable).Set("payload_json", string(result.State)).Set("status", "ready").Set("due_at", dueAt.UTC().Format(time.RFC3339Nano)).Set("last_error_code", "").Set("attempt_count", 0).Set("lease_owner", "").Set("lease_expires_at", "").Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, providerRunTable, candidate.id), query.And(query.Equal("run_kind", providerRunKindState), query.Equal("id", candidate.id), query.Equal("lease_owner", s.workerID), query.Equal("fencing_token", candidate.fencingToken+1)))).Build()
 	if err != nil {
 		return err
 	}
@@ -283,7 +292,7 @@ func (s *WorkerStore) commitProviderTaskResult(ctx context.Context, candidate pr
 		if lookupErr != sql.ErrNoRows {
 			return lookupErr
 		}
-		insert, values, err := query.NewInsertBuilder(s.dialect, "_integration_events").Columns("id", "workspace_id", "provider", "event_type", "external_id", "status", "payload_json", "error", "attempt_count", "next_retry_at", "last_attempt_at", "lease_owner", "lease_expires_at", "fencing_token", "received_at", "updated_at").Values(eventID, candidate.workspaceID, candidate.providerKey, event.EventType, event.ExternalID, "received", string(payload), nil, 0, "", "", "", "", 0, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)).Build()
+		insert, values, err := query.NewInsertBuilder(s.dialect, "_integration_events").Columns("id", "workspace_id", "provider", "event_type", "external_id", "status", "payload_json", "mapping_key", "target_type", "execution_json", "error", "attempt_count", "next_retry_at", "last_attempt_at", "lease_owner", "lease_expires_at", "fencing_token", "received_at", "updated_at").Values(eventID, candidate.workspaceID, candidate.providerKey, event.EventType, event.ExternalID, "received", string(payload), "", "", "{}", nil, 0, "", "", "", "", 0, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)).Build()
 		if err != nil {
 			return err
 		}
@@ -298,7 +307,9 @@ func (s *WorkerStore) commitProviderTaskResult(ctx context.Context, candidate pr
 		}
 		digest := sha256.Sum256([]byte(candidate.id + "\x00" + fmt.Sprint(candidate.fencingToken+1) + "\x00" + fmt.Sprint(index)))
 		commitID := "provider_commit:" + hex.EncodeToString(digest[:])
-		insert, values, err := query.NewInsertBuilder(s.dialect, "_integration_connector_provider_commits").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "task_key", "operation_key", "contract_sha256", "payload_json", "status", "attempt_count", "due_at", "lease_owner", "lease_expires_at", "fencing_token", "created_at", "updated_at").Values(commitID, candidate.workspaceID, candidate.connectorKey, candidate.providerKey, candidate.connectionKey, candidate.taskKey, commit.OperationKey, commit.ContractSHA256, string(commit.Payload), "pending", 0, now.Format(time.RFC3339Nano), "", "", 0, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)).Build()
+		insert, values, err := query.NewInsertBuilder(s.dialect, providerRunTable).
+			Columns("id", "workspace_id", "run_kind", "run_key", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "operation_key", "contract_sha256", "payload_json", "status", "last_error_code", "attempt_count", "due_at", "lease_owner", "lease_expires_at", "fencing_token", "created_at", "updated_at").
+			Values(commitID, candidate.workspaceID, providerRunKindCommit, commitID, candidate.connectorKey, candidate.providerKey, candidate.connectionKey, candidate.taskKey, 0, commit.OperationKey, commit.ContractSHA256, string(commit.Payload), "pending", "", 0, now.Format(time.RFC3339Nano), "", "", 0, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)).Build()
 		if err != nil {
 			return err
 		}
@@ -307,7 +318,8 @@ func (s *WorkerStore) commitProviderTaskResult(ctx context.Context, candidate pr
 		}
 	}
 	for _, taskKey := range result.WakeTasks {
-		wake, values, err := query.NewUpdateBuilder(s.dialect, "_integration_connector_provider_states").Set("due_at", now.Format(time.RFC3339Nano)).Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_connector_provider_states"), query.And(query.Equal("workspace_id", candidate.workspaceID), query.Equal("connection_key", candidate.connectionKey), query.Equal("task_key", taskKey)))).Build()
+		wakeID := ownerID("provider_task_", candidate.workspaceID, candidate.connectionKey+"\x00"+taskKey)
+		wake, values, err := query.NewUpdateBuilder(s.dialect, providerRunTable).Set("due_at", now.Format(time.RFC3339Nano)).Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, providerRunTable, wakeID), query.And(query.Equal("run_kind", providerRunKindState), query.Equal("workspace_id", candidate.workspaceID), query.Equal("connection_key", candidate.connectionKey), query.Equal("run_key", taskKey)))).Build()
 		if err != nil {
 			return err
 		}
@@ -332,7 +344,7 @@ func (s *WorkerStore) failProviderTask(ctx context.Context, candidate providerTa
 	if attempt >= 5 {
 		status, dueAt = "dead_letter", ""
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connector_provider_states").Set("status", status).Set("due_at", dueAt).Set("last_error_code", "integration.provider_task_failed").Set("attempt_count", attempt).Set("lease_owner", "").Set("lease_expires_at", "").Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_connector_provider_states"), query.And(query.Equal("id", candidate.id), query.Equal("lease_owner", s.workerID), query.Equal("fencing_token", candidate.fencingToken+1)))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, providerRunTable).Set("status", status).Set("due_at", dueAt).Set("last_error_code", "integration.provider_task_failed").Set("attempt_count", attempt).Set("lease_owner", "").Set("lease_expires_at", "").Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, providerRunTable, candidate.id), query.And(query.Equal("run_kind", providerRunKindState), query.Equal("id", candidate.id), query.Equal("lease_owner", s.workerID), query.Equal("fencing_token", candidate.fencingToken+1)))).Build()
 	if err == nil {
 		_, err = s.database.ExecContext(ctx, statement, args...)
 	}
@@ -354,7 +366,7 @@ func (s *WorkerStore) processProviderCommits(ctx context.Context, limit int) (in
 		limit = 25
 	}
 	now := s.now()
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_connector_provider_commits").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation_key", "payload_json", "status", "attempt_count", "fencing_token", "due_at", "lease_expires_at").Where(query.And(query.In("status", "pending", "failed"), query.LessThan("due_at", providerDeadlineScanEnd(now)), query.Or(query.Equal("lease_expires_at", ""), query.LessThan("lease_expires_at", providerDeadlineScanEnd(now))))).OrderBy(query.Ascending("due_at")).Limit(limit).Build()
+	statement, args, err := query.NewSelectBuilder(s.dialect, providerRunTable).Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation_key", "payload_json", "status", "attempt_count", "fencing_token", "due_at", "lease_expires_at").Where(query.And(query.Equal("run_kind", providerRunKindCommit), query.In("status", "pending", "failed"), query.LessThan("due_at", providerDeadlineScanEnd(now)), query.Or(query.Equal("lease_expires_at", ""), query.LessThan("lease_expires_at", providerDeadlineScanEnd(now))))).OrderBy(query.Ascending("due_at")).Limit(limit).Build()
 	if err != nil {
 		return 0, err
 	}
@@ -386,7 +398,7 @@ func (s *WorkerStore) processProviderCommits(ctx context.Context, limit int) (in
 	processed := 0
 	var firstErr error
 	for _, candidate := range candidates {
-		claim, values, err := query.NewUpdateBuilder(s.dialect, "_integration_connector_provider_commits").Set("status", "processing").Set("lease_owner", s.workerID).Set("lease_expires_at", now.Add(time.Minute).Format(time.RFC3339Nano)).Set("fencing_token", candidate.fencingToken+1).Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_connector_provider_commits"), query.And(query.Equal("id", candidate.id), query.Equal("status", candidate.status), query.Equal("fencing_token", candidate.fencingToken), query.Equal("due_at", candidate.dueAt), query.Equal("lease_expires_at", candidate.leaseExpiresAt)))).Build()
+		claim, values, err := query.NewUpdateBuilder(s.dialect, providerRunTable).Set("status", "processing").Set("lease_owner", s.workerID).Set("lease_expires_at", now.Add(time.Minute).Format(time.RFC3339Nano)).Set("fencing_token", candidate.fencingToken+1).Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, providerRunTable, candidate.id), query.And(query.Equal("run_kind", providerRunKindCommit), query.Equal("id", candidate.id), query.Equal("status", candidate.status), query.Equal("fencing_token", candidate.fencingToken), query.Equal("due_at", candidate.dueAt), query.Equal("lease_expires_at", candidate.leaseExpiresAt)))).Build()
 		if err != nil {
 			return processed, err
 		}
@@ -409,7 +421,7 @@ func (s *WorkerStore) processProviderCommits(ctx context.Context, limit int) (in
 				firstErr = deliveryErr
 			}
 		}
-		update, values, err := query.NewUpdateBuilder(s.dialect, "_integration_connector_provider_commits").Set("status", status).Set("attempt_count", attempt).Set("due_at", dueAt).Set("lease_owner", "").Set("lease_expires_at", "").Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_connector_provider_commits"), query.And(query.Equal("id", candidate.id), query.Equal("lease_owner", s.workerID), query.Equal("fencing_token", candidate.fencingToken+1)))).Build()
+		update, values, err := query.NewUpdateBuilder(s.dialect, providerRunTable).Set("status", status).Set("attempt_count", attempt).Set("due_at", dueAt).Set("lease_owner", "").Set("lease_expires_at", "").Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, providerRunTable, candidate.id), query.And(query.Equal("run_kind", providerRunKindCommit), query.Equal("id", candidate.id), query.Equal("lease_owner", s.workerID), query.Equal("fencing_token", candidate.fencingToken+1)))).Build()
 		if err != nil {
 			return processed, err
 		}
@@ -447,7 +459,7 @@ func (s *WorkerStore) ProcessDueReconciliations(ctx context.Context, limit int) 
 			}
 			continue
 		}
-		claim, claimArgs, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "reconciling").Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_invocations"), query.And(query.Equal("workspace_id", invocation.WorkspaceID), query.Equal("id", invocation.ID), query.Equal("status", invocation.Status), query.Equal("updated_at", invocation.UpdatedAt)))).Build()
+		claim, claimArgs, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "reconciling").Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, invocation.WorkspaceID, "_integration_invocations", invocation.ID), query.And(query.Equal("workspace_id", invocation.WorkspaceID), query.Equal("id", invocation.ID), query.Equal("status", invocation.Status), query.Equal("updated_at", invocation.UpdatedAt)))).Build()
 		if err != nil {
 			return processed, err
 		}
@@ -562,7 +574,7 @@ func (s *WorkerStore) persistReconciliation(ctx context.Context, invocation inte
 	if err != nil {
 		return err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(payload)).Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_invocations"), query.And(query.Equal("workspace_id", invocation.WorkspaceID), query.Equal("id", invocation.ID)))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(payload)).Set("updated_at", now.Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, invocation.WorkspaceID, "_integration_invocations", invocation.ID), query.And(query.Equal("workspace_id", invocation.WorkspaceID), query.Equal("id", invocation.ID)))).Build()
 	if err != nil {
 		return err
 	}
@@ -575,7 +587,7 @@ func (s *WorkerStore) ProcessDueCredentialExpirations(ctx context.Context, limit
 		limit = 25
 	}
 	now := s.now().Format(time.RFC3339Nano)
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("workspace_id", "secret_key").Where(query.And(query.Equal("status", "active"), query.NotEqual("expires_at", ""), query.LessThanOrEqual("expires_at", now))).OrderBy(query.Ascending("expires_at")).Limit(limit).Build()
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("id", "workspace_id", "secret_key").Where(query.And(query.Equal("status", "active"), query.NotEqual("expires_at", ""), query.LessThanOrEqual("expires_at", now))).OrderBy(query.Ascending("expires_at")).Limit(limit).Build()
 	if err != nil {
 		return 0, err
 	}
@@ -583,11 +595,11 @@ func (s *WorkerStore) ProcessDueCredentialExpirations(ctx context.Context, limit
 	if err != nil {
 		return 0, err
 	}
-	type expired struct{ workspaceID, key string }
+	type expired struct{ id, workspaceID, key string }
 	values := []expired{}
 	for rows.Next() {
 		var value expired
-		if err := rows.Scan(&value.workspaceID, &value.key); err != nil {
+		if err := rows.Scan(&value.id, &value.workspaceID, &value.key); err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
@@ -596,7 +608,7 @@ func (s *WorkerStore) ProcessDueCredentialExpirations(ctx context.Context, limit
 	_ = rows.Close()
 	processed := 0
 	for _, value := range values {
-		update, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("status", "expired").Set("updated_at", now).Where(query.And(subjectRowWriteAllowed("_integration_secrets"), query.And(query.Equal("workspace_id", value.workspaceID), query.Equal("secret_key", value.key), query.Equal("status", "active")))).Build()
+		update, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("status", "expired").Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, value.workspaceID, "_integration_secrets", value.id), query.And(query.Equal("id", value.id), query.Equal("workspace_id", value.workspaceID), query.Equal("secret_key", value.key), query.Equal("status", "active")))).Build()
 		if err != nil {
 			return processed, err
 		}

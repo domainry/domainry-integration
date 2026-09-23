@@ -1,46 +1,21 @@
 package integration
 
 import (
-	"context"
-	"crypto/sha256"
-	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
 	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
-	ormdialect "github.com/domainry/domainry-orm/dialect"
-	_ "modernc.org/sqlite"
+	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 )
 
-func TestProviderOverlayPreservesConnectorsOwnedDefinition(t *testing.T) {
-	database, err := sql.Open("sqlite", "file:integration-catalog-overlay?mode=memory&cache=shared")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	rawDialect, _ := ormdialect.New(ormdialect.SQLite)
-	dialect := rawDialect.WithSchema("")
-	migrations, err := SchemaMigrations("sqlite", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, migration := range migrations {
-		for _, statement := range migration.Statements {
-			if _, err := database.ExecContext(t.Context(), statement); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	definition := connectorscatalog.ConnectorDefinition{
+func TestConnectorCatalogPublishesSharedDefinitionsWithProviderOverlay(t *testing.T) {
+	definitions := newTestDefinitionStore()
+	catalog := []connectorscatalog.ConnectorDefinition{{
 		Key: "crm", Name: "Customer CRM",
 		Payload: json.RawMessage(`{"key":"crm","name":"Customer CRM","description":"Connectors owns this text","classification":"business"}`),
-	}
-	if err := SyncBuiltinCatalog(t.Context(), database, dialect, []connectorscatalog.ConnectorDefinition{definition}); err != nil {
-		t.Fatal(err)
-	}
+	}}
 	descriptor := connector.ProviderDescriptor{
 		ConnectorKey: "crm", ProviderKey: "probe", ProviderRevision: "1.0.0", StartupActivation: connector.StartupActivationDefaultSafe,
 		Operations: []connector.OperationDescriptor{{
@@ -52,92 +27,63 @@ func TestProviderOverlayPreservesConnectorsOwnedDefinition(t *testing.T) {
 			},
 		}},
 	}
-	if err := SyncProviderCatalog(t.Context(), database, dialect, []connector.ProviderDescriptor{descriptor}); err != nil {
+	if err := SyncConnectorCatalog(t.Context(), definitions, catalog, []connector.ProviderDescriptor{descriptor}); err != nil {
 		t.Fatal(err)
 	}
-	existing, err := loadBuiltinConnectors(t.Context(), database, dialect, true)
-	if err != nil {
-		t.Fatal(err)
+	definition, found, err := definitions.Get(t.Context(), metadatasdk.DefinitionOwnerIntegration, integrationConnectorDefinitionKind, "crm")
+	if err != nil || !found {
+		t.Fatal(definition, found, err)
 	}
-	hash := sha256.Sum256(definition.Payload)
-	if !builtinConnectorIsCurrent(existing[definition.Key], definition.Payload, hex.EncodeToString(hash[:])) {
-		t.Fatalf("provider overlay was not recognized as current: %#v", existing[definition.Key])
-	}
-	if err := SyncBuiltinCatalog(t.Context(), database, dialect, []connectorscatalog.ConnectorDefinition{definition}); err != nil {
-		t.Fatal(err)
-	}
-	var payload, sourceKind, sourceID string
-	if err := database.QueryRowContext(t.Context(), "SELECT payload_json,source_kind,source_id FROM _integration_connector_definitions WHERE resource_key=?", "crm").Scan(&payload, &sourceKind, &sourceID); err != nil {
-		t.Fatal(err)
+	if definition.SourceID != integrationConnectorSource || definition.SchemaVersion != integrationConnectorSchemaVersion {
+		t.Fatalf("unexpected shared Definition identity: %#v", definition)
 	}
 	var projected map[string]any
-	if err := json.Unmarshal([]byte(payload), &projected); err != nil {
+	if err := json.Unmarshal(definition.Payload, &projected); err != nil {
 		t.Fatal(err)
 	}
 	if projected["name"] != "Customer CRM" || projected["description"] != "Connectors owns this text" || projected["classification"] != "business" {
-		t.Fatalf("Connectors definition was overwritten: %#v", projected)
+		t.Fatalf("Connectors-owned fields were overwritten: %#v", projected)
 	}
-	if sourceKind != "connectors+provider" || !strings.Contains(sourceID, "probe:1.0.0") {
-		t.Fatalf("source_kind=%q source_id=%q", sourceKind, sourceID)
+	providers, _ := projected["providers"].([]any)
+	operations, _ := projected["operations"].([]any)
+	if len(providers) != 1 || providers[0].(map[string]any)["key"] != "probe" || len(operations) != 1 || operations[0].(map[string]any)["key"] != "lookup" {
+		t.Fatalf("provider overlay missing: %#v", projected)
+	}
+	items, err := NewCatalogStore(definitions).ListConnectorDefinitions(t.Context())
+	if err != nil || len(items) != 1 || items[0].Key != "crm" || items[0].DisplayName != "Customer CRM" {
+		t.Fatalf("catalog read did not use shared Definitions: %#v err=%v", items, err)
 	}
 }
 
-func TestBuiltinCatalogLoadsExistingDefinitionsOnceAndSkipsUnchangedWrites(t *testing.T) {
-	database, err := sql.Open("sqlite", "file:integration-catalog-bulk-sync?mode=memory&cache=shared")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	rawDialect, _ := ormdialect.New(ormdialect.SQLite)
-	dialect := rawDialect.WithSchema("")
-	migrations, err := SchemaMigrations("sqlite", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, migration := range migrations {
-		for _, statement := range migration.Statements {
-			if _, err := database.ExecContext(t.Context(), statement); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	definitions := []connectorscatalog.ConnectorDefinition{
+func TestConnectorCatalogReplacementDisablesOmittedDefinitionsAndRetainsHistory(t *testing.T) {
+	definitions := newTestDefinitionStore()
+	initial := []connectorscatalog.ConnectorDefinition{
 		{Key: "crm", Name: "CRM", Payload: json.RawMessage(`{"key":"crm","name":"CRM"}`)},
 		{Key: "mail", Name: "Mail", Payload: json.RawMessage(`{"key":"mail","name":"Mail"}`)},
 	}
-	counting := &catalogCountingDatabase{DB: database}
-	if err := SyncBuiltinCatalog(t.Context(), counting, dialect, definitions); err != nil {
+	if err := SyncConnectorCatalog(t.Context(), definitions, initial, nil); err != nil {
 		t.Fatal(err)
 	}
-	if counting.queryCount != 1 || counting.execCount != 2 {
-		t.Fatalf("first sync queries=%d execs=%d, want 1 bulk query and 2 inserts", counting.queryCount, counting.execCount)
+	old, found, err := definitions.Get(t.Context(), metadatasdk.DefinitionOwnerIntegration, integrationConnectorDefinitionKind, "crm")
+	if err != nil || !found {
+		t.Fatal(old, found, err)
 	}
-	counting.queryCount, counting.execCount = 0, 0
-	if err := SyncBuiltinCatalog(t.Context(), counting, dialect, definitions); err != nil {
+	updated := []connectorscatalog.ConnectorDefinition{{Key: "crm", Name: "CRM 2", Payload: json.RawMessage(`{"key":"crm","name":"CRM 2"}`)}}
+	if err := SyncConnectorCatalog(t.Context(), definitions, updated, nil); err != nil {
 		t.Fatal(err)
 	}
-	if counting.queryCount != 1 || counting.execCount != 0 {
-		t.Fatalf("unchanged sync queries=%d execs=%d, want 1 bulk query and no writes", counting.queryCount, counting.execCount)
+	if _, found, err := definitions.Get(t.Context(), metadatasdk.DefinitionOwnerIntegration, integrationConnectorDefinitionKind, "mail"); err != nil || found {
+		t.Fatalf("omitted connector remained active: found=%v err=%v", found, err)
 	}
-}
-
-type catalogCountingDatabase struct {
-	*sql.DB
-	queryCount int
-	execCount  int
-}
-
-func (database *catalogCountingDatabase) QueryContext(ctx context.Context, statement string, args ...any) (*sql.Rows, error) {
-	database.queryCount++
-	return database.DB.QueryContext(ctx, statement, args...)
-}
-
-func (database *catalogCountingDatabase) QueryRowContext(ctx context.Context, statement string, args ...any) *sql.Row {
-	database.queryCount++
-	return database.DB.QueryRowContext(ctx, statement, args...)
-}
-
-func (database *catalogCountingDatabase) ExecContext(ctx context.Context, statement string, args ...any) (sql.Result, error) {
-	database.execCount++
-	return database.DB.ExecContext(ctx, statement, args...)
+	current, found, err := definitions.Get(t.Context(), metadatasdk.DefinitionOwnerIntegration, integrationConnectorDefinitionKind, "crm")
+	if err != nil || !found || current.CurrentVersionID == old.CurrentVersionID || current.Name != "CRM 2" {
+		t.Fatalf("connector replacement failed: old=%#v current=%#v found=%v err=%v", old, current, found, err)
+	}
+	version, found, err := definitions.GetVersion(t.Context(), metadatasdk.DefinitionVersionQuery{
+		Owner: metadatasdk.DefinitionOwnerIntegration, ResourceType: integrationConnectorDefinitionKind,
+		ResourceKey: "crm", VersionID: old.CurrentVersionID,
+	})
+	if err != nil || !found || !strings.Contains(string(version.Payload), `"name":"CRM"`) {
+		t.Fatalf("immutable connector history missing: %#v found=%v err=%v", version, found, err)
+	}
 }

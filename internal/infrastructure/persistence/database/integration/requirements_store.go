@@ -13,17 +13,20 @@ import (
 	connector "github.com/domainry/domainry-connector-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
+	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	"github.com/domainry/domainry-orm/query"
 )
 
 type RequirementsStore struct {
-	database  modulehost.Database
-	dialect   modulehost.Dialect
-	providers modulehost.ProviderRegistry
+	database         modulehost.Database
+	dialect          modulehost.Dialect
+	providers        modulehost.ProviderRegistry
+	definitions      metadatasdk.DefinitionStore
+	subjectLifecycle *SubjectLifecyclePersistence
 }
 
-func NewRequirementsStore(database modulehost.Database, dialect modulehost.Dialect, providers modulehost.ProviderRegistry) *RequirementsStore {
-	return &RequirementsStore{database: database, dialect: dialect, providers: providers}
+func NewRequirementsStore(database modulehost.Database, dialect modulehost.Dialect, providers modulehost.ProviderRegistry, definitions metadatasdk.DefinitionStore, subjectLifecycle ...*SubjectLifecyclePersistence) *RequirementsStore {
+	return &RequirementsStore{database: database, dialect: dialect, providers: providers, definitions: definitions, subjectLifecycle: subjectLifecyclePersistence(subjectLifecycle)}
 }
 
 func (s *RequirementsStore) SynchronizeConnections(ctx context.Context, requirements []integrationmodel.ConnectionRequirement) error {
@@ -109,7 +112,7 @@ func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requireme
 		update, updateArgs, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_connections").
 			Set("connector_key", requirement.ConnectorKey).Set("provider_key", requirement.ProviderKey).
 			Set("name", requirement.Name).Set("status", requirement.Status).Set("config_json", string(payload)).Set("updated_at", now).
-			Where(query.And(subjectRowWriteAllowed("_integration_connections"), query.Equal("id", id))).Build()
+			Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, requirement.WorkspaceID, "_integration_connections", id), query.Equal("id", id))).Build()
 		if buildErr != nil {
 			return fmt.Errorf("build Integration connection requirement update: %w", buildErr)
 		}

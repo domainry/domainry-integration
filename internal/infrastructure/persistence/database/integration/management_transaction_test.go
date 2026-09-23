@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"testing"
 
@@ -14,6 +15,48 @@ type transactionTestCipher struct{}
 
 func (transactionTestCipher) EncryptSecretMaterial(_ context.Context, _, _, plaintext string) (string, error) {
 	return "encrypted:" + plaintext, nil
+}
+
+func TestAPIKeyUsesTypedCredentialRowWithoutSecretProjection(t *testing.T) {
+	database, dialect := webPushTestDatabase(t, "integration-api-key-credential")
+	store := NewManagementStore(database, dialect, transactionTestCipher{}, nil)
+	ctx := integrationmodel.WithAccessScope(context.Background(), integrationmodel.AccessScope{
+		WorkspaceID: "workspace-a", PermissionKey: "integration.api_keys.manage", ActorID: "admin-a", Unrestricted: true,
+	})
+	created, err := store.CreateAPIKey(ctx, "workspace-a", "ignored", integrationsdk.APIKeyInput{
+		Key: "automation", Name: "Automation", ActorID: "actor-a", RoleKey: "operator", Scopes: []string{"integration.read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Token == "" || created.APIKey.TokenPrefix == "" || created.APIKey.Key != "automation" {
+		t.Fatalf("incomplete API key credential: %#v", created)
+	}
+	secrets, err := store.ListSecrets(ctx, "workspace-a")
+	if err != nil || len(secrets) != 0 {
+		t.Fatalf("API key leaked into provider secrets: values=%#v err=%v", secrets, err)
+	}
+	keys, err := store.ListAPIKeys(ctx, "workspace-a")
+	if err != nil || len(keys) != 1 || keys[0].ActorID != "actor-a" || keys[0].RoleKey != "operator" {
+		t.Fatalf("typed API key projection=%#v err=%v", keys, err)
+	}
+	digest := sha256.Sum256([]byte(created.Token))
+	var credentialType, kind, lookupHash, displayPrefix string
+	var valueRef sql.NullString
+	if err := database.QueryRowContext(ctx, `SELECT credential_type,kind,lookup_hash,display_prefix,value_ref FROM _integration_secrets WHERE workspace_id=? AND secret_key=?`, "workspace-a", "automation").Scan(&credentialType, &kind, &lookupHash, &displayPrefix, &valueRef); err != nil {
+		t.Fatal(err)
+	}
+	if credentialType != "api_key" || kind != "api_key" || lookupHash != hex.EncodeToString(digest[:]) || displayPrefix != created.APIKey.TokenPrefix || valueRef.Valid {
+		t.Fatalf("unexpected typed credential row: type=%q kind=%q hash=%q prefix=%q value_ref=%#v", credentialType, kind, lookupHash, displayPrefix, valueRef)
+	}
+	rotated, err := store.RotateAPIKey(ctx, "workspace-a", "automation", "ignored")
+	if err != nil || rotated.Token == "" || rotated.Token == created.Token || rotated.APIKey.Status != "active" {
+		t.Fatalf("rotated API key=%#v err=%v", rotated, err)
+	}
+	disabled, err := store.DisableAPIKey(ctx, "workspace-a", "automation", "ignored")
+	if err != nil || disabled.Status != "disabled" || disabled.DisabledAt == "" {
+		t.Fatalf("disabled API key=%#v err=%v", disabled, err)
+	}
 }
 
 func (transactionTestCipher) DecryptSecretMaterial(_ context.Context, _, _, ciphertext string) (string, error) {

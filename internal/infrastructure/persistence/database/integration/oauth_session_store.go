@@ -51,7 +51,7 @@ func (s *ManagementStore) readOAuthSession(ctx context.Context, subject integrat
 	return value, nil
 }
 func (s *ManagementStore) StartOAuthAuthorization(ctx context.Context, subject integrationsdk.ConnectionAccountSubject, input integrationsdk.OAuthAuthorizationInput) (integrationsdk.OAuthAuthorizationSession, error) {
-	if err := guardSubjectWrite(ctx, s.database, s.dialect, subject.WorkspaceID, subjectFenceReference{"subject", "", subject.UserID}); err != nil {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, subject.WorkspaceID, subjectFenceReference{"subject", "", subject.UserID}); err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, err
 	}
 	subject, err := normalizedConnectionAccountSubject(subject)
@@ -125,7 +125,7 @@ func (s *ManagementStore) StartOAuthAuthorization(ctx context.Context, subject i
 }
 func (s *ManagementStore) updateOAuthSession(ctx context.Context, subject integrationsdk.ConnectionAccountSubject, record oauthSessionRecord, previous string) error {
 	raw, _ := json.Marshal(record)
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_oauth_sessions").Set("status", record.Session.Status).Set("session_json", string(raw)).Set("verifier_ciphertext", "").Set("exchange_deadline", record.ExchangeDeadline).Set("updated_at", ownerNow()).Where(query.And(subjectRowWriteAllowed("_integration_oauth_sessions"), query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("user_id", subject.UserID), query.Equal("id", record.Session.ID), query.Equal("status", previous)))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_oauth_sessions").Set("status", record.Session.Status).Set("session_json", string(raw)).Set("verifier_ciphertext", "").Set("exchange_deadline", record.ExchangeDeadline).Set("updated_at", ownerNow()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, subject.WorkspaceID, "_integration_oauth_sessions", record.Session.ID), query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("user_id", subject.UserID), query.Equal("id", record.Session.ID), query.Equal("status", previous)))).Build()
 	if err != nil {
 		return err
 	}

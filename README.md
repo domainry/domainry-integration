@@ -42,7 +42,7 @@ The implementation follows an internal DDD boundary:
 - `internal/assembly/{module,saas}` composes the same application services for both deployment modes.
 - `internal/infrastructure/persistence/database/{integration,migration,schema}` separates business DML, migration registration, and source-owned DDL.
 - `internal/transport/http/module` implements the source-owned Module HTTP
-  adapter and consumes the route, governance and OpenAPI contract published by
+  adapter and consumes the route and governance contract published by
   `domainry-integration-sdk`.
 - `module` remains a thin public facade over the internal Module assembly.
 
@@ -51,6 +51,12 @@ The standalone SQLite service requires `INTEGRATION_RUNTIME_ID`,
 32-byte AES key kept in the deployment secret store). `INTEGRATION_SQLITE_PATH`
 and `INTEGRATION_HTTP_ADDRESS` are optional. Keep the same master key across
 restarts and backups; the service never generates an ephemeral replacement.
+Subject Lifecycle remains fail-closed by default. A SaaS deployment that uses a
+database where Lifecycle has already installed the canonical `_subject_requests`
+and `_subject_steps` tables must set
+`INTEGRATION_SUBJECT_LIFECYCLE_PERSISTENCE=shared`; startup verifies those
+tables before binding. Integration never creates a private fallback table or
+dual-writes erasure state.
 The executable composes Google Workspace and Microsoft 365 through the public
 Connectors module. Its host transport permits only their official HTTPS API
 domains, bounds responses, injects secret fields at dispatch, and refuses
@@ -120,13 +126,12 @@ Integration publishes deployment-neutral contracts through
 
 - capability disclosure and minimal, representative and repair examples;
 - Connector-specialized authoring schemas and references;
-- Module HTTP routes, listener exposure, authorization governance and OpenAPI;
+- Module HTTP routes, listener exposure, authorization governance and typed contract tests;
 - the `@domainry/integration-client` browser package.
 
-Plane generates its admin disclosure and adapter inventory from those SDK
-contracts. Runtime only hosts and aggregates the selected Binding; it does not
-contain a second Integration capability catalog, OpenAPI implementation or
-browser client.
+Plane consumes those SDK contracts directly. Runtime only hosts the selected
+Binding; it does not contain a second Integration capability catalog, API
+description document, or browser client.
 
 ### Account probe scope readiness
 

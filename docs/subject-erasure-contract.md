@@ -6,19 +6,22 @@ them. SaaS routes require the service token and Runtime identity header; the
 owner establishes Foundation workspace only after that authentication.
 
 Runtime supplies the account ID, request ID, published record references,
-source event IDs and frozen publication message IDs. The owner freezes actual
-row IDs in `_integration_subject_erasure_receipts`, with permanent ownership
-fences in `_integration_subject_erasure_fences`. Plans contain stable references
-and external subject digests, never payloads, verifier material, browser keys,
-external names or encrypted secrets. Reusing a request with different subject
-or provenance fails. A different plan cannot execute against the saved receipt.
+source event IDs and frozen publication message IDs. Lifecycle represents the
+single subject fence with the root erase request's indexed `resolved_identity`
+and its owner `lifecycle`, operation `erase_fence` execution step; Integration
+atomically stores its frozen `erase_plan` and `erase` result as owner
+`integration` entries in `_subject_steps`. Plans contain typed connection,
+credential, message, resource, external-subject and row references, never
+payloads, verifier material, browser keys, external names or encrypted secrets.
+Reusing a request with different subject or provenance fails. A different plan
+cannot execute against the shared step.
 
 Cleanup includes personal connection configuration and exclusive encrypted
 credentials, connection grants/worker captures, per-user OAuth sessions and
 Web Push key material, account API keys, external bindings and invocation
 payloads. Shared connections and credentials referenced by another connection
 are preserved. Actual running delivery, reconciliation, provider effects,
-OAuth exchanges and live credential refresh leases block preparation. Queued
+OAuth exchanges and live Provider runs block preparation. Queued
 effects are cancelled and their worker fencing tokens advanced.
 
 Inbound ownership follows verified sender identities, the same published
@@ -28,11 +31,13 @@ context so callers cannot forge those references. External subject digest
 fences reject later private ingress and rebinding after raw external bindings
 have been removed.
 
-Each owner erase transaction clears the frozen rows and stores its result
+Each owner erase transaction clears the frozen rows and stores its shared result
 together. Failure rolls back earlier changes; the original plan remains usable
-for retries. Normal row updates include the permanent row fence in their final
-SQL predicate; late manual delivery retry must win a one-row claim before
-calling the external provider. Source prepared receipts support exact replay.
+for retries. Normal row updates include the frozen-plan row reference in their
+final SQL predicate; late manual delivery retry must win a one-row claim before
+calling the external provider. Ordinary standalone Integration operations do
+not query Lifecycle tables. Subject cleanup fails closed until the embedding
+host explicitly binds shared Lifecycle persistence after installing its schema.
 
 Tests use public local and remote SDK ports, actual owner migrations and disk
 SQLite with encrypted materials. They prove injected delete rollback, stable

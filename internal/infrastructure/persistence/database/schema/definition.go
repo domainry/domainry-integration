@@ -9,7 +9,7 @@ import (
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 )
 
-const SchemaVersion uint = 7
+const SchemaVersion uint = 5
 
 func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, error) {
 	parsed, err := ormdialect.Parse(driver)
@@ -22,13 +22,10 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 	}
 	renderer := dialect.WithSchema(schema)
 	builders := []*ormschema.TableBuilder{
-		definitionTable(renderer, "_integration_connector_definitions"),
-		definitionTable(renderer, "_integration_event_mapping_definitions"),
-		connectionsTable(renderer), providerStatesTable(renderer), apiKeysTable(renderer),
-		providerCommitsTable(renderer),
+		connectionsTable(renderer), providerRunsTable(renderer),
 		secretMaterialsTable(renderer), secretsTable(renderer), externalIdentitiesTable(renderer),
-		invocationsTable(renderer), eventsTable(renderer), mappingIntentsTable(renderer),
-		webhookNoncesTable(renderer), webhookSubscriptionsTable(renderer), credentialRefreshLeasesTable(renderer),
+		invocationsTable(renderer), eventsTable(renderer),
+		webhookNoncesTable(renderer), webhookSubscriptionsTable(renderer),
 		webPushSubscriptionsTable(renderer),
 	}
 	statements := make([]string, 0, len(builders))
@@ -42,10 +39,6 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 	indexes, err := ownerIndexStatements(parsed.Name(), renderer)
 	if err != nil {
 		return nil, err
-	}
-	providerCommits, _, err := providerCommitsTable(renderer).Build()
-	if err != nil {
-		return nil, fmt.Errorf("build Integration Provider commit migration: %w", err)
 	}
 	connectionAccounts, _, err := connectionAccountsTable(renderer).Build()
 	if err != nil {
@@ -71,18 +64,12 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 	if err != nil {
 		return nil, err
 	}
-	erasure, err := subjectErasureStatements(renderer)
-	if err != nil {
-		return nil, err
-	}
 	return []modulehost.SchemaMigration{
 		{Version: 1, Name: "integration_foundation", Statements: statements},
 		{Version: 2, Name: "integration_owner_indexes", Statements: indexes},
-		{Version: 3, Name: "integration_provider_commits", Statements: []string{providerCommits}},
-		{Version: 4, Name: "integration_connection_accounts", Statements: []string{connectionAccounts, connectionAccountSecrets, connectionAccountIndex, connectionAccountSecretIndex}},
-		{Version: 5, Name: "integration_oauth_authorization", Statements: oauth},
-		{Version: 6, Name: "integration_connection_grants", Statements: []string{grant}},
-		{Version: SchemaVersion, Name: "integration_subject_erasure", Statements: erasure},
+		{Version: 3, Name: "integration_connection_accounts", Statements: []string{connectionAccounts, connectionAccountSecrets, connectionAccountIndex, connectionAccountSecretIndex}},
+		{Version: 4, Name: "integration_oauth_authorization", Statements: oauth},
+		{Version: SchemaVersion, Name: "integration_connection_grants", Statements: []string{grant}},
 	}, nil
 }
 
@@ -91,14 +78,11 @@ func ownerIndexStatements(driver ormdialect.Name, renderer modulehost.Dialect) (
 		name, table string
 		columns     []string
 	}{
-		{"idx_integration_event_mapping_intent_status", "_integration_event_mapping_intents", []string{"workspace_id", "status", "created_at"}},
-		{"idx_integration_api_keys_status", "_integration_api_keys", []string{"workspace_id", "status"}},
 		{"idx_integration_events_status", "_integration_events", []string{"workspace_id", "provider", "status"}},
 		{"idx_integration_webhook_nonce_expiry", "_integration_webhook_nonces", []string{"expires_at"}},
 		{"idx_integration_webhook_subscription_connection", "_integration_webhook_subscriptions", []string{"workspace_id", "connection_key"}},
-		{"idx_integration_credential_refresh_lease_expiry", "_integration_credential_refresh_leases", []string{"lease_expires_at"}},
-		{"idx_integration_secrets_status", "_integration_secrets", []string{"workspace_id", "status"}},
-		{"idx_connector_provider_state_due", "_integration_connector_provider_states", []string{"status", "due_at", "lease_expires_at"}},
+		{"idx_integration_credentials_status", "_integration_secrets", []string{"workspace_id", "credential_type", "status"}},
+		{"idx_integration_provider_run_due", "_integration_provider_runs", []string{"run_kind", "status", "due_at", "lease_expires_at"}},
 		{"idx_integration_external_identities_actor", "_integration_external_identities", []string{"actor_id", "role_key"}},
 		{"idx_web_push_subscription_user", "_integration_web_push_subscriptions", []string{"workspace_id", "user_id", "status"}},
 	}
@@ -146,14 +130,6 @@ func scope(name string) ormschema.ColumnDefinition   { return req(name, ormschem
 func text(name string) ormschema.ColumnDefinition    { return req(name, ormschema.LongText()) }
 func integer(name string) ormschema.ColumnDefinition { return req(name, ormschema.BigInt()) }
 
-func definitionTable(renderer modulehost.Dialect, name string) *ormschema.TableBuilder {
-	return table(renderer, name,
-		key("id"), key("resource_key"), key("object_key"), text("name"), text("payload_json"),
-		key("schema_version"), key("schema_hash"), key("source_kind"), key("source_id"),
-		opt("disabled_at", ormschema.TextKey(255)), key("created_at"), key("updated_at"),
-	).Unique("resource_key")
-}
-
 func connectionsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, "_integration_connections", key("id"), scope("connection_key"), scope("workspace_id"), scope("connector_key"), key("provider_key"), opt("name", ormschema.Text()), key("status"), text("config_json"), text("secret_refs_json"), opt("created_by", ormschema.TextKey(255)), key("created_at"), key("updated_at")).Unique("workspace_id", "connection_key")
 }
@@ -166,16 +142,14 @@ func connectionAccountSecretsTable(r modulehost.Dialect) *ormschema.TableBuilder
 	return table(r, "_integration_connection_account_secrets", key("id"), scope("workspace_id"), scope("connection_key"), scope("secret_key"), key("created_at")).Unique("workspace_id", "connection_key", "secret_key").Unique("workspace_id", "secret_key")
 }
 
-func providerStatesTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, "_integration_connector_provider_states", key("id"), scope("workspace_id"), scope("connector_key"), scope("provider_key"), scope("connection_key"), scope("task_key"), integer("state_version"), text("payload_json"), key("status"), key("due_at"), key("last_error_code"), integer("attempt_count"), key("lease_owner"), key("lease_expires_at"), integer("fencing_token"), key("updated_at")).Unique("workspace_id", "connection_key", "task_key")
-}
-
-func providerCommitsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, "_integration_connector_provider_commits", key("id"), scope("workspace_id"), scope("connector_key"), scope("provider_key"), scope("connection_key"), scope("task_key"), key("operation_key"), key("contract_sha256"), text("payload_json"), key("status"), integer("attempt_count"), key("due_at"), key("lease_owner"), key("lease_expires_at"), integer("fencing_token"), key("created_at"), key("updated_at")).Unique("workspace_id", "id")
-}
-
-func apiKeysTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, "_integration_api_keys", key("id"), scope("api_key"), scope("workspace_id"), opt("name", ormschema.Text()), key("token_prefix"), key("token_hash"), key("actor_id"), key("role_key"), text("scopes_json"), key("status"), key("expires_at"), key("last_used_at"), key("created_by"), key("created_at"), key("updated_at"), key("disabled_at")).Unique("workspace_id", "api_key").Unique("token_hash")
+func providerRunsTable(r modulehost.Dialect) *ormschema.TableBuilder {
+	return table(r, "_integration_provider_runs",
+		key("id"), scope("workspace_id"), req("run_kind", ormschema.TextKey(32)), scope("run_key"),
+		scope("connector_key"), scope("provider_key"), scope("connection_key"), scope("task_key"),
+		integer("state_version"), key("operation_key"), key("contract_sha256"), text("payload_json"),
+		key("status"), key("last_error_code"), integer("attempt_count"), key("due_at"),
+		key("lease_owner"), key("lease_expires_at"), integer("fencing_token"), key("created_at"), key("updated_at"),
+	).Unique("workspace_id", "run_kind", "connection_key", "run_key")
 }
 
 func secretMaterialsTable(r modulehost.Dialect) *ormschema.TableBuilder {
@@ -183,7 +157,12 @@ func secretMaterialsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 }
 
 func secretsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, "_integration_secrets", key("id"), scope("secret_key"), scope("workspace_id"), key("kind"), key("status"), opt("description", ormschema.Text()), opt("value_ref", ormschema.Text()), opt("fingerprint", ormschema.TextKey(255)), opt("created_by", ormschema.TextKey(255)), key("created_at"), key("updated_at"), opt("disabled_at", ormschema.TextKey(255)), key("expires_at"), key("rotated_at"), key("revoked_at"), key("last_tested_at"), key("last_test_status"), text("last_test_error")).Unique("workspace_id", "secret_key")
+	return table(r, "_integration_secrets",
+		key("id"), scope("secret_key"), scope("workspace_id"), req("credential_type", ormschema.TextKey(32)), key("kind"), key("status"),
+		opt("name", ormschema.Text()), opt("description", ormschema.Text()), opt("value_ref", ormschema.Text()), opt("fingerprint", ormschema.TextKey(255)),
+		opt("display_prefix", ormschema.TextKey(255)), opt("lookup_hash", ormschema.TextKey(255)), opt("actor_id", ormschema.TextKey(255)), opt("role_key", ormschema.TextKey(255)), text("scopes_json"),
+		opt("created_by", ormschema.TextKey(255)), key("created_at"), key("updated_at"), opt("disabled_at", ormschema.TextKey(255)), key("expires_at"), key("rotated_at"), key("revoked_at"), key("last_used_at"), key("last_tested_at"), key("last_test_status"), text("last_test_error"),
+	).Unique("workspace_id", "secret_key").Unique("lookup_hash")
 }
 
 func externalIdentitiesTable(r modulehost.Dialect) *ormschema.TableBuilder {
@@ -195,11 +174,7 @@ func invocationsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 }
 
 func eventsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, "_integration_events", key("id"), scope("workspace_id"), scope("provider"), scope("event_type"), scope("external_id"), key("status"), text("payload_json"), opt("error", ormschema.Text()), integer("attempt_count"), key("next_retry_at"), key("last_attempt_at"), key("lease_owner"), key("lease_expires_at"), integer("fencing_token"), key("received_at"), key("updated_at")).Unique("workspace_id", "provider", "external_id")
-}
-
-func mappingIntentsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, "_integration_event_mapping_intents", key("id"), scope("workspace_id"), key("event_id"), key("mapping_key"), key("target_type"), key("status"), text("payload_json"), key("created_at"), key("updated_at")).Unique("workspace_id", "event_id")
+	return table(r, "_integration_events", key("id"), scope("workspace_id"), scope("provider"), scope("event_type"), scope("external_id"), key("status"), text("payload_json"), key("mapping_key"), key("target_type"), text("execution_json"), opt("error", ormschema.Text()), integer("attempt_count"), key("next_retry_at"), key("last_attempt_at"), key("lease_owner"), key("lease_expires_at"), integer("fencing_token"), key("received_at"), key("updated_at")).Unique("workspace_id", "provider", "external_id")
 }
 
 func webhookNoncesTable(r modulehost.Dialect) *ormschema.TableBuilder {
@@ -208,10 +183,6 @@ func webhookNoncesTable(r modulehost.Dialect) *ormschema.TableBuilder {
 
 func webhookSubscriptionsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, "_integration_webhook_subscriptions", key("id"), scope("subscription_key"), scope("workspace_id"), opt("name", ormschema.Text()), scope("connector_key"), scope("connection_key"), text("event_types_json"), key("status"), opt("description", ormschema.Text()), key("created_by"), key("created_at"), key("updated_at"), key("disabled_at")).Unique("workspace_id", "subscription_key")
-}
-
-func credentialRefreshLeasesTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, "_integration_credential_refresh_leases", key("id"), scope("workspace_id"), scope("connection_key"), key("lease_owner"), key("lease_expires_at"), key("updated_at")).Unique("workspace_id", "connection_key")
 }
 
 func webPushSubscriptionsTable(r modulehost.Dialect) *ormschema.TableBuilder {

@@ -56,16 +56,12 @@ func TestConnectionAccountSaaSProductAuthorizationSurvivesRemoteBoundaryAndResta
 		}
 		database.SetMaxOpenConns(1)
 		dialect, _ := ormdialect.New(ormdialect.SQLite)
-		service, err = Open(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "accounts-saas"}, accountSaaSHost{testHost{database: database, dialect: dialect.WithSchema("")}}, "account-service-token")
+		service, err = Open(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "accounts-saas"}, accountSaaSHost{newTestHost(database, dialect.WithSchema(""))}, "account-service-token")
 		if err != nil {
 			t.Fatal(err)
 		}
 		backend = httptest.NewServer(service.Handler)
-		summary, err := service.Binding.CapabilitySummary(t.Context())
-		if err != nil {
-			t.Fatal(err)
-		}
-		binding, err = NewFactory(remote.NewFactory(remote.Options{BaseURL: backend.URL, Token: "account-service-token", HTTPClient: backend.Client(), CapabilityContractSHA256: summary.Identity.ContractSHA256})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "product-saas"}, nil)
+		binding, err = NewFactory(remote.NewFactory(remote.Options{BaseURL: backend.URL, Token: "account-service-token", HTTPClient: backend.Client()})).OpenSaaS(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "product-saas"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

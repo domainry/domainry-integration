@@ -14,30 +14,33 @@ import (
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
+	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	"github.com/domainry/domainry-orm/query"
 	"github.com/domainry/domainry-orm/sqlhost"
 )
 
 type OperationsStore struct {
-	database     sqlhost.DBTX
-	transactions modulehost.Database
-	dialect      modulehost.Dialect
-	delivery     *DeliveryStore
-	triggers     integrationsdk.TriggerSink
+	database         sqlhost.DBTX
+	transactions     modulehost.Database
+	dialect          modulehost.Dialect
+	delivery         *DeliveryStore
+	triggers         integrationsdk.TriggerSink
+	definitions      metadatasdk.DefinitionStore
+	subjectLifecycle *SubjectLifecyclePersistence
 }
 
-func NewOperationsStore(database modulehost.Database, dialect modulehost.Dialect, delivery *DeliveryStore, triggers integrationsdk.TriggerSink) *OperationsStore {
-	return &OperationsStore{database: database, transactions: database, dialect: dialect, delivery: delivery, triggers: triggers}
+func NewOperationsStore(database modulehost.Database, dialect modulehost.Dialect, delivery *DeliveryStore, triggers integrationsdk.TriggerSink, definitions metadatasdk.DefinitionStore, subjectLifecycle ...*SubjectLifecyclePersistence) *OperationsStore {
+	return &OperationsStore{database: database, transactions: database, dialect: dialect, delivery: delivery, triggers: triggers, definitions: definitions, subjectLifecycle: subjectLifecyclePersistence(subjectLifecycle)}
 }
 
 func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.ProviderCallRequest) (integrationmodel.ProviderCallResult, error) {
 	if request.Source.RecordID != "" {
-		if err := guardSubjectWrite(ctx, s.database, s.dialect, request.WorkspaceID, subjectFenceReference{"resource", request.Source.ObjectKey, request.Source.RecordID}); err != nil {
+		if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, request.WorkspaceID, subjectFenceReference{"resource", request.Source.ObjectKey, request.Source.RecordID}); err != nil {
 			return integrationmodel.ProviderCallResult{}, err
 		}
 	}
 	if request.ActorID != "" {
-		if err := guardSubjectWrite(ctx, s.database, s.dialect, request.WorkspaceID, subjectFenceReference{"subject", "", request.ActorID}); err != nil {
+		if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, request.WorkspaceID, subjectFenceReference{"subject", "", request.ActorID}); err != nil {
 			return integrationmodel.ProviderCallResult{}, err
 		}
 	}
@@ -104,7 +107,7 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 		metadataValue["source"] = request.Source
 	}
 	metadata, _ := json.Marshal(metadataValue)
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowWriteAllowed("_integration_invocations"), query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID)))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, request.WorkspaceID, "_integration_invocations", invocationID), query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID)))).Build()
 	if err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}

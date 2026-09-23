@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	actioncontract "github.com/domainry/domainry-foundation/action"
-	"github.com/domainry/domainry-foundation/modulecapability"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	integrationapplication "github.com/domainry/domainry-integration/internal/application/integration"
@@ -24,32 +23,19 @@ type Binding struct {
 	accountAdmin  integrationsdk.ConnectionAccountAdministration
 	workers       integrationsdk.LocalWorkers
 	adapters      []modulehttp.Adapter
-	capability    modulecapability.Binding
 }
 
-func NewBinding(mode integrationsdk.DeploymentMode, service *integrationapplication.Service, management integrationsdk.Management, capability modulecapability.Binding, workers ...integrationsdk.LocalWorkers) (*Binding, error) {
-	if capability == nil {
-		return nil, fmt.Errorf("Integration capability binding is required")
-	}
+func NewBinding(mode integrationsdk.DeploymentMode, service *integrationapplication.Service, management integrationsdk.Management, workers ...integrationsdk.LocalWorkers) (*Binding, error) {
 	accounts, accountsOK := management.(integrationsdk.ConnectionAccounts)
 	accountAdmin, accountAdminOK := management.(integrationsdk.ConnectionAccountAdministration)
 	if !accountsOK || !accountAdminOK {
 		return nil, fmt.Errorf("Integration connection account stores are required")
 	}
-	binding := &Binding{mode: mode, service: service, management: management, accounts: accounts, accountAdmin: accountAdmin, capability: capability}
+	binding := &Binding{mode: mode, service: service, management: management, accounts: accounts, accountAdmin: accountAdmin}
 	if len(workers) != 0 {
 		binding.workers = workers[0]
 	}
 	return binding, nil
-}
-func (b *Binding) CapabilitySummary(ctx context.Context) (modulecapability.ModuleSummary, error) {
-	return b.capability.CapabilitySummary(ctx)
-}
-func (b *Binding) CapabilityCategory(ctx context.Context, key string) (modulecapability.CategoryDocument, error) {
-	return b.capability.CapabilityCategory(ctx, key)
-}
-func (b *Binding) ValidateCapabilityCandidate(ctx context.Context, request modulecapability.ValidationRequest) (modulecapability.ValidationResult, error) {
-	return b.capability.ValidateCapabilityCandidate(ctx, request)
 }
 func (b *Binding) Descriptor() integrationsdk.Descriptor {
 	capabilities := []string{"catalog.read", "requirements.connections.sync", "delivery.accept", "delivery.query", "web_push_subscriptions.manage", "management.connections", "connection_accounts.manage", "management.secrets", "management.api_keys", "management.external_identities", "management.webhook_subscriptions", "operations.call", "operations.invocations.query", "inbound.webhooks.accept", "inbound.events.query"}
@@ -267,5 +253,13 @@ func (b *Binding) SetSubjectLifecycle(subjects integrationsdk.SubjectLifecycle) 
 	b.subjects = subjects
 }
 func (b *Binding) SubjectLifecycle() integrationsdk.SubjectLifecycle { return b.subjects }
+
+func (b *Binding) BindSubjectLifecyclePersistence(ctx context.Context) error {
+	binder, ok := b.subjects.(interface{ BindSubjectLifecyclePersistence(context.Context) error })
+	if !ok {
+		return fmt.Errorf("Integration shared subject lifecycle persistence unavailable")
+	}
+	return binder.BindSubjectLifecyclePersistence(ctx)
+}
 
 var _ integrationsdk.SubjectLifecycleBinding = (*Binding)(nil)

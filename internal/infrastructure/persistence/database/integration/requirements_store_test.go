@@ -35,7 +35,7 @@ func TestRequirementsStorePreservesManagedConnectionState(t *testing.T) {
 		{Key: "region", Name: "Region", Type: connector.ConfigFieldText},
 		{Key: "timeout", Name: "Timeout", Type: connector.ConfigFieldInteger},
 	}, SecretFields: []connector.SecretField{{Key: "token", Name: "Token", CredentialKind: connector.SecretCredentialBearerToken, MaterialFormat: connector.SecretMaterialOpaque, RotationPolicy: connector.SecretRotationManual, ExpiryPolicy: connector.SecretExpiryOptional, TestRequirement: connector.SecretTestOptional}}}}
-	store := NewRequirementsStore(database, dialect, deliveryTestProviders{provider: provider})
+	store := NewRequirementsStore(database, dialect, deliveryTestProviders{provider: provider}, newTestDefinitionStore())
 	requirement := integrationmodel.ConnectionRequirement{Key: "primary", WorkspaceID: "default", ConnectorKey: "crm", ProviderKey: "probe", Name: "Manifest", Config: json.RawMessage(`{"region":"manifest"}`)}
 	if err := store.SynchronizeConnections(t.Context(), []integrationmodel.ConnectionRequirement{requirement}); err != nil {
 		t.Fatal(err)
