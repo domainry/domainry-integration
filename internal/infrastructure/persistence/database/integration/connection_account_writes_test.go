@@ -183,7 +183,7 @@ func TestAccountWriteAuthorityRejectsBeforeProviderIO(t *testing.T) {
 
 func TestAccountWriteExplicitScopeFreeOperationDoesNotRequireGrantRow(t *testing.T) {
 	store, ops, _, _, _, request := accountWriteFixture(t)
-	if _, err := store.database.ExecContext(t.Context(), "DELETE FROM _integration_connection_grants WHERE workspace_id=? AND connection_key=?", request.ExpectedSource.WorkspaceID, request.ExpectedSource.ConnectionKey); err != nil {
+	if _, err := store.database.ExecContext(t.Context(), "UPDATE _integration_connections SET granted_scopes_json=NULL WHERE workspace_id=? AND connection_key=?", request.ExpectedSource.WorkspaceID, request.ExpectedSource.ConnectionKey); err != nil {
 		t.Fatal(err)
 	}
 	if !ops.accountWriteScopesGranted(t.Context(), request.ExpectedSource, [][]string{{}}) {
@@ -345,7 +345,7 @@ func TestAccountWriteInterruptedClaimAndReceiptStorageFailureStayUncertain(t *te
 
 func replaceWriteGrant(ctx context.Context, store *ManagementStore, workspace, key string, scopes []string) error {
 	raw, _ := json.Marshal(scopes)
-	_, err := store.database.ExecContext(ctx, "UPDATE _integration_connection_grants SET scopes_json=? WHERE workspace_id=? AND connection_key=?", string(raw), workspace, key)
+	_, err := store.database.ExecContext(ctx, "UPDATE _integration_connections SET granted_scopes_json=? WHERE workspace_id=? AND connection_key=?", string(raw), workspace, key)
 	return err
 }
 

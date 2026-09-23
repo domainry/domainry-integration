@@ -5,12 +5,14 @@ package module
 import (
 	"fmt"
 
+	"github.com/domainry/domainry-foundation/schemaownership"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	integrationapplication "github.com/domainry/domainry-integration/internal/application/integration"
 	moduleassembly "github.com/domainry/domainry-integration/internal/assembly/module"
 	saasassembly "github.com/domainry/domainry-integration/internal/assembly/saas"
+	databaseschema "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/schema"
 )
 
 // ConnectionAccountSubjectForPrincipal compiles one current Identity action
@@ -35,11 +37,15 @@ func ConnectionAccountSubjectForPrincipal(principal identitysdk.Principal, permi
 type Options = moduleassembly.Options
 type Factory = moduleassembly.Factory
 
+const MigrationOwner = databaseschema.MigrationOwner
+
 func OptionsFromEnvironment() Options        { return moduleassembly.OptionsFromEnvironment() }
 func NewFactory(options ...Options) *Factory { return moduleassembly.NewFactory(options...) }
 func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, error) {
 	return moduleassembly.SchemaMigrations(driver, schema)
 }
+func SchemaOwnership() []schemaownership.Table { return databaseschema.SchemaOwnership() }
+func OwnedTables() []string                    { return schemaownership.Names(SchemaOwnership()) }
 
 // NewSaaSFactory keeps SaaS product HTTP ownership in Integration while the
 // supplied SDK Factory remains responsible for remote service calls.

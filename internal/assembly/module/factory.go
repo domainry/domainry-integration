@@ -51,7 +51,7 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	if err != nil {
 		return nil, err
 	}
-	if err := host.Migrations().ApplyOwnedMigrations(ctx, "integration", migrations); err != nil {
+	if err := host.Migrations().ApplyOwnedMigrations(ctx, databaseschema.MigrationOwner, migrations); err != nil {
 		return nil, fmt.Errorf("apply Integration Module migrations: %w", err)
 	}
 	definitionKernel, err := shareddefinition.Open(ctx, application.RuntimeID, host.Database(), host.Dialect(), host.Migrations())

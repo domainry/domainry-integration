@@ -107,7 +107,7 @@ func TestConnectionProbeScopesDoNotInvalidateBusinessGrant(t *testing.T) {
 	provider.testScopes = [][]string{{"read"}, {"bad scope"}}
 	assertState("requirements_invalid", false)
 	provider.testScopes = [][]string{{"read"}}
-	if _, err = store.database.ExecContext(t.Context(), "DELETE FROM _integration_connection_grants"); err != nil {
+	if _, err = store.database.ExecContext(t.Context(), "UPDATE _integration_connections SET granted_scopes_json=NULL"); err != nil {
 		t.Fatal(err)
 	}
 	assertState("scope_unverified", false)

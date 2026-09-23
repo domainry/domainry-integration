@@ -63,18 +63,17 @@ func (s *OperationsStore) ExecuteAccountWrite(ctx context.Context, claim model.A
 }
 
 func (s *OperationsStore) accountWriteScopesGranted(ctx context.Context, source model.ConnectionAccountWriteSource, alternatives [][]string) bool {
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_connection_grants").Columns("scopes_json").Where(query.And(query.Equal("workspace_id", source.WorkspaceID), query.Equal("connection_key", source.ConnectionKey))).Limit(1).Build()
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_connections").Columns("granted_scopes_json").Where(query.And(query.Equal("workspace_id", source.WorkspaceID), query.Equal("connection_key", source.ConnectionKey))).Limit(1).Build()
 	if err != nil {
 		return false
 	}
-	var raw string
-	err = s.database.QueryRowContext(ctx, statement, args...).Scan(&raw)
-	if err != nil && err != sql.ErrNoRows {
+	var raw sql.NullString
+	if err = s.database.QueryRowContext(ctx, statement, args...).Scan(&raw); err != nil {
 		return false
 	}
 	var grants []string
-	known := err == nil
-	if known && json.Unmarshal([]byte(raw), &grants) != nil {
+	known := raw.Valid
+	if known && json.Unmarshal([]byte(raw.String), &grants) != nil {
 		return false
 	}
 	return service.OAuthScopeState(grants, known, alternatives) == "ready"

@@ -225,7 +225,7 @@ func TestWebWorkspaceReadHTTPModuleSaaSAndRestart(t *testing.T) {
 				t.Fatal("non-OAuth service readiness invalid", account.Readiness)
 			}
 			var grants int
-			if err := f.db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM _integration_connection_grants").Scan(&grants); err != nil || grants != 0 {
+			if err := f.db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM _integration_connections WHERE granted_scopes_json IS NOT NULL").Scan(&grants); err != nil || grants != 0 {
 				t.Fatal("fabricated OAuth grant", grants, err)
 			}
 			var ciphertext string

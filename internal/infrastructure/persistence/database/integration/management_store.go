@@ -293,14 +293,19 @@ func (s *ManagementStore) DeleteConnection(ctx context.Context, workspaceID, key
 		return err
 	}
 	accountWhere := query.And(query.Equal("workspace_id", strings.TrimSpace(workspaceID)), query.Equal("connection_key", strings.TrimSpace(key)))
-	for _, table := range []string{"_integration_connection_account_secrets", "_integration_connection_accounts"} {
-		statement, args, buildErr := query.NewDeleteBuilder(s.dialect, table).Where(accountWhere).Build()
-		if buildErr != nil {
-			return buildErr
-		}
-		if _, execErr := s.database.ExecContext(ctx, statement, args...); execErr != nil {
-			return execErr
-		}
+	release, releaseArgs, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("connection_key", "").Where(accountWhere).Build()
+	if buildErr != nil {
+		return buildErr
+	}
+	if _, execErr := s.database.ExecContext(ctx, release, releaseArgs...); execErr != nil {
+		return execErr
+	}
+	deleteAccount, deleteAccountArgs, buildErr := query.NewDeleteBuilder(s.dialect, "_integration_connection_accounts").Where(accountWhere).Build()
+	if buildErr != nil {
+		return buildErr
+	}
+	if _, execErr := s.database.ExecContext(ctx, deleteAccount, deleteAccountArgs...); execErr != nil {
+		return execErr
 	}
 	statement, args, err := query.NewDeleteBuilder(s.dialect, "_integration_connections").Where(where).Build()
 	if err != nil {

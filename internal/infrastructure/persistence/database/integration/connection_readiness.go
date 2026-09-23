@@ -88,21 +88,20 @@ func (s *ManagementStore) enrichAccountReadiness(ctx context.Context, a *sdk.Con
 			return err
 		}
 	}
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_connection_grants").Columns("scopes_json").Where(query.And(query.Equal("workspace_id", a.WorkspaceID), query.Equal("connection_key", a.Key))).Limit(1).Build()
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_connections").Columns("granted_scopes_json").Where(query.And(query.Equal("workspace_id", a.WorkspaceID), query.Equal("connection_key", a.Key))).Limit(1).Build()
 	if err != nil {
 		return err
 	}
-	var scopes string
-	err = s.database.QueryRowContext(ctx, statement, args...).Scan(&scopes)
-	if err != nil && err != sql.ErrNoRows {
+	var scopes sql.NullString
+	if err = s.database.QueryRowContext(ctx, statement, args...).Scan(&scopes); err != nil {
 		return err
 	}
-	if err == nil && json.Unmarshal([]byte(scopes), &out.GrantedScopes) != nil {
+	if scopes.Valid && json.Unmarshal([]byte(scopes.String), &out.GrantedScopes) != nil {
 		return fmt.Errorf("Integration connection grant is invalid")
 	}
 	out.Available, out.State = true, "configured"
 	if alternatives, declared := connector.ResolveOAuthConnectionTestScopes(provider); declared {
-		state := integrationservice.ConnectionTestScopeState(out.GrantedScopes, err == nil, alternatives)
+		state := integrationservice.ConnectionTestScopeState(out.GrantedScopes, scopes.Valid, alternatives)
 		out.Test = &sdk.ConnectionAccountTestEligibility{Allowed: state == "ready", State: state}
 		if state != "requirements_invalid" {
 			out.Test.ScopeAlternatives = alternatives
@@ -118,10 +117,16 @@ func (s *ManagementStore) saveConnectionGrant(ctx context.Context, workspace, ke
 	if err != nil {
 		return err
 	}
-	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_connection_grants").Columns("id", "workspace_id", "connection_key", "scopes_json").Values(key, workspace, key, string(raw)).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("granted_scopes_json", string(raw)).Where(query.And(query.Equal("workspace_id", workspace), query.Equal("connection_key", key))).Build()
 	if err != nil {
 		return err
 	}
-	_, err = s.database.ExecContext(ctx, statement, args...)
-	return err
+	result, err := s.database.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return fmt.Errorf("Integration connection grant target was not found")
+	}
+	return nil
 }

@@ -86,9 +86,7 @@ type subjectSpec struct {
 
 var subjectSpecs = []subjectSpec{
 	{table: "_integration_connection_accounts", values: map[string]any{"created_by": "anonymous"}},
-	{table: "_integration_connections", status: "status", values: map[string]any{"name": "", "config_json": "{}", "secret_refs_json": "{}", "created_by": "anonymous", "status": "revoked"}},
-	{table: "_integration_connection_account_secrets", erase: true},
-	{table: "_integration_connection_grants", erase: true},
+	{table: "_integration_connections", status: "status", values: map[string]any{"name": "", "config_json": "{}", "secret_refs_json": "{}", "granted_scopes_json": nil, "created_by": "anonymous", "status": "revoked"}},
 	{table: "_integration_provider_runs", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "status": "cancelled", "lease_owner": "", "lease_expires_at": "", "due_at": "", "last_error_code": "integration.subject_erased"}},
 	{table: "_integration_webhook_subscriptions", status: "status", values: map[string]any{"name": "", "description": "", "event_types_json": "[]", "created_by": "anonymous", "status": "disabled"}},
 	{table: "_integration_oauth_sessions", status: "status", busy: []string{"exchanging"}, erase: true},
@@ -307,7 +305,7 @@ func (s *SubjectLifecycleStore) collect(ctx context.Context, tx *sql.Tx, r model
 	if err != nil {
 		return p, err
 	}
-	stmt, args, err = query.NewWorkspaceSelectBuilder(s.dialect, "_integration_connection_account_secrets", r.WorkspaceID).Columns("secret_key").Where(subjectIn("connection_key", p.ConnectionKeys)).Build()
+	stmt, args, err = query.NewWorkspaceSelectBuilder(s.dialect, "_integration_secrets", r.WorkspaceID).Columns("secret_key").Where(query.And(query.Equal("credential_type", "secret"), subjectIn("connection_key", p.ConnectionKeys))).Build()
 	if err != nil {
 		return p, err
 	}

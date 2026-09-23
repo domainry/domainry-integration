@@ -312,35 +312,52 @@ func (s *ManagementStore) syncConnectionAccountSecrets(ctx context.Context, conn
 		return err
 	}
 	for _, key := range keys {
-		statement, values, buildErr := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status", "value_ref").Where(query.And(query.Equal("workspace_id", connection.WorkspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", key))).Limit(1).Build()
+		statement, values, buildErr := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("status", "value_ref", "connection_key").Where(query.And(query.Equal("workspace_id", connection.WorkspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", key))).Limit(1).Build()
 		if buildErr != nil {
 			return buildErr
 		}
-		var status string
+		var status, owner string
 		var valueRef sql.NullString
-		if err = s.database.QueryRowContext(ctx, statement, values...).Scan(&status, &valueRef); err != nil {
+		if err = s.database.QueryRowContext(ctx, statement, values...).Scan(&status, &valueRef, &owner); err != nil {
 			return fmt.Errorf("read Integration connection account secret %q: %w", key, err)
 		}
 		if status != "active" || valueRef.String != "material:"+key {
 			return fmt.Errorf("Integration connection account secret %q is not active managed material", key)
 		}
-	}
-	remove, values, err := query.NewDeleteBuilder(s.dialect, "_integration_connection_account_secrets").Where(accountWhere).Build()
-	if err != nil {
-		return err
-	}
-	if _, err = s.database.ExecContext(ctx, remove, values...); err != nil {
-		return err
+		if owner != "" && owner != connection.Key {
+			return fmt.Errorf("Integration credential belongs to another connection account")
+		}
 	}
 	for _, key := range keys {
-		id := ownerID("connection_account_secret_", connection.WorkspaceID, connection.Key+"\x00"+key)
-		statement, values, buildErr := query.NewInsertBuilder(s.dialect, "_integration_connection_account_secrets").Columns("id", "workspace_id", "connection_key", "secret_key", "created_at").Values(id, connection.WorkspaceID, connection.Key, key, ownerNow()).Build()
+		statement, values, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("connection_key", connection.Key).Where(query.And(
+			query.Equal("workspace_id", connection.WorkspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", key),
+			query.Or(query.Equal("connection_key", ""), query.Equal("connection_key", connection.Key)),
+		)).Build()
 		if buildErr != nil {
 			return buildErr
 		}
-		if _, err = s.database.ExecContext(ctx, statement, values...); err != nil {
-			return fmt.Errorf("reserve Integration connection account secret %q: %w", key, err)
+		result, execErr := s.database.ExecContext(ctx, statement, values...)
+		if execErr != nil {
+			return fmt.Errorf("reserve Integration connection account secret %q: %w", key, execErr)
 		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			return fmt.Errorf("reserve Integration connection account secret %q: ownership changed", key)
+		}
+	}
+	release := query.And(query.Equal("workspace_id", connection.WorkspaceID), query.Equal("credential_type", "secret"), query.Equal("connection_key", connection.Key))
+	if len(keys) > 0 {
+		values := make([]any, len(keys))
+		for index, key := range keys {
+			values[index] = key
+		}
+		release = query.And(release, query.NotIn("secret_key", values...))
+	}
+	statement, values, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("connection_key", "").Where(release).Build()
+	if err != nil {
+		return err
+	}
+	if _, err = s.database.ExecContext(ctx, statement, values...); err != nil {
+		return fmt.Errorf("release stale Integration connection account secrets: %w", err)
 	}
 	return nil
 }
@@ -390,7 +407,7 @@ func (s *ManagementStore) RevokeConnectionAccount(ctx context.Context, subject i
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return integrationsdk.ConnectionAccount{}, errConnectionAccountChanged
 	}
-	secretQuery, secretArgs, err := query.NewSelectBuilder(s.dialect, "_integration_connection_account_secrets").Columns("secret_key").Where(query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("connection_key", account.Key))).OrderBy(query.Ascending("secret_key")).Build()
+	secretQuery, secretArgs, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("secret_key").Where(query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("credential_type", "secret"), query.Equal("connection_key", account.Key))).OrderBy(query.Ascending("secret_key")).Build()
 	if err != nil {
 		return integrationsdk.ConnectionAccount{}, err
 	}
@@ -439,7 +456,7 @@ func (s *ManagementStore) rejectReservedAccountSecrets(ctx context.Context, conn
 			continue
 		}
 		key := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ref), "secret:"))
-		statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_connection_account_secrets").Columns("connection_key").Where(query.And(query.Equal("workspace_id", connection.WorkspaceID), query.Equal("secret_key", key))).Limit(1).Build()
+		statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("connection_key").Where(query.And(query.Equal("workspace_id", connection.WorkspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", key))).Limit(1).Build()
 		if err != nil {
 			return err
 		}
@@ -451,7 +468,7 @@ func (s *ManagementStore) rejectReservedAccountSecrets(ctx context.Context, conn
 		if err != nil {
 			return err
 		}
-		if owner != connection.Key {
+		if owner != "" && owner != connection.Key {
 			return fmt.Errorf("Integration credential belongs to another connection account")
 		}
 	}

@@ -372,7 +372,7 @@ func integrationSubjectRowJSON(t *testing.T, host *rotationHost, table, id strin
 }
 func integrationPeerSnapshot(t *testing.T, host *rotationHost) string {
 	t.Helper()
-	tables := []string{"_integration_connections", "_integration_connection_accounts", "_integration_connection_account_secrets", "_integration_connection_grants", "_integration_secrets", "_integration_secret_materials", "_integration_oauth_sessions", "_integration_web_push_subscriptions", "_integration_external_identities", "_integration_provider_runs", "_integration_webhook_subscriptions", "_integration_invocations", "_integration_events"}
+	tables := []string{"_integration_connections", "_integration_connection_accounts", "_integration_secrets", "_integration_secret_materials", "_integration_oauth_sessions", "_integration_web_push_subscriptions", "_integration_external_identities", "_integration_provider_runs", "_integration_webhook_subscriptions", "_integration_invocations", "_integration_events"}
 	all := []string{}
 	for _, table := range tables {
 		stmt, args, err := query.NewSelectBuilder(host.dialect, table).Columns("id").Where(query.Or(query.Equal("workspace_id", "other"), query.Equal("workspace_id", "ws"))).OrderBy(query.Ascending("id")).Build()

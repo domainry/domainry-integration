@@ -14,8 +14,8 @@ func TestSchemaMigrationsCoverOwnerTables(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s schema: %v", driver, err)
 		}
-		if len(migrations) != 5 || len(migrations[0].Statements) != 10 || len(migrations[1].Statements) == 0 || len(migrations[2].Statements) != 4 {
-			t.Fatalf("%s migrations=%d foundation=%d indexes=%d", driver, len(migrations), len(migrations[0].Statements), len(migrations[1].Statements))
+		if len(migrations) != 1 || len(migrations[0].Statements) != 22 || migrations[0].Baseline != nil {
+			t.Fatalf("%s migrations=%#v", driver, migrations)
 		}
 		for _, migration := range migrations {
 			for _, statement := range migration.Statements {
@@ -23,7 +23,8 @@ func TestSchemaMigrationsCoverOwnerTables(t *testing.T) {
 					strings.Contains(statement, "_integration_connector_definitions") || strings.Contains(statement, "_integration_event_mapping_definitions") ||
 					strings.Contains(statement, "_integration_connector_provider_states") || strings.Contains(statement, "_integration_connector_provider_commits") ||
 					strings.Contains(statement, "_integration_event_mapping_intents") || strings.Contains(statement, "_integration_api_keys") ||
-					strings.Contains(statement, "_integration_credential_refresh_leases") {
+					strings.Contains(statement, "_integration_credential_refresh_leases") || strings.Contains(statement, "_integration_connection_account_secrets") ||
+					strings.Contains(statement, "_integration_connection_grants") {
 					t.Fatalf("%s still owns a retired private table: %s", driver, statement)
 				}
 			}
@@ -71,7 +72,7 @@ func TestFreshSchemaUsesOneTypedCredentialTable(t *testing.T) {
 	if err := rows.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"credential_type", "display_prefix", "lookup_hash", "actor_id", "role_key", "scopes_json", "last_used_at"} {
+	for _, required := range []string{"credential_type", "connection_key", "display_prefix", "lookup_hash", "actor_id", "role_key", "scopes_json", "last_used_at"} {
 		if !columns[required] {
 			t.Errorf("typed credential column %s is missing", required)
 		}

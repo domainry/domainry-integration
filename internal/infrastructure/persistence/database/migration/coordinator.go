@@ -8,7 +8,7 @@ import (
 	databaseschema "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/schema"
 )
 
-const Owner = "integration"
+const Owner = databaseschema.MigrationOwner
 
 func Register(ctx context.Context, registrar modulehost.MigrationRegistrar) error {
 	if registrar == nil {

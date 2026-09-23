@@ -94,7 +94,7 @@ func TestAccountReadsUseOwnedCredentialsAndSensitiveActorBoundEvidence(t *testin
 	if err != nil || changed.InvocationID == other.InvocationID || p.calls != 3 {
 		t.Fatal("different input reused evidence", changed, err)
 	}
-	if _, err := store.database.ExecContext(t.Context(), "UPDATE _integration_connection_grants SET scopes_json='[]' WHERE connection_key='shared'"); err != nil {
+	if _, err := store.database.ExecContext(t.Context(), "UPDATE _integration_connections SET granted_scopes_json='[]' WHERE connection_key='shared'"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.ReadConnectionAccount(t.Context(), subject, "shared", request); err == nil || p.calls != 3 {
@@ -132,12 +132,12 @@ func TestAccountReadAuthorityRejectsBeforeAnyProviderIO(t *testing.T) {
 			case "invalid-declaration":
 				p.scopes = [][]string{{"bad scope"}}
 			case "missing-grant":
-				_, err := store.database.ExecContext(ctx, "DELETE FROM _integration_connection_grants")
+				_, err := store.database.ExecContext(ctx, "UPDATE _integration_connections SET granted_scopes_json=NULL")
 				if err != nil {
 					t.Fatal(err)
 				}
 			case "busy-only":
-				_, err := store.database.ExecContext(ctx, `UPDATE _integration_connection_grants SET scopes_json='["calendar.freebusy"]'`)
+				_, err := store.database.ExecContext(ctx, `UPDATE _integration_connections SET granted_scopes_json='["calendar.freebusy"]'`)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -186,7 +186,7 @@ func TestAccountReadsRejectChangedTargetBeforeExecutionAndRevokeBeforeReturn(t *
 				case "before-contract":
 					p.hash = strings.Repeat("d", 64)
 				case "after-grant":
-					_, err = store.database.ExecContext(t.Context(), `UPDATE _integration_connection_grants SET scopes_json='["calendar.freebusy"]' WHERE connection_key='personal-a'`)
+					_, err = store.database.ExecContext(t.Context(), `UPDATE _integration_connections SET granted_scopes_json='["calendar.freebusy"]' WHERE connection_key='personal-a'`)
 				case "after-revoke":
 					a, e := store.GetConnectionAccount(t.Context(), accountReadPublicSubject(subject), "personal-a")
 					if e != nil {
