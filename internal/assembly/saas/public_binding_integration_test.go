@@ -15,6 +15,7 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	shareddefinition "github.com/domainry/domainry-foundation/definition"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
@@ -351,7 +352,7 @@ type publicFlowRegistrar struct{ database *sql.DB }
 func (publicFlowRegistrar) Driver() string { return "sqlite" }
 func (publicFlowRegistrar) Schema() string { return "" }
 func (r publicFlowRegistrar) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {
-	if owner != "integration" && owner != "metadata" {
+	if owner != "integration" && owner != shareddefinition.MigrationOwner {
 		return fmt.Errorf("unexpected migration owner %q", owner)
 	}
 	for _, migration := range migrations {

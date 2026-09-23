@@ -13,6 +13,7 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	shareddefinition "github.com/domainry/domainry-foundation/definition"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
@@ -119,7 +120,7 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 	if binding.Descriptor().Mode != integrationsdk.DeploymentModeModule {
 		t.Fatalf("mode=%q", binding.Descriptor().Mode)
 	}
-	if len(host.registrar.owners) != 2 || host.registrar.owners[0] != "integration" || host.registrar.owners[1] != "metadata" {
+	if len(host.registrar.owners) != 2 || host.registrar.owners[0] != "integration" || host.registrar.owners[1] != shareddefinition.MigrationOwner {
 		t.Fatalf("migration owners=%v", host.registrar.owners)
 	}
 	provider, ok := binding.(modulehttp.Provider)

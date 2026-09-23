@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
+	shareddefinition "github.com/domainry/domainry-foundation/definition"
 	foundationhttp "github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
@@ -17,8 +18,6 @@ import (
 	databaseschema "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/schema"
 	modulehttp "github.com/domainry/domainry-integration/internal/transport/http/module"
 	metadatasdk "github.com/domainry/domainry-metadata-sdk"
-	metadatamodulehost "github.com/domainry/domainry-metadata-sdk/modulehost"
-	metadatamodule "github.com/domainry/domainry-metadata/module"
 )
 
 type Options struct{}
@@ -55,10 +54,11 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	if err := host.Migrations().ApplyOwnedMigrations(ctx, "integration", migrations); err != nil {
 		return nil, fmt.Errorf("apply Integration Module migrations: %w", err)
 	}
-	definitions, err := metadatamodule.OpenDefinitionStore(ctx, metadatasdk.ApplicationRef{InstallationID: application.RuntimeID}, integrationMetadataHost{host: host})
+	definitionKernel, err := shareddefinition.Open(ctx, application.RuntimeID, host.Database(), host.Dialect(), host.Migrations())
 	if err != nil {
 		return nil, fmt.Errorf("open Integration Definition persistence: %w", err)
 	}
+	definitions := metadatasdk.AdaptDefinitionStore(definitionKernel)
 	builtinCatalog, err := connectorscatalog.Definitions()
 	if err != nil {
 		return nil, err
@@ -96,22 +96,6 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 		binding.SetHTTPAdapters([]foundationhttp.Adapter{adapter})
 	}
 	return binding, nil
-}
-
-type integrationMetadataHost struct{ host modulehost.Host }
-
-func (h integrationMetadataHost) Database() metadatamodulehost.Database { return h.host.Database() }
-func (h integrationMetadataHost) Dialect() metadatamodulehost.Dialect   { return h.host.Dialect() }
-func (h integrationMetadataHost) Migrations() metadatamodulehost.MigrationRegistrar {
-	return integrationMetadataMigrations{registrar: h.host.Migrations()}
-}
-
-type integrationMetadataMigrations struct{ registrar modulehost.MigrationRegistrar }
-
-func (m integrationMetadataMigrations) Driver() string { return m.registrar.Driver() }
-func (m integrationMetadataMigrations) Schema() string { return m.registrar.Schema() }
-func (m integrationMetadataMigrations) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []metadatamodulehost.SchemaMigration) error {
-	return m.registrar.ApplyOwnedMigrations(ctx, owner, migrations)
 }
 
 var _ modulehost.Factory = (*Factory)(nil)

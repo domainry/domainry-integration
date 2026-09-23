@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	shareddefinition "github.com/domainry/domainry-foundation/definition"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	integrationmigration "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/migration"
@@ -107,13 +108,13 @@ func TestPublicModuleRetainsRotatedCredentialsAcrossRestart(t *testing.T) {
 			if _, err := call(binding, "after-revoke", "workspace-a"); err == nil || host.provider.calls != 1 {
 				t.Fatal("revoked credential reached provider", err)
 			}
-			var integrationMigrations, metadataMigrations int
+			var integrationMigrations, definitionMigrations int
 			migrations, err := module.SchemaMigrations("sqlite", "")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := host.db.QueryRowContext(t.Context(), "SELECT SUM(CASE WHEN owner='integration' THEN 1 ELSE 0 END), SUM(CASE WHEN owner='metadata' THEN 1 ELSE 0 END) FROM _schema_migrations").Scan(&integrationMigrations, &metadataMigrations); err != nil || integrationMigrations != len(migrations) || metadataMigrations == 0 {
-				t.Fatal("host migration ledger was not reused", err, integrationMigrations, metadataMigrations)
+			if err := host.db.QueryRowContext(t.Context(), "SELECT SUM(CASE WHEN owner='integration' THEN 1 ELSE 0 END), SUM(CASE WHEN owner=? THEN 1 ELSE 0 END) FROM _schema_migrations", shareddefinition.MigrationOwner).Scan(&integrationMigrations, &definitionMigrations); err != nil || integrationMigrations != len(migrations) || definitionMigrations == 0 {
+				t.Fatal("host migration ledger was not reused", err, integrationMigrations, definitionMigrations)
 			}
 		})
 	}
@@ -165,7 +166,7 @@ func (h *rotationHost) RuntimeTriggers() integrationsdk.TriggerSink   { return h
 func (*rotationHost) Driver() string                                  { return "sqlite" }
 func (*rotationHost) Schema() string                                  { return "" }
 func (h *rotationHost) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {
-	if owner != "integration" && owner != "metadata" {
+	if owner != "integration" && owner != shareddefinition.MigrationOwner {
 		return errors.New("unexpected migration owner")
 	}
 	return integrationmigration.ApplyOwnedMigrations(ctx, h.db, h.dialect, owner, migrations)

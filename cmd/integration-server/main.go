@@ -17,6 +17,7 @@ import (
 
 	connector "github.com/domainry/domainry-connector-sdk"
 	connectormodule "github.com/domainry/domainry-connectors/module"
+	shareddefinition "github.com/domainry/domainry-foundation/definition"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	saasassembly "github.com/domainry/domainry-integration/internal/assembly/saas"
@@ -124,7 +125,7 @@ func (*standaloneHost) RuntimeTriggers() integrationsdk.TriggerSink     { return
 func (*standaloneHost) Driver() string                                  { return "sqlite" }
 func (*standaloneHost) Schema() string                                  { return "" }
 func (h *standaloneHost) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {
-	if owner != "integration" && owner != "metadata" {
+	if owner != "integration" && owner != shareddefinition.MigrationOwner {
 		return fmt.Errorf("unsupported migration owner %q", owner)
 	}
 	h.migrationMu.Lock()
