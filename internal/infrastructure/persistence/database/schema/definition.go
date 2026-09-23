@@ -91,7 +91,7 @@ func req(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition {
 func opt(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition {
 	return ormschema.Column(name, kind)
 }
-func key(name string) ormschema.ColumnDefinition   { return req(name, ormschema.TextKey(255)) }
+func key(name string) ormschema.ColumnDefinition   { return req(name, ormschema.TextKey(191)) }
 func scope(name string) ormschema.ColumnDefinition { return req(name, ormschema.TextKey(191)) }
 func optionalScope(name string) ormschema.ColumnDefinition {
 	return req(name, ormschema.TextKey(191)).DefaultValue("")

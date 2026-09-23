@@ -8,13 +8,21 @@ import (
 	"github.com/domainry/domainry-foundation/schemaownership"
 )
 
-func TestMySQLConnectionAccountOwnerIndexUsesBoundedColumns(t *testing.T) {
+func TestMySQLCompositeIndexesUseBoundedColumns(t *testing.T) {
 	migrations, err := SchemaMigrations("mysql", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(migrations[0].Statements, "\n")
-	for _, want := range []string{"`scope` VARCHAR(32) NOT NULL", "`owner_user_id` VARCHAR(191) NOT NULL", "idx_integration_connection_account_owner"} {
+	for _, want := range []string{
+		"`scope` VARCHAR(32) NOT NULL",
+		"`owner_user_id` VARCHAR(191) NOT NULL",
+		"`status` VARCHAR(191) NOT NULL",
+		"`due_at` VARCHAR(191) NOT NULL",
+		"`lease_expires_at` VARCHAR(191) NOT NULL",
+		"idx_integration_connection_account_owner",
+		"idx_integration_provider_run_due",
+	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("MySQL connection-account migration is missing %q: %s", want, joined)
 		}
