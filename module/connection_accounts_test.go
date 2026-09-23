@@ -17,7 +17,6 @@ import (
 	"github.com/domainry/domainry-foundation/modulehttp"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
-	"github.com/domainry/domainry-integration/internal/testsupport/definitionfixture"
 	"github.com/domainry/domainry-integration/module"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 )
@@ -47,7 +46,7 @@ func TestPublicConnectionAccountsHTTPIsolationRefreshRevokeAndRestart(t *testing
 		}
 		db.SetMaxOpenConns(1)
 		dialect, _ := ormdialect.New(ormdialect.SQLite)
-		host = &rotationHost{db: db, dialect: dialect.WithSchema(""), provider: &rotationProvider{}, key: cipherKey, definitions: definitionfixture.NewStore()}
+		host = &rotationHost{db: db, dialect: dialect.WithSchema(""), provider: &rotationProvider{}, key: cipherKey}
 		binding, err = module.NewFactory().OpenModule(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "account-http"}, host)
 		if err != nil {
 			db.Close()

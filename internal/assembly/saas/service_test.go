@@ -13,29 +13,25 @@ import (
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	"github.com/domainry/domainry-integration-sdk/remote"
-	"github.com/domainry/domainry-integration/internal/testsupport/definitionfixture"
-	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	_ "modernc.org/sqlite"
 )
 
 type testHost struct {
-	database    *sql.DB
-	dialect     modulehost.Dialect
-	definitions metadatasdk.DefinitionStore
+	database *sql.DB
+	dialect  modulehost.Dialect
 }
 
 func newTestHost(database *sql.DB, dialect modulehost.Dialect) testHost {
-	return testHost{database: database, dialect: dialect, definitions: definitionfixture.NewStore()}
+	return testHost{database: database, dialect: dialect}
 }
 
-func (h testHost) Database() modulehost.Database                { return h.database }
-func (h testHost) Dialect() modulehost.Dialect                  { return h.dialect }
-func (h testHost) Migrations() modulehost.MigrationRegistrar    { return testRegistrar{h} }
-func (testHost) Providers() modulehost.ProviderRegistry         { return testProviders{} }
-func (testHost) SecretCipher() modulehost.SecretMaterialCipher  { return testCipher{} }
-func (testHost) RuntimeTriggers() integrationsdk.TriggerSink    { return testTrigger{} }
-func (h testHost) DefinitionStore() metadatasdk.DefinitionStore { return h.definitions }
+func (h testHost) Database() modulehost.Database               { return h.database }
+func (h testHost) Dialect() modulehost.Dialect                 { return h.dialect }
+func (h testHost) Migrations() modulehost.MigrationRegistrar   { return testRegistrar{h} }
+func (testHost) Providers() modulehost.ProviderRegistry        { return testProviders{} }
+func (testHost) SecretCipher() modulehost.SecretMaterialCipher { return testCipher{} }
+func (testHost) RuntimeTriggers() integrationsdk.TriggerSink   { return testTrigger{} }
 
 type testTrigger struct{}
 

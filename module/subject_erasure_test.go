@@ -16,7 +16,6 @@ import (
 	sdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/remote"
 	saas "github.com/domainry/domainry-integration/internal/assembly/saas"
-	"github.com/domainry/domainry-integration/internal/testsupport/definitionfixture"
 	"github.com/domainry/domainry-integration/module"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	"github.com/domainry/domainry-orm/query"
@@ -38,7 +37,7 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 			if _, err = rand.Read(cipherKey[:]); err != nil {
 				t.Fatal(err)
 			}
-			host := &rotationHost{db: db, dialect: d.WithSchema(""), provider: &rotationProvider{}, key: cipherKey, definitions: definitionfixture.NewStore()}
+			host := &rotationHost{db: db, dialect: d.WithSchema(""), provider: &rotationProvider{}, key: cipherKey}
 			var binding sdk.Binding
 			var ownerBinding sdk.Binding
 			if mode == "module" {

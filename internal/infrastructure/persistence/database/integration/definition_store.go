@@ -88,6 +88,15 @@ func SyncConnectorCatalog(ctx context.Context, definitions metadatasdk.Definitio
 			SourceKind: integrationConnectorSource, SourceID: integrationConnectorSource, PublishedBy: "integration_catalog",
 		})
 	}
+	revisionPayload, err := json.Marshal(snapshot.Definitions)
+	if err != nil {
+		return fmt.Errorf("encode Integration connector catalog revision: %w", err)
+	}
+	revision := sha256.Sum256(revisionPayload)
+	snapshot.SchemaVersion = integrationConnectorSchemaVersion + "-" + hex.EncodeToString(revision[:16])
+	for index := range snapshot.Definitions {
+		snapshot.Definitions[index].SchemaVersion = snapshot.SchemaVersion
+	}
 	return definitions.ReplaceSourceSnapshot(ctx, snapshot)
 }
 

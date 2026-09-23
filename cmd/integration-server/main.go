@@ -23,9 +23,6 @@ import (
 	"github.com/domainry/domainry-integration/internal/infrastructure/connectortransport"
 	integrationmigration "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/migration"
 	"github.com/domainry/domainry-integration/internal/infrastructure/security"
-	metadatasdk "github.com/domainry/domainry-metadata-sdk"
-	metadatamodulehost "github.com/domainry/domainry-metadata-sdk/modulehost"
-	metadatamodule "github.com/domainry/domainry-metadata/module"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	_ "modernc.org/sqlite"
 )
@@ -69,12 +66,6 @@ func run() error {
 	database.SetMaxOpenConns(1)
 	dialect, _ := ormdialect.New(ormdialect.SQLite)
 	host := &standaloneHost{database: database, dialect: dialect.WithSchema(""), providers: registry, cipher: cipher}
-	metadataBinding, err := metadatamodule.NewFactory().OpenModule(context.Background(), metadatasdk.ApplicationRef{InstallationID: application.RuntimeID}, standaloneMetadataHost{host})
-	if err != nil {
-		return fmt.Errorf("open Metadata Module for Integration Definitions: %w", err)
-	}
-	defer metadataBinding.Close(context.Background())
-	host.definitions = metadataBinding.DefinitionStore()
 	service, err := saasassembly.Open(context.Background(), application, host, token)
 	if err != nil {
 		return err
@@ -122,7 +113,6 @@ type standaloneHost struct {
 	migrationMu sync.Mutex
 	providers   modulehost.ProviderRegistry
 	cipher      modulehost.SecretMaterialCipher
-	definitions metadatasdk.DefinitionStore
 }
 
 func (h *standaloneHost) Database() modulehost.Database                 { return h.database }
@@ -131,7 +121,6 @@ func (h *standaloneHost) Migrations() modulehost.MigrationRegistrar     { return
 func (h *standaloneHost) Providers() modulehost.ProviderRegistry        { return h.providers }
 func (h *standaloneHost) SecretCipher() modulehost.SecretMaterialCipher { return h.cipher }
 func (*standaloneHost) RuntimeTriggers() integrationsdk.TriggerSink     { return unavailableTrigger{} }
-func (h *standaloneHost) DefinitionStore() metadatasdk.DefinitionStore  { return h.definitions }
 func (*standaloneHost) Driver() string                                  { return "sqlite" }
 func (*standaloneHost) Schema() string                                  { return "" }
 func (h *standaloneHost) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {
@@ -141,16 +130,6 @@ func (h *standaloneHost) ApplyOwnedMigrations(ctx context.Context, owner string,
 	h.migrationMu.Lock()
 	defer h.migrationMu.Unlock()
 	return integrationmigration.ApplyOwnedMigrations(ctx, h.database, h.dialect, owner, migrations)
-}
-
-type standaloneMetadataHost struct{ *standaloneHost }
-
-func (h standaloneMetadataHost) Database() metadatamodulehost.Database {
-	return h.standaloneHost.database
-}
-func (h standaloneMetadataHost) Dialect() metadatamodulehost.Dialect { return h.standaloneHost.dialect }
-func (h standaloneMetadataHost) Migrations() metadatamodulehost.MigrationRegistrar {
-	return h.standaloneHost
 }
 
 type unavailableTrigger struct{}

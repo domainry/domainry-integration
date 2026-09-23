@@ -17,26 +17,22 @@ import (
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
-	"github.com/domainry/domainry-integration/internal/testsupport/definitionfixture"
-	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	_ "modernc.org/sqlite"
 )
 
 type testHost struct {
-	database    *sql.DB
-	dialect     modulehost.Dialect
-	registrar   *testRegistrar
-	definitions metadatasdk.DefinitionStore
+	database  *sql.DB
+	dialect   modulehost.Dialect
+	registrar *testRegistrar
 }
 
-func (h *testHost) Database() modulehost.Database                { return h.database }
-func (h *testHost) Dialect() modulehost.Dialect                  { return h.dialect }
-func (h *testHost) Migrations() modulehost.MigrationRegistrar    { return h.registrar }
-func (*testHost) Providers() modulehost.ProviderRegistry         { return testProviders{} }
-func (*testHost) SecretCipher() modulehost.SecretMaterialCipher  { return testCipher{} }
-func (*testHost) RuntimeTriggers() integrationsdk.TriggerSink    { return testTrigger{} }
-func (h *testHost) DefinitionStore() metadatasdk.DefinitionStore { return h.definitions }
+func (h *testHost) Database() modulehost.Database               { return h.database }
+func (h *testHost) Dialect() modulehost.Dialect                 { return h.dialect }
+func (h *testHost) Migrations() modulehost.MigrationRegistrar   { return h.registrar }
+func (*testHost) Providers() modulehost.ProviderRegistry        { return testProviders{} }
+func (*testHost) SecretCipher() modulehost.SecretMaterialCipher { return testCipher{} }
+func (*testHost) RuntimeTriggers() integrationsdk.TriggerSink   { return testTrigger{} }
 
 type testTrigger struct{}
 
@@ -107,7 +103,7 @@ func openTestHost(t *testing.T) *testHost {
 		t.Fatal(err)
 	}
 	registrar := &testRegistrar{database: database}
-	return &testHost{database: database, dialect: dialect.WithSchema(""), registrar: registrar, definitions: definitionfixture.NewStore()}
+	return &testHost{database: database, dialect: dialect.WithSchema(""), registrar: registrar}
 }
 
 func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
@@ -123,7 +119,7 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 	if binding.Descriptor().Mode != integrationsdk.DeploymentModeModule {
 		t.Fatalf("mode=%q", binding.Descriptor().Mode)
 	}
-	if len(host.registrar.owners) != 1 || host.registrar.owners[0] != "integration" {
+	if len(host.registrar.owners) != 2 || host.registrar.owners[0] != "integration" || host.registrar.owners[1] != "metadata" {
 		t.Fatalf("migration owners=%v", host.registrar.owners)
 	}
 	provider, ok := binding.(modulehttp.Provider)

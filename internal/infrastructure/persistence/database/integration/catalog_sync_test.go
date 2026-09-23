@@ -34,7 +34,7 @@ func TestConnectorCatalogPublishesSharedDefinitionsWithProviderOverlay(t *testin
 	if err != nil || !found {
 		t.Fatal(definition, found, err)
 	}
-	if definition.SourceID != integrationConnectorSource || definition.SchemaVersion != integrationConnectorSchemaVersion {
+	if definition.SourceID != integrationConnectorSource || !strings.HasPrefix(definition.SchemaVersion, integrationConnectorSchemaVersion+"-") {
 		t.Fatalf("unexpected shared Definition identity: %#v", definition)
 	}
 	var projected map[string]any

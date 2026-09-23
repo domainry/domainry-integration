@@ -16,6 +16,9 @@ import (
 	integrationpersistence "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/integration"
 	databaseschema "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/schema"
 	modulehttp "github.com/domainry/domainry-integration/internal/transport/http/module"
+	metadatasdk "github.com/domainry/domainry-metadata-sdk"
+	metadatamodulehost "github.com/domainry/domainry-metadata-sdk/modulehost"
+	metadatamodule "github.com/domainry/domainry-metadata/module"
 )
 
 type Options struct{}
@@ -42,7 +45,7 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	if err := application.Validate(); err != nil {
 		return nil, err
 	}
-	if host == nil || host.Database() == nil || host.Dialect() == nil || host.Migrations() == nil || host.Providers() == nil || host.SecretCipher() == nil || host.DefinitionStore() == nil || host.RuntimeTriggers() == nil {
+	if host == nil || host.Database() == nil || host.Dialect() == nil || host.Migrations() == nil || host.Providers() == nil || host.SecretCipher() == nil || host.RuntimeTriggers() == nil {
 		return nil, fmt.Errorf("Integration Module host is incomplete")
 	}
 	migrations, err := databaseschema.SchemaMigrations(host.Migrations().Driver(), host.Migrations().Schema())
@@ -52,22 +55,26 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	if err := host.Migrations().ApplyOwnedMigrations(ctx, "integration", migrations); err != nil {
 		return nil, fmt.Errorf("apply Integration Module migrations: %w", err)
 	}
+	definitions, err := metadatamodule.OpenDefinitionStore(ctx, metadatasdk.ApplicationRef{InstallationID: application.RuntimeID}, integrationMetadataHost{host: host})
+	if err != nil {
+		return nil, fmt.Errorf("open Integration Definition persistence: %w", err)
+	}
 	builtinCatalog, err := connectorscatalog.Definitions()
 	if err != nil {
 		return nil, err
 	}
-	if err := integrationpersistence.SyncConnectorCatalog(ctx, host.DefinitionStore(), builtinCatalog, host.Providers().Descriptors()); err != nil {
+	if err := integrationpersistence.SyncConnectorCatalog(ctx, definitions, builtinCatalog, host.Providers().Descriptors()); err != nil {
 		return nil, fmt.Errorf("synchronize Integration connector Definitions: %w", err)
 	}
 	subjectLifecyclePersistence := integrationpersistence.NewSubjectLifecyclePersistence()
 	webPush := integrationpersistence.NewWebPushSubscriptionStore(host.Database(), host.Dialect(), subjectLifecyclePersistence)
 	resolver := integrationpersistence.NewSecretResolver(host.Database(), host.Dialect(), host.SecretCipher(), subjectLifecyclePersistence)
 	delivery := integrationpersistence.NewDeliveryStoreWithSubjectLifecycle(host.Database(), host.Dialect(), host.Providers(), resolver, webPush, subjectLifecyclePersistence)
-	operations := integrationpersistence.NewOperationsStore(host.Database(), host.Dialect(), delivery, host.RuntimeTriggers(), host.DefinitionStore(), subjectLifecyclePersistence)
+	operations := integrationpersistence.NewOperationsStore(host.Database(), host.Dialect(), delivery, host.RuntimeTriggers(), definitions, subjectLifecyclePersistence)
 	workers := integrationpersistence.NewWorkerStore(host.Database(), host.Dialect(), delivery, operations, application.RuntimeID, subjectLifecyclePersistence)
 	domain := integrationservice.New(
-		integrationpersistence.NewCatalogStore(host.DefinitionStore()),
-		integrationpersistence.NewRequirementsStore(host.Database(), host.Dialect(), host.Providers(), host.DefinitionStore(), subjectLifecyclePersistence),
+		integrationpersistence.NewCatalogStore(definitions),
+		integrationpersistence.NewRequirementsStore(host.Database(), host.Dialect(), host.Providers(), definitions, subjectLifecyclePersistence),
 		delivery,
 		webPush,
 		operations,
@@ -80,7 +87,7 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	}
 	binding.SetConnectionAccountReads(integrationapplication.NewAccountReadService(management, domain))
 	binding.SetConnectionAccountWrites(integrationapplication.NewAccountWriteService(management, accountwrite.Codec{}, operations, operations))
-	binding.SetSubjectLifecycle(integrationsdkadapter.NewSubjectLifecycleBinding(integrationapplication.NewSubjectLifecycleService(integrationpersistence.NewSubjectLifecycleStore(host.Database(), host.Dialect(), host.DefinitionStore(), subjectLifecyclePersistence))))
+	binding.SetSubjectLifecycle(integrationsdkadapter.NewSubjectLifecycleBinding(integrationapplication.NewSubjectLifecycleService(integrationpersistence.NewSubjectLifecycleStore(host.Database(), host.Dialect(), definitions, subjectLifecyclePersistence))))
 	if mode == integrationsdk.DeploymentModeModule {
 		adapter, err := modulehttp.NewAdapter(binding)
 		if err != nil {
@@ -89,6 +96,22 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 		binding.SetHTTPAdapters([]foundationhttp.Adapter{adapter})
 	}
 	return binding, nil
+}
+
+type integrationMetadataHost struct{ host modulehost.Host }
+
+func (h integrationMetadataHost) Database() metadatamodulehost.Database { return h.host.Database() }
+func (h integrationMetadataHost) Dialect() metadatamodulehost.Dialect   { return h.host.Dialect() }
+func (h integrationMetadataHost) Migrations() metadatamodulehost.MigrationRegistrar {
+	return integrationMetadataMigrations{registrar: h.host.Migrations()}
+}
+
+type integrationMetadataMigrations struct{ registrar modulehost.MigrationRegistrar }
+
+func (m integrationMetadataMigrations) Driver() string { return m.registrar.Driver() }
+func (m integrationMetadataMigrations) Schema() string { return m.registrar.Schema() }
+func (m integrationMetadataMigrations) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []metadatamodulehost.SchemaMigration) error {
+	return m.registrar.ApplyOwnedMigrations(ctx, owner, migrations)
 }
 
 var _ modulehost.Factory = (*Factory)(nil)

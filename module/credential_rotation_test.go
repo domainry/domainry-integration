@@ -15,12 +15,9 @@ import (
 	connector "github.com/domainry/domainry-connector-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
-	"github.com/domainry/domainry-integration/internal/testsupport/definitionfixture"
+	integrationmigration "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/migration"
 	"github.com/domainry/domainry-integration/module"
-	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
-	"github.com/domainry/domainry-orm/migration"
-	"github.com/domainry/domainry-orm/query"
 	_ "modernc.org/sqlite"
 )
 
@@ -48,7 +45,7 @@ func TestPublicModuleRetainsRotatedCredentialsAcrossRestart(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				host := &rotationHost{db: db, dialect: d.WithSchema(""), provider: &rotationProvider{}, key: key, definitions: definitionfixture.NewStore()}
+				host := &rotationHost{db: db, dialect: d.WithSchema(""), provider: &rotationProvider{}, key: key}
 				binding, err := module.NewFactory().OpenModule(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "rotation-runtime"}, host)
 				if err != nil {
 					t.Fatal(err)
@@ -110,13 +107,13 @@ func TestPublicModuleRetainsRotatedCredentialsAcrossRestart(t *testing.T) {
 			if _, err := call(binding, "after-revoke", "workspace-a"); err == nil || host.provider.calls != 1 {
 				t.Fatal("revoked credential reached provider", err)
 			}
-			var ledgerRows int
+			var integrationMigrations, metadataMigrations int
 			migrations, err := module.SchemaMigrations("sqlite", "")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := host.db.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM _schema_migrations").Scan(&ledgerRows); err != nil || ledgerRows != len(migrations) {
-				t.Fatal("host migration ledger was not reused", err, ledgerRows)
+			if err := host.db.QueryRowContext(t.Context(), "SELECT SUM(CASE WHEN owner='integration' THEN 1 ELSE 0 END), SUM(CASE WHEN owner='metadata' THEN 1 ELSE 0 END) FROM _schema_migrations").Scan(&integrationMigrations, &metadataMigrations); err != nil || integrationMigrations != len(migrations) || metadataMigrations == 0 {
+				t.Fatal("host migration ledger was not reused", err, integrationMigrations, metadataMigrations)
 			}
 		})
 	}
@@ -153,11 +150,10 @@ func (p *rotationProvider) TestConnection(ctx context.Context, request connector
 }
 
 type rotationHost struct {
-	db          *sql.DB
-	dialect     modulehost.Dialect
-	provider    *rotationProvider
-	key         [32]byte
-	definitions metadatasdk.DefinitionStore
+	db       *sql.DB
+	dialect  modulehost.Dialect
+	provider *rotationProvider
+	key      [32]byte
 }
 
 func (h *rotationHost) Database() modulehost.Database                 { return h.db }
@@ -166,18 +162,13 @@ func (h *rotationHost) Migrations() modulehost.MigrationRegistrar     { return h
 func (h *rotationHost) Providers() modulehost.ProviderRegistry        { return h }
 func (h *rotationHost) SecretCipher() modulehost.SecretMaterialCipher { return h }
 func (h *rotationHost) RuntimeTriggers() integrationsdk.TriggerSink   { return h }
-func (h *rotationHost) DefinitionStore() metadatasdk.DefinitionStore  { return h.definitions }
 func (*rotationHost) Driver() string                                  { return "sqlite" }
 func (*rotationHost) Schema() string                                  { return "" }
 func (h *rotationHost) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {
-	if owner != "integration" {
+	if owner != "integration" && owner != "metadata" {
 		return errors.New("unexpected migration owner")
 	}
-	runner, err := migration.NewRunner(h.db, h.dialect.(query.Renderer), migration.Options{})
-	if err != nil {
-		return err
-	}
-	return runner.Apply(ctx, migrations)
+	return integrationmigration.ApplyOwnedMigrations(ctx, h.db, h.dialect, owner, migrations)
 }
 func (h *rotationHost) Provider(connectorKey, providerKey string) (connector.Adapter, bool) {
 	return h.provider, connectorKey == "crm" && providerKey == "rotation_probe"

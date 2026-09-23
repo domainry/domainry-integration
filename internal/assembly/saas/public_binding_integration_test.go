@@ -22,9 +22,7 @@ import (
 	"github.com/domainry/domainry-integration-sdk/remote"
 	"github.com/domainry/domainry-integration-sdk/saashost"
 	saasassembly "github.com/domainry/domainry-integration/internal/assembly/saas"
-	"github.com/domainry/domainry-integration/internal/testsupport/definitionfixture"
 	integrationmodule "github.com/domainry/domainry-integration/module"
-	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	_ "modernc.org/sqlite"
 )
@@ -315,11 +313,10 @@ func publicFlowPrincipal(workspaceID, permissionKey string) identitysdk.Principa
 }
 
 type publicFlowHost struct {
-	database    *sql.DB
-	dialect     modulehost.Dialect
-	registrar   publicFlowRegistrar
-	provider    *publicFlowProvider
-	definitions metadatasdk.DefinitionStore
+	database  *sql.DB
+	dialect   modulehost.Dialect
+	registrar publicFlowRegistrar
+	provider  *publicFlowProvider
 }
 
 func newPublicFlowHost(t *testing.T, topology string) *publicFlowHost {
@@ -334,7 +331,7 @@ func newPublicFlowHost(t *testing.T, topology string) *publicFlowHost {
 		_ = database.Close()
 		t.Fatal(err)
 	}
-	host := &publicFlowHost{database: database, dialect: rawDialect.WithSchema(""), provider: &publicFlowProvider{}, definitions: definitionfixture.NewStore()}
+	host := &publicFlowHost{database: database, dialect: rawDialect.WithSchema(""), provider: &publicFlowProvider{}}
 	host.registrar = publicFlowRegistrar{database: database}
 	return host
 }
@@ -345,17 +342,16 @@ func (h *publicFlowHost) Migrations() modulehost.MigrationRegistrar { return h.r
 func (h *publicFlowHost) Providers() modulehost.ProviderRegistry {
 	return publicFlowProviders{provider: h.provider}
 }
-func (*publicFlowHost) SecretCipher() modulehost.SecretMaterialCipher  { return publicFlowCipher{} }
-func (*publicFlowHost) RuntimeTriggers() integrationsdk.TriggerSink    { return publicFlowTrigger{} }
-func (h *publicFlowHost) DefinitionStore() metadatasdk.DefinitionStore { return h.definitions }
-func (h *publicFlowHost) close()                                       { _ = h.database.Close() }
+func (*publicFlowHost) SecretCipher() modulehost.SecretMaterialCipher { return publicFlowCipher{} }
+func (*publicFlowHost) RuntimeTriggers() integrationsdk.TriggerSink   { return publicFlowTrigger{} }
+func (h *publicFlowHost) close()                                      { _ = h.database.Close() }
 
 type publicFlowRegistrar struct{ database *sql.DB }
 
 func (publicFlowRegistrar) Driver() string { return "sqlite" }
 func (publicFlowRegistrar) Schema() string { return "" }
 func (r publicFlowRegistrar) ApplyOwnedMigrations(ctx context.Context, owner string, migrations []modulehost.SchemaMigration) error {
-	if owner != "integration" {
+	if owner != "integration" && owner != "metadata" {
 		return fmt.Errorf("unexpected migration owner %q", owner)
 	}
 	for _, migration := range migrations {

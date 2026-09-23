@@ -17,9 +17,8 @@ import (
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	"github.com/domainry/domainry-integration-sdk/remote"
+	integrationmigration "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/migration"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
-	"github.com/domainry/domainry-orm/migration"
-	"github.com/domainry/domainry-orm/query"
 	"time"
 )
 
@@ -31,12 +30,8 @@ type accountSaaSMigrations struct{ host accountSaaSHost }
 
 func (accountSaaSMigrations) Driver() string { return "sqlite" }
 func (accountSaaSMigrations) Schema() string { return "" }
-func (m accountSaaSMigrations) ApplyOwnedMigrations(ctx context.Context, _ string, items []modulehost.SchemaMigration) error {
-	runner, err := migration.NewRunner(m.host.database, m.host.dialect.(query.Renderer), migration.Options{})
-	if err != nil {
-		return err
-	}
-	return runner.Apply(ctx, items)
+func (m accountSaaSMigrations) ApplyOwnedMigrations(ctx context.Context, owner string, items []modulehost.SchemaMigration) error {
+	return integrationmigration.ApplyOwnedMigrations(ctx, m.host.database, m.host.dialect, owner, items)
 }
 func (testProvider) TestConnection(context.Context, connector.TestConnectionRequest) (connector.TestConnectionResult, error) {
 	return connector.TestConnectionResult{Connected: true, Details: json.RawMessage(`{"token":"provider-private-diagnostic"}`)}, nil
