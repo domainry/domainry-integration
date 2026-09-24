@@ -19,8 +19,10 @@ type Service struct {
 	Workers integrationsdk.LocalWorkers
 }
 
-func Open(ctx context.Context, application integrationsdk.ApplicationRef, host modulehost.Host, serviceToken string) (*Service, error) {
-	binding, err := moduleassembly.OpenHosted(ctx, application, host, integrationsdk.DeploymentModeSaaS)
+type Options = moduleassembly.Options
+
+func Open(ctx context.Context, application integrationsdk.ApplicationRef, host modulehost.Host, serviceToken string, configured ...Options) (*Service, error) {
+	binding, err := moduleassembly.OpenHosted(ctx, application, host, integrationsdk.DeploymentModeSaaS, configured...)
 	if err != nil {
 		return nil, err
 	}

@@ -6,13 +6,12 @@ import (
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
-	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
 	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 )
 
 func TestConnectorCatalogPublishesSharedDefinitionsWithProviderOverlay(t *testing.T) {
 	definitions := newTestDefinitionStore()
-	catalog := []connectorscatalog.ConnectorDefinition{{
+	catalog := []connector.ConnectorDefinition{{
 		Key: "crm", Name: "Customer CRM",
 		Payload: json.RawMessage(`{"key":"crm","name":"Customer CRM","description":"Connectors owns this text","classification":"business"}`),
 	}}
@@ -57,7 +56,7 @@ func TestConnectorCatalogPublishesSharedDefinitionsWithProviderOverlay(t *testin
 
 func TestConnectorCatalogReplacementDisablesOmittedDefinitionsAndRetainsHistory(t *testing.T) {
 	definitions := newTestDefinitionStore()
-	initial := []connectorscatalog.ConnectorDefinition{
+	initial := []connector.ConnectorDefinition{
 		{Key: "crm", Name: "CRM", Payload: json.RawMessage(`{"key":"crm","name":"CRM"}`)},
 		{Key: "mail", Name: "Mail", Payload: json.RawMessage(`{"key":"mail","name":"Mail"}`)},
 	}
@@ -68,7 +67,7 @@ func TestConnectorCatalogReplacementDisablesOmittedDefinitionsAndRetainsHistory(
 	if err != nil || !found {
 		t.Fatal(old, found, err)
 	}
-	updated := []connectorscatalog.ConnectorDefinition{{Key: "crm", Name: "CRM 2", Payload: json.RawMessage(`{"key":"crm","name":"CRM 2"}`)}}
+	updated := []connector.ConnectorDefinition{{Key: "crm", Name: "CRM 2", Payload: json.RawMessage(`{"key":"crm","name":"CRM 2"}`)}}
 	if err := SyncConnectorCatalog(t.Context(), definitions, updated, nil); err != nil {
 		t.Fatal(err)
 	}

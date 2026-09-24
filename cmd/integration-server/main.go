@@ -16,6 +16,7 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
 	connectormodule "github.com/domainry/domainry-connectors/module"
 	shareddefinition "github.com/domainry/domainry-foundation/definition"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
@@ -67,7 +68,7 @@ func run() error {
 	database.SetMaxOpenConns(1)
 	dialect, _ := ormdialect.New(ormdialect.SQLite)
 	host := &standaloneHost{database: database, dialect: dialect.WithSchema(""), providers: registry, cipher: cipher}
-	service, err := saasassembly.Open(context.Background(), application, host, token)
+	service, err := saasassembly.Open(context.Background(), application, host, token, saasassembly.Options{ConnectorCatalog: connectorscatalog.Definitions})
 	if err != nil {
 		return err
 	}

@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
+	connector "github.com/domainry/domainry-connector-sdk"
 	shareddefinition "github.com/domainry/domainry-foundation/definition"
 	foundationhttp "github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
@@ -20,7 +20,9 @@ import (
 	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 )
 
-type Options struct{}
+type Options struct {
+	ConnectorCatalog connector.DefinitionCatalog
+}
 
 func OptionsFromEnvironment() Options { return Options{} }
 
@@ -36,11 +38,15 @@ func NewFactory(options ...Options) *Factory {
 func (*Factory) DeploymentMode() integrationsdk.DeploymentMode {
 	return integrationsdk.DeploymentModeModule
 }
-func (*Factory) OpenModule(ctx context.Context, application integrationsdk.ApplicationRef, host modulehost.Host) (integrationsdk.Binding, error) {
-	return OpenHosted(ctx, application, host, integrationsdk.DeploymentModeModule)
+func (f *Factory) OpenModule(ctx context.Context, application integrationsdk.ApplicationRef, host modulehost.Host) (integrationsdk.Binding, error) {
+	return OpenHosted(ctx, application, host, integrationsdk.DeploymentModeModule, f.options)
 }
 
-func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, host modulehost.Host, mode integrationsdk.DeploymentMode) (integrationsdk.Binding, error) {
+func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, host modulehost.Host, mode integrationsdk.DeploymentMode, configured ...Options) (integrationsdk.Binding, error) {
+	var options Options
+	if len(configured) > 0 {
+		options = configured[0]
+	}
 	if err := application.Validate(); err != nil {
 		return nil, err
 	}
@@ -59,9 +65,12 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 		return nil, fmt.Errorf("open Integration Definition persistence: %w", err)
 	}
 	definitions := metadatasdk.AdaptDefinitionStore(definitionKernel)
-	builtinCatalog, err := connectorscatalog.Definitions()
-	if err != nil {
-		return nil, err
+	var builtinCatalog []connector.ConnectorDefinition
+	if options.ConnectorCatalog != nil {
+		builtinCatalog, err = options.ConnectorCatalog()
+		if err != nil {
+			return nil, fmt.Errorf("load Integration connector catalog: %w", err)
+		}
 	}
 	if err := integrationpersistence.SyncConnectorCatalog(ctx, definitions, builtinCatalog, host.Providers().Descriptors()); err != nil {
 		return nil, fmt.Errorf("synchronize Integration connector Definitions: %w", err)

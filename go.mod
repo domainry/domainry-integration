@@ -21,8 +21,8 @@ require (
 )
 
 require (
-	github.com/domainry/domainry-connector-sdk v0.1.2
-	github.com/domainry/domainry-connectors v0.1.4
+	github.com/domainry/domainry-connector-sdk v0.1.3
+	github.com/domainry/domainry-connectors v0.1.5
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect

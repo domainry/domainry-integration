@@ -92,7 +92,7 @@ func TestDomainAndApplicationDoNotDependOnSDKOrInfrastructure(t *testing.T) {
 func TestIntegrationDoesNotOwnConcreteProvidersOrRuntimeOutbox(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", ".."))
 	forbiddenImports := []string{
-		"github.com/domainry/domainry-connectors/providers",
+		"github.com/domainry/domainry-connectors",
 		"github.com/domainry/domainry-runtime",
 	}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
@@ -126,6 +126,13 @@ func TestIntegrationDoesNotOwnConcreteProvidersOrRuntimeOutbox(t *testing.T) {
 			}
 			for _, prefix := range forbiddenImports {
 				if importPath == prefix || strings.HasPrefix(importPath, prefix+"/") {
+					relative, err := filepath.Rel(root, path)
+					if err != nil {
+						return err
+					}
+					if prefix == "github.com/domainry/domainry-connectors" && strings.HasPrefix(filepath.ToSlash(relative), "cmd/") {
+						continue
+					}
 					t.Errorf("%s imports forbidden implementation package %s", path, importPath)
 				}
 			}

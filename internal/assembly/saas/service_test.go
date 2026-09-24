@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
@@ -93,7 +94,7 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 	database.SetMaxOpenConns(1)
 	defer database.Close()
 	dialect, _ := ormdialect.New(ormdialect.SQLite)
-	service, err := Open(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, newTestHost(database, dialect.WithSchema("")), "service-token")
+	service, err := Open(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, newTestHost(database, dialect.WithSchema("")), "service-token", Options{ConnectorCatalog: connectorscatalog.Definitions})
 	if err != nil {
 		t.Fatal(err)
 	}

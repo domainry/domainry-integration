@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	connector "github.com/domainry/domainry-connector-sdk"
-	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 )
@@ -25,7 +24,7 @@ const (
 
 // SyncConnectorCatalog publishes the complete Connectors catalog with the
 // executable provider overlay as one source-owned shared Definition snapshot.
-func SyncConnectorCatalog(ctx context.Context, definitions metadatasdk.DefinitionStore, catalog []connectorscatalog.ConnectorDefinition, descriptors []connector.ProviderDescriptor) error {
+func SyncConnectorCatalog(ctx context.Context, definitions metadatasdk.DefinitionStore, catalog []connector.ConnectorDefinition, descriptors []connector.ProviderDescriptor) error {
 	if definitions == nil {
 		return fmt.Errorf("Integration shared Definition store is unavailable")
 	}

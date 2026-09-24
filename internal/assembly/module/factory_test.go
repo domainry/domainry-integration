@@ -13,6 +13,7 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
 	shareddefinition "github.com/domainry/domainry-foundation/definition"
 	"github.com/domainry/domainry-foundation/modulehttp"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
@@ -109,7 +110,7 @@ func openTestHost(t *testing.T) *testHost {
 
 func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 	host := openTestHost(t)
-	binding, err := NewFactory(Options{}).OpenModule(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, host)
+	binding, err := NewFactory(Options{ConnectorCatalog: connectorscatalog.Definitions}).OpenModule(t.Context(), integrationsdk.ApplicationRef{RuntimeID: "runtime-a"}, host)
 	if err != nil {
 		t.Fatal(err)
 	}
