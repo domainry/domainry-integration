@@ -44,12 +44,15 @@ func (s *ManagementStore) ListWebhookSubscriptions(ctx context.Context, workspac
 
 func scanWebhookSubscription(row rowScanner) (integrationsdk.WebhookSubscription, error) {
 	var value integrationsdk.WebhookSubscription
-	var name, description, createdBy, disabledAt sql.NullString
+	var name, description, createdBy sql.NullString
+	var disabledAt sql.NullInt64
+	var createdAt, updatedAt int64
 	var eventTypesJSON string
-	if err := row.Scan(&value.Key, &value.WorkspaceID, &name, &value.ConnectorKey, &value.ConnectionKey, &eventTypesJSON, &value.Status, &description, &createdBy, &value.CreatedAt, &value.UpdatedAt, &disabledAt); err != nil {
+	if err := row.Scan(&value.Key, &value.WorkspaceID, &name, &value.ConnectorKey, &value.ConnectionKey, &eventTypesJSON, &value.Status, &description, &createdBy, &createdAt, &updatedAt, &disabledAt); err != nil {
 		return value, err
 	}
-	value.Name, value.Description, value.CreatedBy, value.DisabledAt = name.String, description.String, createdBy.String, disabledAt.String
+	value.Name, value.Description, value.CreatedBy = name.String, description.String, createdBy.String
+	value.CreatedAt, value.UpdatedAt, value.DisabledAt = timestampString(createdAt), timestampString(updatedAt), timestampString(disabledAt.Int64)
 	if err := json.Unmarshal([]byte(eventTypesJSON), &value.EventTypes); err != nil {
 		return value, fmt.Errorf("decode Integration webhook event types: %w", err)
 	}
@@ -128,7 +131,7 @@ func (s *ManagementStore) UpsertWebhookSubscription(ctx context.Context, workspa
 		actorID, _ = scopeOwner(ctx, actorID)
 		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_webhook_subscriptions").Columns(
 			"id", "subscription_key", "workspace_id", "name", "connector_key", "connection_key", "event_types_json", "status", "description", "created_by", "created_at", "updated_at", "disabled_at",
-		).Values(ownerID("webhook_subscription_", workspaceID, key), key, workspaceID, input.Name, input.ConnectorKey, input.ConnectionKey, eventTypesJSON, input.Status, input.Description, actorID, now, now, "").Build()
+		).Values(ownerID("webhook_subscription_", workspaceID, key), key, workspaceID, input.Name, input.ConnectorKey, input.ConnectionKey, eventTypesJSON, input.Status, input.Description, actorID, timestampMillis(now), timestampMillis(now), int64(0)).Build()
 		if buildErr != nil {
 			return integrationsdk.WebhookSubscription{}, buildErr
 		}
@@ -136,7 +139,7 @@ func (s *ManagementStore) UpsertWebhookSubscription(ctx context.Context, workspa
 			return integrationsdk.WebhookSubscription{}, fmt.Errorf("insert Integration webhook subscription: %w", err)
 		}
 	} else {
-		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_webhook_subscriptions").Set("name", input.Name).Set("connector_key", input.ConnectorKey).Set("connection_key", input.ConnectionKey).Set("event_types_json", eventTypesJSON).Set("status", input.Status).Set("description", input.Description).Set("disabled_at", "").Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_webhook_subscriptions", id), where)).Build()
+		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_webhook_subscriptions").Set("name", input.Name).Set("connector_key", input.ConnectorKey).Set("connection_key", input.ConnectionKey).Set("event_types_json", eventTypesJSON).Set("status", input.Status).Set("description", input.Description).Set("disabled_at", int64(0)).Set("updated_at", timestampMillis(now)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_webhook_subscriptions", id), where)).Build()
 		if buildErr != nil {
 			return integrationsdk.WebhookSubscription{}, buildErr
 		}
@@ -198,7 +201,7 @@ func (s *ManagementStore) DisableWebhookSubscription(ctx context.Context, worksp
 	if err != nil {
 		return integrationsdk.WebhookSubscription{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_webhook_subscriptions").Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, strings.TrimSpace(workspaceID), "_integration_webhook_subscriptions", ownerID("webhook_subscription_", workspaceID, key)), where)).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_webhook_subscriptions").Set("status", "disabled").Set("disabled_at", timestampMillis(now)).Set("updated_at", timestampMillis(now)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, strings.TrimSpace(workspaceID), "_integration_webhook_subscriptions", ownerID("webhook_subscription_", workspaceID, key)), where)).Build()
 	if err != nil {
 		return integrationsdk.WebhookSubscription{}, err
 	}

@@ -98,11 +98,13 @@ func (s *ManagementStore) UpsertOAuthApplication(ctx context.Context, workspace,
 	if err != nil {
 		return integrationsdk.OAuthApplication{}, err
 	}
-	var revision, ciphertext string
-	lookupErr := s.database.QueryRowContext(ctx, lookup, args...).Scan(&revision, &ciphertext)
+	var revisionMillis int64
+	var ciphertext string
+	lookupErr := s.database.QueryRowContext(ctx, lookup, args...).Scan(&revisionMillis, &ciphertext)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return integrationsdk.OAuthApplication{}, lookupErr
 	}
+	revision := timestampString(revisionMillis)
 	if lookupErr == nil && input.ExpectedUpdatedAt != revision || lookupErr == sql.ErrNoRows && input.ExpectedUpdatedAt != "" {
 		return integrationsdk.OAuthApplication{}, fmt.Errorf("Integration OAuth application changed")
 	}
@@ -119,9 +121,9 @@ func (s *ManagementStore) UpsertOAuthApplication(ctx context.Context, workspace,
 	raw, _ := json.Marshal(value)
 	var statement string
 	if lookupErr == sql.ErrNoRows {
-		statement, args, err = query.NewInsertBuilder(s.dialect, "_integration_oauth_applications").Columns("id", "workspace_id", "application_key", "application_json", "client_ciphertext", "updated_at").Values(ownerID("oauth_application_", workspace, key), workspace, key, string(raw), ciphertext, value.UpdatedAt).Build()
+		statement, args, err = query.NewInsertBuilder(s.dialect, "_integration_oauth_applications").Columns("id", "workspace_id", "application_key", "application_json", "client_ciphertext", "updated_at").Values(ownerID("oauth_application_", workspace, key), workspace, key, string(raw), ciphertext, timestampMillis(value.UpdatedAt)).Build()
 	} else {
-		statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_oauth_applications").Set("application_json", string(raw)).Set("client_ciphertext", ciphertext).Set("updated_at", value.UpdatedAt).Where(query.And(where, query.Equal("updated_at", revision))).Build()
+		statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_oauth_applications").Set("application_json", string(raw)).Set("client_ciphertext", ciphertext).Set("updated_at", timestampMillis(value.UpdatedAt)).Where(query.And(where, query.Equal("updated_at", revisionMillis))).Build()
 	}
 	if err != nil {
 		return integrationsdk.OAuthApplication{}, err

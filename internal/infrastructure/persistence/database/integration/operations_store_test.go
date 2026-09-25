@@ -106,7 +106,7 @@ func TestOperationsStoreOwnsCallWebhookMappingAndRuntimeReceipt(t *testing.T) {
 	}
 	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").
 		Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
-		Values("connection-1", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+		Values("connection-1", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z")).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,6 +160,10 @@ func TestOperationsStoreOwnsCallWebhookMappingAndRuntimeReceipt(t *testing.T) {
 	if trigger.calls != 1 {
 		t.Fatalf("trigger calls=%d, want 1", trigger.calls)
 	}
+	var executionJSON string
+	if err := database.QueryRowContext(t.Context(), `SELECT execution_json FROM _integration_events WHERE workspace_id=? LIMIT 1`, "workspace-a").Scan(&executionJSON); err != nil || !strings.Contains(executionJSON, `"completed_at":1788134400000`) {
+		t.Fatalf("execution receipt must store completed_at as Unix milliseconds: json=%s err=%v", executionJSON, err)
+	}
 	if trigger.request.Target.ObjectKey != "contact" || trigger.request.Target.RecordID != "contact-1" || trigger.request.Target.ActionKey != "sync" || trigger.request.Target.Input["name"] != "Ada" || trigger.request.Target.Input["source"] != "webhook" {
 		t.Fatalf("trigger request=%#v", trigger.request)
 	}
@@ -189,7 +193,7 @@ func TestOperationsStoreMapsVerifiedEventToFiniteAgentTargetAndCurrentIdentity(t
 	}
 	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").
 		Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
-		Values("connection-agent", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+		Values("connection-agent", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z")).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +201,7 @@ func TestOperationsStoreMapsVerifiedEventToFiniteAgentTargetAndCurrentIdentity(t
 		t.Fatal(err)
 	}
 	if _, err = database.ExecContext(t.Context(), `INSERT INTO _integration_external_identities (id,identity_key,workspace_id,provider,external_subject,external_subject_type,external_name,external_organization,external_department,external_group,external_bot_id,actor_id,role_key,status,last_resolved_at,created_by,created_at,updated_at,disabled_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"identity-agent", "contact-1", "workspace-a", "probe", "contact-1", "user", "Ada", "", "", "", "", "user-7", "support", "active", "", "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", ""); err != nil {
+		"identity-agent", "contact-1", "workspace-a", "probe", "contact-1", "user", "Ada", "", "", "", "", "user-7", "support", "active", int64(0), "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z"), int64(0)); err != nil {
 		t.Fatal(err)
 	}
 	provider := &operationsTestProvider{}
@@ -249,7 +253,7 @@ func TestOperationsStoreSensitiveCallNeverPersistsPlaintext(t *testing.T) {
 	}
 	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").
 		Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
-		Values("connection-sensitive", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+		Values("connection-sensitive", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z")).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +320,7 @@ func TestLocalWorkersPersistProviderStateBeforeDispatchingEvent(t *testing.T) {
 			}
 		}
 	}
-	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("connection-background", "primary", "workspace-a", "crm", "background", "Primary", "active", `{}`, `{}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("connection-background", "primary", "workspace-a", "crm", "background", "Primary", "active", `{}`, `{}`, "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z")).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,9 +376,9 @@ func TestLocalWorkersPersistProviderStateBeforeDispatchingEvent(t *testing.T) {
 	}
 	// SQL deliberately scans the whole current second. Precision checks must
 	// still prevent a slightly future deadline or an unexpired lease from firing.
-	for _, deadline := range []struct{ due, lease string }{
-		{"2026-09-11T10:00:00.1232Z", ""},
-		{"2026-09-11T10:00:00.123Z", "2026-09-11T10:00:00.1232Z"},
+	for _, deadline := range []struct{ due, lease int64 }{
+		{time.Date(2026, 9, 11, 10, 0, 0, 124000000, time.UTC).UnixMilli(), 0},
+		{time.Date(2026, 9, 11, 10, 0, 0, 123000000, time.UTC).UnixMilli(), time.Date(2026, 9, 11, 10, 0, 0, 124000000, time.UTC).UnixMilli()},
 	} {
 		if _, err := database.ExecContext(t.Context(), "UPDATE _integration_provider_runs SET due_at=?,lease_expires_at=? WHERE run_kind=? AND run_key=?", deadline.due, deadline.lease, providerRunKindState, "poll"); err != nil {
 			t.Fatal(err)

@@ -82,7 +82,7 @@ func (s *OperationsStore) AcceptWebhook(ctx context.Context, request integration
 func (s *OperationsStore) acceptWebhookNonce(ctx context.Context, request integrationmodel.WebhookRequest, nonce string) error {
 	digest := sha256.Sum256([]byte(request.WorkspaceID + "\x00" + request.ConnectorKey + "\x00" + strings.TrimSpace(nonce)))
 	now := request.ReceivedAt.UTC()
-	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_webhook_nonces").Columns("id", "workspace_id", "connector_key", "nonce", "request_timestamp", "created_at", "expires_at").Values("nonce:"+hex.EncodeToString(digest[:]), request.WorkspaceID, request.ConnectorKey, strings.TrimSpace(nonce), now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Add(15*time.Minute).Format(time.RFC3339Nano)).Build()
+	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_webhook_nonces").Columns("id", "workspace_id", "connector_key", "nonce", "request_timestamp", "created_at", "expires_at").Values("nonce:"+hex.EncodeToString(digest[:]), request.WorkspaceID, request.ConnectorKey, strings.TrimSpace(nonce), now.UnixMilli(), now.UnixMilli(), now.Add(15*time.Minute).UnixMilli()).Build()
 	if err != nil {
 		return err
 	}
@@ -102,8 +102,8 @@ func (s *OperationsStore) acceptEvent(ctx context.Context, request integrationmo
 		existing.ConnectorKey, existing.ConnectionKey = request.ConnectorKey, request.ConnectionKey
 		return existing, false, nil
 	}
-	now := request.ReceivedAt.UTC().Format(time.RFC3339Nano)
-	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_events").Columns("id", "workspace_id", "provider", "event_type", "external_id", "status", "payload_json", "mapping_key", "target_type", "execution_json", "error", "attempt_count", "next_retry_at", "last_attempt_at", "lease_owner", "lease_expires_at", "fencing_token", "received_at", "updated_at").Values(id, request.WorkspaceID, providerKey, verified.EventType, verified.ExternalID, "received", string(verified.Payload), "", "", "{}", nil, 0, "", "", "", "", 0, now, now).Build()
+	now := request.ReceivedAt.UTC()
+	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_events").Columns("id", "workspace_id", "provider", "event_type", "external_id", "status", "payload_json", "mapping_key", "target_type", "execution_json", "error", "attempt_count", "next_retry_at", "last_attempt_at", "lease_owner", "lease_expires_at", "fencing_token", "received_at", "updated_at").Values(id, request.WorkspaceID, providerKey, verified.EventType, verified.ExternalID, "received", string(verified.Payload), "", "", "{}", nil, 0, int64(0), int64(0), "", int64(0), 0, now.UnixMilli(), now.UnixMilli()).Build()
 	if err != nil {
 		return integrationmodel.Event{}, false, err
 	}
@@ -194,8 +194,8 @@ func (s *OperationsStore) ReplayEvent(ctx context.Context, workspaceID, id strin
 	if err != nil {
 		return event, err
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_events").Set("status", "received").Set("error", "").Set("next_retry_at", "").Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_events", id), where)).Build()
+	now := time.Now().UTC()
+	statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_events").Set("status", "received").Set("error", "").Set("next_retry_at", int64(0)).Set("updated_at", now.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_events", id), where)).Build()
 	if err != nil {
 		return event, err
 	}
@@ -209,7 +209,7 @@ func (s *OperationsStore) ReplayEvent(ctx context.Context, workspaceID, id strin
 	if err := tx.Commit(); err != nil {
 		return event, err
 	}
-	event.Status, event.Error, event.NextRetryAt, event.UpdatedAt = "received", "", "", now
+	event.Status, event.Error, event.NextRetryAt, event.UpdatedAt = "received", "", "", now.Format(time.RFC3339Nano)
 	return s.processEvent(ctx, event, nil)
 }
 
@@ -221,14 +221,16 @@ func scanEvent(row rowScanner) (integrationmodel.Event, error) {
 	var value integrationmodel.Event
 	var errorText sql.NullString
 	var payload, execution string
-	err := row.Scan(&value.ID, &value.WorkspaceID, &value.Provider, &value.EventType, &value.ExternalID, &value.Status, &payload, &execution, &errorText, &value.AttemptCount, &value.NextRetryAt, &value.LastAttemptAt, &value.ReceivedAt, &value.UpdatedAt)
+	var nextRetryAt, lastAttemptAt, receivedAt, updatedAt int64
+	err := row.Scan(&value.ID, &value.WorkspaceID, &value.Provider, &value.EventType, &value.ExternalID, &value.Status, &payload, &execution, &errorText, &value.AttemptCount, &nextRetryAt, &lastAttemptAt, &receivedAt, &updatedAt)
 	if err != nil {
 		return value, err
 	}
 	value.Payload, value.Error = json.RawMessage(payload), errorText.String
+	value.NextRetryAt, value.LastAttemptAt, value.ReceivedAt, value.UpdatedAt = timestampString(nextRetryAt), timestampString(lastAttemptAt), timestampString(receivedAt), timestampString(updatedAt)
 	if strings.TrimSpace(execution) != "" && strings.TrimSpace(execution) != "{}" {
 		var receipt integrationmodel.RuntimeExecutionReceipt
-		if err := json.Unmarshal([]byte(execution), &receipt); err != nil {
+		if err := unmarshalRuntimeExecutionReceipt([]byte(execution), &receipt); err != nil {
 			return value, fmt.Errorf("decode Integration event execution receipt: %w", err)
 		}
 		value.Execution = &receipt
@@ -393,16 +395,16 @@ func (s *OperationsStore) eventMapping(ctx context.Context, event integrationmod
 
 func (s *OperationsStore) updateEventStatus(ctx context.Context, event integrationmodel.Event, status, errorText string) (integrationmodel.Event, error) {
 	now := time.Now().UTC()
-	builder := query.NewUpdateBuilder(s.dialect, "_integration_events").Set("status", status).Set("error", errorText).Set("last_attempt_at", now.Format(time.RFC3339Nano)).Set("lease_owner", "").Set("lease_expires_at", "").Set("updated_at", now.Format(time.RFC3339Nano))
+	builder := query.NewUpdateBuilder(s.dialect, "_integration_events").Set("status", status).Set("error", errorText).Set("last_attempt_at", now.UnixMilli()).Set("lease_owner", "").Set("lease_expires_at", int64(0)).Set("updated_at", now.UnixMilli())
 	if status == "failed" {
 		attempt := event.AttemptCount + 1
 		if attempt >= 5 {
-			builder = builder.Set("status", "dead_letter").Set("attempt_count", attempt).Set("next_retry_at", "")
+			builder = builder.Set("status", "dead_letter").Set("attempt_count", attempt).Set("next_retry_at", int64(0))
 		} else {
-			builder = builder.Set("attempt_count", attempt).Set("next_retry_at", now.Add(integrationEventRetryDelay(attempt)).Format(time.RFC3339Nano))
+			builder = builder.Set("attempt_count", attempt).Set("next_retry_at", now.Add(integrationEventRetryDelay(attempt)).UnixMilli())
 		}
 	} else {
-		builder = builder.Set("next_retry_at", "")
+		builder = builder.Set("next_retry_at", int64(0))
 	}
 	where, err := scopedWhere(ctx, event.WorkspaceID, "", "", query.Equal("id", event.ID))
 	if err != nil {
@@ -432,8 +434,11 @@ func integrationEventRetryDelay(attempt int) time.Duration {
 }
 
 func (s *OperationsStore) persistExecutionReceipt(ctx context.Context, event integrationmodel.Event, mapping integrationmodel.EventMappingRequirement, receipt integrationsdk.RuntimeExecutionReceipt) error {
-	payload, _ := json.Marshal(receipt)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	payload, err := marshalRuntimeExecutionReceipt(receipt)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().UnixMilli()
 	where, err := scopedWhere(ctx, event.WorkspaceID, "", "", query.Equal("id", event.ID))
 	if err != nil {
 		return err
@@ -453,6 +458,41 @@ func (s *OperationsStore) persistExecutionReceipt(ctx context.Context, event int
 	if affected != 1 {
 		return fmt.Errorf("Integration event %q changed before execution receipt persistence", event.ID)
 	}
+	return nil
+}
+
+type persistedRuntimeExecutionReceipt struct {
+	EventID     string `json:"event_id"`
+	MappingKey  string `json:"mapping_key"`
+	ExecutionID string `json:"execution_id"`
+	TargetType  string `json:"target_type"`
+	Status      string `json:"status"`
+	ErrorCode   string `json:"error_code,omitempty"`
+	CompletedAt int64  `json:"completed_at"`
+}
+
+func marshalRuntimeExecutionReceipt(value integrationsdk.RuntimeExecutionReceipt) ([]byte, error) {
+	completedAt := int64(0)
+	if strings.TrimSpace(value.CompletedAt) != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, value.CompletedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse Integration execution receipt completed_at: %w", err)
+		}
+		completedAt = parsed.UTC().UnixMilli()
+	}
+	return json.Marshal(persistedRuntimeExecutionReceipt{EventID: value.EventID, MappingKey: value.MappingKey, ExecutionID: value.ExecutionID, TargetType: value.TargetType, Status: value.Status, ErrorCode: value.ErrorCode, CompletedAt: completedAt})
+}
+
+func unmarshalRuntimeExecutionReceipt(raw []byte, value *integrationmodel.RuntimeExecutionReceipt) error {
+	var stored persistedRuntimeExecutionReceipt
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return err
+	}
+	completedAt := ""
+	if stored.CompletedAt != 0 {
+		completedAt = time.UnixMilli(stored.CompletedAt).UTC().Format(time.RFC3339Nano)
+	}
+	*value = integrationmodel.RuntimeExecutionReceipt{EventID: stored.EventID, MappingKey: stored.MappingKey, ExecutionID: stored.ExecutionID, TargetType: stored.TargetType, Status: stored.Status, ErrorCode: stored.ErrorCode, CompletedAt: completedAt}
 	return nil
 }
 

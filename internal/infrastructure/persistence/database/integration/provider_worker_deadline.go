@@ -1,33 +1,19 @@
 package integration
 
-import (
-	"fmt"
-	"time"
-)
+import "time"
 
-// RFC3339Nano removes trailing zeroes, so text ordering is not instant ordering
-// within one second (".123Z" sorts after ".1231Z"). The SQL scan includes the
-// whole current UTC second; each candidate is then checked as an actual instant.
-func providerDeadlineScanEnd(now time.Time) string {
-	return now.UTC().Truncate(time.Second).Add(time.Second).Format("2006-01-02T15:04:05")
+func providerDeadlineScanEnd(now time.Time) int64 {
+	return now.UTC().UnixMilli()
 }
 
-func providerDeadlineReady(due, lease string, now time.Time) (bool, error) {
-	t, err := time.Parse(time.RFC3339Nano, due)
-	if err != nil {
-		return false, fmt.Errorf("Integration provider due time is invalid")
-	}
-	if t.After(now) {
+func providerDeadlineReady(due, lease int64, now time.Time) (bool, error) {
+	if due > now.UTC().UnixMilli() {
 		return false, nil
 	}
-	if lease == "" {
+	if lease == 0 {
 		return true, nil
 	}
-	expiry, err := time.Parse(time.RFC3339Nano, lease)
-	if err != nil {
-		return false, fmt.Errorf("Integration provider lease time is invalid")
-	}
-	return !expiry.After(now), nil
+	return lease <= now.UTC().UnixMilli(), nil
 }
 
 func (s *WorkerStore) now() time.Time {

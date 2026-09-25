@@ -173,9 +173,7 @@ func TestOAuthSessionHandlesRejectionUnknownAndExpiredWithoutReplay(t *testing.T
 	}
 	store, provider, subject, _ := setupOAuthStore(t)
 	session, state := startOAuthStore(t, store, subject)
-	record, _ := store.readOAuthSession(t.Context(), subject, query.Equal("id", session.ID))
-	record.Session.ExpiresAt = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
-	if err := store.updateOAuthSession(t.Context(), subject, record, "pending"); err != nil {
+	if _, err := store.database.ExecContext(t.Context(), "UPDATE _integration_oauth_sessions SET expires_at=? WHERE id=?", time.Now().UTC().Add(-time.Minute).UnixMilli(), session.ID); err != nil {
 		t.Fatal(err)
 	}
 	value, err := store.CompleteOAuthAuthorization(t.Context(), subject, integrationsdk.OAuthAuthorizationCallback{State: state, Code: "accepted"})
@@ -224,6 +222,9 @@ func TestOAuthConcurrentCallbacksAndCancellationPersistOneEncryptedAccount(t *te
 	}
 	if strings.Contains(rawApplication+ciphertext+rawSession+verifierCiphertext, "private-client") || strings.Contains(rawSession, state) || ciphertext == "" || verifierCiphertext == "" {
 		t.Fatal("OAuth session or application material is not private")
+	}
+	if strings.Contains(rawSession, "expires_at") {
+		t.Fatal("OAuth session JSON duplicated numeric expires_at column as a transport string")
 	}
 	callbacks := make(chan error, 12)
 	var workers sync.WaitGroup

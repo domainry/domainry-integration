@@ -8,31 +8,23 @@ import (
 func TestProviderDeadlineComparisonUsesInstants(t *testing.T) {
 	now := time.Date(2026, 9, 11, 10, 0, 0, 123100000, time.UTC)
 	for _, tc := range []struct {
-		due, lease     string
-		ready, invalid bool
+		due, lease int64
+		ready      bool
 	}{
-		{"2026-09-11T10:00:00.123Z", "", true, false},
-		{"2026-09-11T10:00:00Z", "", true, false},
-		{"2026-09-11T10:00:00.1231Z", "", true, false},
-		{"2026-09-11T10:00:00.1232Z", "", false, false},
-		{"2026-09-11T10:00:00.123Z", "2026-09-11T10:00:00.1232Z", false, false},
-		{"2026-09-11T10:00:00.123Z", "2026-09-11T10:00:00.123Z", true, false},
-		{"bad", "", false, true},
-		{"2026-09-11T10:00:00Z", "bad", false, true},
+		{now.UnixMilli(), 0, true},
+		{now.Add(-time.Millisecond).UnixMilli(), 0, true},
+		{now.Add(time.Millisecond).UnixMilli(), 0, false},
+		{now.UnixMilli(), now.Add(time.Millisecond).UnixMilli(), false},
+		{now.UnixMilli(), now.UnixMilli(), true},
 	} {
 		got, err := providerDeadlineReady(tc.due, tc.lease, now)
-		if got != tc.ready || (err != nil) != tc.invalid {
-			t.Fatalf("due=%s lease=%s ready=%v err=%v", tc.due, tc.lease, got, err)
+		if got != tc.ready || err != nil {
+			t.Fatalf("due=%d lease=%d ready=%v err=%v", tc.due, tc.lease, got, err)
 		}
 	}
 	bound := providerDeadlineScanEnd(now)
-	for _, within := range []string{"2026-09-11T10:00:00Z", "2026-09-11T10:00:00.123Z", "2026-09-11T10:00:00.999999999Z"} {
-		if within >= bound {
-			t.Fatalf("current second excluded: %s", within)
-		}
-	}
-	if "2026-09-11T10:00:01.000000001Z" < bound {
-		t.Fatal("next second included")
+	if bound != now.UnixMilli() {
+		t.Fatalf("scan end=%d want=%d", bound, now.UnixMilli())
 	}
 }
 
@@ -42,12 +34,13 @@ func TestProviderCommitDeadlinePrecisionAndLeaseGuard(t *testing.T) {
 		claimed          bool
 	}{
 		{"earlier shortened fraction", "2026-09-11T10:00:00.123Z", "", true},
-		{"future fraction", "2026-09-11T10:00:00.1232Z", "", false},
-		{"unexpired lease", "2026-09-11T10:00:00.123Z", "2026-09-11T10:00:00.1232Z", false},
+		{"future millisecond", "2026-09-11T10:00:00.124Z", "", false},
+		{"unexpired lease", "2026-09-11T10:00:00.123Z", "2026-09-11T10:00:00.124Z", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db, dialect := webPushTestDatabase(t, "provider-commit-deadline")
-			_, err := db.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "commit", "w", providerRunKindCommit, "commit", "crm", "probe", "missing", "poll", 0, "ack", "contract", `{}`, "pending", "", 0, tc.due, "", tc.lease, 0, tc.due, tc.due)
+			due, lease := timestampMillis(tc.due), timestampMillis(tc.lease)
+			_, err := db.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, "commit", "w", providerRunKindCommit, "commit", "crm", "probe", "missing", "poll", 0, "ack", "contract", `{}`, "pending", "", 0, due, "", lease, 0, due, due)
 			if err != nil {
 				t.Fatal(err)
 			}

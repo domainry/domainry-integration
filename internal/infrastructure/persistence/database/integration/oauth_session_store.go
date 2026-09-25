@@ -24,6 +24,30 @@ type oauthSessionRecord struct {
 	ExchangeDeadline   string                                   `json:"-"`
 }
 
+func marshalOAuthSession(record oauthSessionRecord) ([]byte, error) {
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return nil, err
+	}
+	var envelope map[string]json.RawMessage
+	if err = json.Unmarshal(raw, &envelope); err != nil {
+		return nil, err
+	}
+	var session map[string]json.RawMessage
+	if err = json.Unmarshal(envelope["session"], &session); err != nil {
+		return nil, err
+	}
+	// expires_at is canonically persisted by the numeric expires_at column.
+	// Keeping the SDK's RFC3339 projection in session_json would create a second,
+	// string-encoded source of truth for the same instant.
+	delete(session, "expires_at")
+	envelope["session"], err = json.Marshal(session)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(envelope)
+}
+
 func oauthHash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
@@ -32,19 +56,20 @@ func oauthScopeAllowed(subject integrationsdk.ConnectionAccountSubject, scope in
 	return scope == integrationsdk.ConnectionAccountScopePersonal && subject.Access.Personal || scope == integrationsdk.ConnectionAccountScopeWorkspace && subject.Access.Workspace
 }
 func (s *ManagementStore) readOAuthSession(ctx context.Context, subject integrationsdk.ConnectionAccountSubject, where query.Predicate) (oauthSessionRecord, error) {
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_oauth_sessions").Columns("session_json", "status", "application_revision", "verifier_ciphertext", "exchange_deadline").Where(query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("user_id", subject.UserID), where)).Limit(1).Build()
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_oauth_sessions").Columns("session_json", "status", "application_revision", "verifier_ciphertext", "expires_at", "exchange_deadline").Where(query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("user_id", subject.UserID), where)).Limit(1).Build()
 	if err != nil {
 		return oauthSessionRecord{}, err
 	}
-	var raw, status, revision, ciphertext, deadline string
-	if err = s.database.QueryRowContext(ctx, statement, args...).Scan(&raw, &status, &revision, &ciphertext, &deadline); err != nil {
+	var raw, status, ciphertext string
+	var revision, expiresAt, deadline int64
+	if err = s.database.QueryRowContext(ctx, statement, args...).Scan(&raw, &status, &revision, &ciphertext, &expiresAt, &deadline); err != nil {
 		return oauthSessionRecord{}, fmt.Errorf("Integration OAuth session is unavailable")
 	}
 	var value oauthSessionRecord
 	if err = json.Unmarshal([]byte(raw), &value); err != nil {
 		return value, err
 	}
-	value.Session.Status, value.Revision, value.VerifierCiphertext, value.ExchangeDeadline = status, revision, ciphertext, deadline
+	value.Session.Status, value.Session.ExpiresAt, value.Revision, value.VerifierCiphertext, value.ExchangeDeadline = status, timestampString(expiresAt), timestampString(revision), ciphertext, timestampString(deadline)
 	if !oauthScopeAllowed(subject, value.Session.Scope) {
 		return oauthSessionRecord{}, fmt.Errorf("Integration OAuth session is unavailable")
 	}
@@ -111,9 +136,12 @@ func (s *ManagementStore) StartOAuthAuthorization(ctx context.Context, subject i
 		return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth session encryption failed")
 	}
 	value := oauthSessionRecord{Session: integrationsdk.OAuthAuthorizationSession{ID: id, Status: "pending", ApplicationKey: app.Key, Scope: input.Scope, RequestedScopes: append([]string(nil), input.Scopes...), ExpiresAt: time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339Nano)}, Name: strings.TrimSpace(input.Name)}
-	raw, _ := json.Marshal(value)
+	raw, err := marshalOAuthSession(value)
+	if err != nil {
+		return integrationsdk.OAuthAuthorizationSession{}, err
+	}
 	now := ownerNow()
-	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_oauth_sessions").Columns("id", "workspace_id", "user_id", "application_key", "application_revision", "state_hash", "status", "session_json", "verifier_ciphertext", "expires_at", "exchange_deadline", "created_at", "updated_at").Values(id, subject.WorkspaceID, subject.UserID, app.Key, app.UpdatedAt, oauthHash(state), "pending", string(raw), ciphertext, value.Session.ExpiresAt, "", now, now).Build()
+	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_oauth_sessions").Columns("id", "workspace_id", "user_id", "application_key", "application_revision", "state_hash", "status", "session_json", "verifier_ciphertext", "expires_at", "exchange_deadline", "created_at", "updated_at").Values(id, subject.WorkspaceID, subject.UserID, app.Key, timestampMillis(app.UpdatedAt), oauthHash(state), "pending", string(raw), ciphertext, timestampMillis(value.Session.ExpiresAt), int64(0), timestampMillis(now), timestampMillis(now)).Build()
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, err
 	}
@@ -124,8 +152,11 @@ func (s *ManagementStore) StartOAuthAuthorization(ctx context.Context, subject i
 	return value.Session, nil
 }
 func (s *ManagementStore) updateOAuthSession(ctx context.Context, subject integrationsdk.ConnectionAccountSubject, record oauthSessionRecord, previous string) error {
-	raw, _ := json.Marshal(record)
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_oauth_sessions").Set("status", record.Session.Status).Set("session_json", string(raw)).Set("verifier_ciphertext", "").Set("exchange_deadline", record.ExchangeDeadline).Set("updated_at", ownerNow()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, subject.WorkspaceID, "_integration_oauth_sessions", record.Session.ID), query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("user_id", subject.UserID), query.Equal("id", record.Session.ID), query.Equal("status", previous)))).Build()
+	raw, err := marshalOAuthSession(record)
+	if err != nil {
+		return err
+	}
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_oauth_sessions").Set("status", record.Session.Status).Set("session_json", string(raw)).Set("verifier_ciphertext", "").Set("exchange_deadline", timestampMillis(record.ExchangeDeadline)).Set("updated_at", timestampMillis(ownerNow())).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, subject.WorkspaceID, "_integration_oauth_sessions", record.Session.ID), query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("user_id", subject.UserID), query.Equal("id", record.Session.ID), query.Equal("status", previous)))).Build()
 	if err != nil {
 		return err
 	}

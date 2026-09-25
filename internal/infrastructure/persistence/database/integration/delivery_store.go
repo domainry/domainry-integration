@@ -187,9 +187,11 @@ func (s *DeliveryStore) connection(ctx context.Context, request integrationmodel
 	for rows.Next() {
 		var value deliveryConnection
 		var configJSON, refsJSON string
-		if err := rows.Scan(&value.Key, &value.WorkspaceID, &value.ConnectorKey, &value.ProviderKey, &value.Status, &configJSON, &refsJSON, &value.UpdatedAt); err != nil {
+		var updatedAt int64
+		if err := rows.Scan(&value.Key, &value.WorkspaceID, &value.ConnectorKey, &value.ProviderKey, &value.Status, &configJSON, &refsJSON, &updatedAt); err != nil {
 			return deliveryConnection{}, err
 		}
+		value.UpdatedAt = timestampString(updatedAt)
 		if err := json.Unmarshal([]byte(configJSON), &value.Config); err != nil {
 			return deliveryConnection{}, err
 		}
@@ -216,7 +218,7 @@ func (s *DeliveryStore) prepareInvocationWithMetadata(ctx context.Context, id st
 	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, request.WorkspaceID, subjectFenceReference{"connection", "", connection.Key}, subjectFenceReference{"message", "", request.MessageID}, subjectFenceReference{"row", "_integration_invocations", id}); err != nil {
 		return err
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC().UnixMilli()
 	metadata, _ := json.Marshal(metadataValue)
 	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status").Where(query.Equal("id", id)).Build()
 	if err != nil {
@@ -254,7 +256,7 @@ func (s *DeliveryStore) insertInvocation(ctx context.Context, id string, request
 	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, request.WorkspaceID, subjectFenceReference{"connection", "", connection.Key}, subjectFenceReference{"message", "", request.MessageID}, subjectFenceReference{"row", "_integration_invocations", id}); err != nil {
 		return err
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC().UnixMilli()
 	queryValue, args, err := query.NewInsertBuilder(s.dialect, "_integration_invocations").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at").Values(id, request.WorkspaceID, request.ConnectorKey, connection.ProviderKey, connection.Key, request.Operation, "running", int64(0), request.MessageID, nil, nil, nil, nil, nil, nil, string(metadata), now, now).Build()
 	if err != nil {
 		return err
@@ -274,7 +276,7 @@ func (s *DeliveryStore) insertInvocation(ctx context.Context, id string, request
 }
 
 func (s *DeliveryStore) finishInvocation(ctx context.Context, workspaceID, id, status, responseRef, errorText string) error {
-	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_invocations", id), query.Equal("id", id))).Build()
+	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_invocations", id), query.Equal("id", id))).Build()
 	if err != nil {
 		return err
 	}

@@ -107,7 +107,7 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 		metadataValue["source"] = request.Source
 	}
 	metadata, _ := json.Marshal(metadataValue)
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, request.WorkspaceID, "_integration_invocations", invocationID), query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID)))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", time.Now().UTC().UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, request.WorkspaceID, "_integration_invocations", invocationID), query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID)))).Build()
 	if err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
@@ -165,7 +165,7 @@ func (s *OperationsStore) ListInvocations(ctx context.Context, filter integratio
 		}
 	}
 	if createdFrom := strings.TrimSpace(filter.CreatedFrom); createdFrom != "" {
-		predicates = append(predicates, query.GreaterThanOrEqual("created_at", createdFrom))
+		predicates = append(predicates, query.GreaterThanOrEqual("created_at", timestampMillis(createdFrom)))
 	}
 	limit := filter.Limit
 	if limit <= 0 || limit > 500 {
@@ -215,12 +215,14 @@ func scanInvocation(row rowScanner) (integrationmodel.Invocation, error) {
 	var value integrationmodel.Invocation
 	var providerKey, connectionKey, requestRef, responseRef, errorText, eventID, objectKey, recordID, workflowID sql.NullString
 	var metadataJSON string
-	err := row.Scan(&value.ID, &value.WorkspaceID, &value.ConnectorKey, &providerKey, &connectionKey, &value.Operation, &value.Status, &value.DurationMS, &requestRef, &responseRef, &errorText, &eventID, &objectKey, &recordID, &workflowID, &metadataJSON, &value.CreatedAt, &value.UpdatedAt)
+	var createdAt, updatedAt int64
+	err := row.Scan(&value.ID, &value.WorkspaceID, &value.ConnectorKey, &providerKey, &connectionKey, &value.Operation, &value.Status, &value.DurationMS, &requestRef, &responseRef, &errorText, &eventID, &objectKey, &recordID, &workflowID, &metadataJSON, &createdAt, &updatedAt)
 	if err != nil {
 		return value, err
 	}
 	value.ProviderKey, value.ConnectionKey, value.RequestRef, value.ResponseRef, value.Error = providerKey.String, connectionKey.String, requestRef.String, responseRef.String, errorText.String
 	value.EventID, value.ObjectKey, value.RecordID, value.WorkflowExecutionID = eventID.String, objectKey.String, recordID.String, workflowID.String
+	value.CreatedAt, value.UpdatedAt = timestampString(createdAt), timestampString(updatedAt)
 	if strings.TrimSpace(metadataJSON) != "" {
 		if err := json.Unmarshal([]byte(metadataJSON), &value.Metadata); err != nil {
 			return value, fmt.Errorf("decode Integration invocation metadata: %w", err)

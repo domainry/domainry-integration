@@ -18,8 +18,8 @@ func TestMySQLCompositeIndexesUseBoundedColumns(t *testing.T) {
 		"`scope` VARCHAR(32) NOT NULL",
 		"`owner_user_id` VARCHAR(191) NOT NULL",
 		"`status` VARCHAR(191) NOT NULL",
-		"`due_at` VARCHAR(191) NOT NULL",
-		"`lease_expires_at` VARCHAR(191) NOT NULL",
+		"`due_at` BIGINT NOT NULL",
+		"`lease_expires_at` BIGINT NOT NULL",
 		"idx_integration_connection_account_owner",
 		"idx_integration_provider_run_due",
 	} {

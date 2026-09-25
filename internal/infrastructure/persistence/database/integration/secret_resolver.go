@@ -110,7 +110,8 @@ func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspa
 		if err != nil {
 			return err
 		}
-		var status, updatedAt string
+		var status string
+		var updatedAt int64
 		var valueRef, fingerprint sql.NullString
 		if err := s.database.QueryRowContext(ctx, statement, args...).Scan(&status, &valueRef, &fingerprint, &updatedAt); err != nil {
 			return fmt.Errorf("read Integration Provider secret update target %q: %w", item.secretKey, err)
@@ -118,7 +119,7 @@ func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspa
 		if status != "active" || valueRef.String != "material:"+item.secretKey {
 			return fmt.Errorf("%w: %s is not active material", errProviderSecretChanged, item.fieldKey)
 		}
-		if item.expected != nil && (item.expected.Fingerprint != fingerprint.String || item.expected.UpdatedAt != updatedAt) {
+		if item.expected != nil && (item.expected.Fingerprint != fingerprint.String || item.expected.UpdatedAt != timestampString(updatedAt)) {
 			return fmt.Errorf("%w: %s", errProviderSecretChanged, item.fieldKey)
 		}
 		materialStatement, materialArgs, err := query.NewSelectBuilder(s.dialect, "_integration_secret_materials").Columns("id").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey))).Limit(1).Build()
@@ -129,17 +130,17 @@ func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspa
 		if err := s.database.QueryRowContext(ctx, materialStatement, materialArgs...).Scan(&materialID); err != nil {
 			return fmt.Errorf("read Integration Provider secret material %q: %w", item.secretKey, err)
 		}
-		current = append(current, currentProviderSecret{preparedProviderSecretUpdate: item, materialID: materialID, fingerprint: fingerprint.String, updatedAt: updatedAt})
+		current = append(current, currentProviderSecret{preparedProviderSecretUpdate: item, materialID: materialID, fingerprint: fingerprint.String, updatedAt: timestampString(updatedAt)})
 	}
 	now := time.Now().UTC()
 	for _, item := range current {
-		if now.Format(time.RFC3339Nano) == item.updatedAt {
-			now = now.Add(time.Nanosecond)
+		if timestampString(now.UnixMilli()) == item.updatedAt {
+			now = now.Add(time.Millisecond)
 		}
 	}
-	updatedAt := now.Format(time.RFC3339Nano)
+	updatedAt := now.UnixMilli()
 	for _, item := range current {
-		where := query.And(query.Equal("workspace_id", workspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", item.secretKey), query.Equal("status", "active"), query.Equal("value_ref", "material:"+item.secretKey), query.Equal("fingerprint", item.fingerprint), query.Equal("updated_at", item.updatedAt))
+		where := query.And(query.Equal("workspace_id", workspaceID), query.Equal("credential_type", "secret"), query.Equal("secret_key", item.secretKey), query.Equal("status", "active"), query.Equal("value_ref", "material:"+item.secretKey), query.Equal("fingerprint", item.fingerprint), query.Equal("updated_at", timestampMillis(item.updatedAt)))
 		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("fingerprint", item.preparedProviderSecretUpdate.fingerprint).Set("rotated_at", updatedAt).Set("updated_at", updatedAt).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_secrets", ownerID("secret_", workspaceID, item.secretKey)), where)).Build()
 		if err != nil {
 			return err
@@ -211,17 +212,17 @@ func (s *SecretResolver) resolveReferenceSnapshot(ctx context.Context, workspace
 	if err != nil {
 		return "", nil, err
 	}
-	var status, updatedAt string
-	var valueRef, expiresAt, fingerprint sql.NullString
+	var status string
+	var updatedAt, expiresAt int64
+	var valueRef, fingerprint sql.NullString
 	if err := s.database.QueryRowContext(ctx, queryValue, args...).Scan(&status, &valueRef, &expiresAt, &fingerprint, &updatedAt); err != nil {
 		return "", nil, err
 	}
 	if status != "active" {
 		return "", nil, fmt.Errorf("secret %q is not active", secretKey)
 	}
-	if expiresAt.String != "" {
-		expires, parseErr := time.Parse(time.RFC3339, expiresAt.String)
-		if parseErr != nil || !expires.After(time.Now().UTC()) {
+	if expiresAt != 0 {
+		if !time.UnixMilli(expiresAt).After(time.Now().UTC()) {
 			return "", nil, fmt.Errorf("secret %q is expired", secretKey)
 		}
 	}
@@ -244,7 +245,7 @@ func (s *SecretResolver) resolveReferenceSnapshot(ctx context.Context, workspace
 	if err != nil {
 		return "", nil, err
 	}
-	return value, &providerSecretVersion{SecretKey: secretKey, Fingerprint: fingerprint.String, UpdatedAt: updatedAt}, nil
+	return value, &providerSecretVersion{SecretKey: secretKey, Fingerprint: fingerprint.String, UpdatedAt: timestampString(updatedAt)}, nil
 }
 
 func environmentSecret(reference string) (string, error) {

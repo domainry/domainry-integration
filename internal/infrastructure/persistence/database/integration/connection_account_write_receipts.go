@@ -28,7 +28,7 @@ func (s *OperationsStore) FinishAccountWrite(ctx context.Context, claim model.Ac
 	if err != nil {
 		return model.ConnectionAccountWriteResult{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", outcome.Status).Set("metadata_json", string(raw)).Set("updated_at", time.Now().UTC().Format(time.RFC3339Nano)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, claim.Subject.WorkspaceID, "_integration_invocations", claim.InvocationID), query.And(
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", outcome.Status).Set("metadata_json", string(raw)).Set("updated_at", time.Now().UTC().UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, claim.Subject.WorkspaceID, "_integration_invocations", claim.InvocationID), query.And(
 		query.Equal("workspace_id", claim.Subject.WorkspaceID), query.Equal("id", claim.InvocationID), query.Equal("status", "running"), query.Equal("metadata_json", string(initial)),
 	))).Build()
 	if err != nil {
@@ -64,7 +64,8 @@ func (s *OperationsStore) ReadAccountWrite(ctx context.Context, claim model.Acco
 	if err != nil {
 		return out, err
 	}
-	var status, raw, recordedAt string
+	var status, raw string
+	var recordedAt int64
 	err = s.database.QueryRowContext(ctx, statement, args...).Scan(&status, &raw, &recordedAt)
 	if err == sql.ErrNoRows {
 		return out, nil
@@ -76,7 +77,7 @@ func (s *OperationsStore) ReadAccountWrite(ctx context.Context, claim model.Acco
 	if json.Unmarshal([]byte(raw), &metadata) != nil || metadata.Kind != "account-write-v1" || metadata.ActorID != claim.Subject.UserID || metadata.Source != claim.Request.ExpectedSource || metadata.Fingerprint != claim.Fingerprint {
 		return model.ConnectionAccountWriteResult{}, fmt.Errorf("Integration account write request identity conflicts")
 	}
-	out.InvocationID, out.RecordedAt, out.Status = claim.InvocationID, recordedAt, status
+	out.InvocationID, out.RecordedAt, out.Status = claim.InvocationID, timestampString(recordedAt), status
 	switch status {
 	case model.AccountWriteSucceeded:
 		if len(metadata.Receipt) == 0 || len(metadata.Receipt) > 32<<10 || !json.Valid(metadata.Receipt) {

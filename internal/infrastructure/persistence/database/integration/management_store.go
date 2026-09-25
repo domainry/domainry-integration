@@ -70,7 +70,7 @@ func (s *ManagementStore) requireScopedCandidate(ctx context.Context, table, key
 	return nil
 }
 
-func ownerNow() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+func ownerNow() string { return time.Now().UTC().Truncate(time.Millisecond).Format(time.RFC3339Nano) }
 
 func ownerID(prefix, workspaceID, key string) string {
 	digest := sha256.Sum256([]byte(strings.TrimSpace(workspaceID) + "\x00" + strings.TrimSpace(key)))
@@ -133,10 +133,11 @@ func scanConnection(row rowScanner) (integrationsdk.Connection, error) {
 	var value integrationsdk.Connection
 	var name, createdBy sql.NullString
 	var configJSON, refsJSON string
-	if err := row.Scan(&value.Key, &value.WorkspaceID, &value.ConnectorKey, &value.ProviderKey, &name, &value.Status, &configJSON, &refsJSON, &createdBy, &value.CreatedAt, &value.UpdatedAt); err != nil {
+	var createdAt, updatedAt int64
+	if err := row.Scan(&value.Key, &value.WorkspaceID, &value.ConnectorKey, &value.ProviderKey, &name, &value.Status, &configJSON, &refsJSON, &createdBy, &createdAt, &updatedAt); err != nil {
 		return value, err
 	}
-	value.Name, value.CreatedBy = name.String, createdBy.String
+	value.Name, value.CreatedBy, value.CreatedAt, value.UpdatedAt = name.String, createdBy.String, timestampString(createdAt), timestampString(updatedAt)
 	if err := json.Unmarshal([]byte(configJSON), &value.Config); err != nil {
 		return value, fmt.Errorf("decode Integration connection config: %w", err)
 	}
@@ -252,7 +253,7 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 		actorID, _ = scopeOwner(ctx, actorID)
 		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_connections").Columns(
 			"id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at",
-		).Values(id, key, workspaceID, input.ConnectorKey, input.ProviderKey, input.Name, input.Status, configJSON, refsJSON, actorID, now, now).Build()
+		).Values(id, key, workspaceID, input.ConnectorKey, input.ProviderKey, input.Name, input.Status, configJSON, refsJSON, actorID, timestampMillis(now), timestampMillis(now)).Build()
 		if buildErr != nil {
 			return integrationsdk.Connection{}, buildErr
 		}
@@ -262,7 +263,7 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 	} else {
 		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_connections").
 			Set("connector_key", input.ConnectorKey).Set("provider_key", input.ProviderKey).Set("name", input.Name).
-			Set("status", input.Status).Set("config_json", configJSON).Set("secret_refs_json", refsJSON).Set("updated_at", now).
+			Set("status", input.Status).Set("config_json", configJSON).Set("secret_refs_json", refsJSON).Set("updated_at", timestampMillis(now)).
 			Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_connections", id), where)).Build()
 		if buildErr != nil {
 			return integrationsdk.Connection{}, buildErr
@@ -361,7 +362,7 @@ func (s *ManagementStore) SetConnectionStatus(ctx context.Context, workspaceID, 
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", status).Set("updated_at", ownerNow()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, strings.TrimSpace(workspaceID), "_integration_connections", ownerID("connection_", workspaceID, key)), where)).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", status).Set("updated_at", timestampMillis(ownerNow())).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, strings.TrimSpace(workspaceID), "_integration_connections", ownerID("connection_", workspaceID, key)), where)).Build()
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}

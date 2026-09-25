@@ -127,9 +127,11 @@ func (s *WebPushSubscriptionStore) List(ctx context.Context, workspaceID, userID
 	values := []integrationmodel.WebPushSubscription{}
 	for rows.Next() {
 		var value integrationmodel.WebPushSubscription
-		if err := rows.Scan(&value.ID, &value.WorkspaceID, &value.UserID, &value.EndpointHash, &value.Status, &value.ExpiresAt, &value.CreatedAt, &value.UpdatedAt, &value.RevokedAt); err != nil {
+		var expiresAt, createdAt, updatedAt, revokedAt int64
+		if err := rows.Scan(&value.ID, &value.WorkspaceID, &value.UserID, &value.EndpointHash, &value.Status, &expiresAt, &createdAt, &updatedAt, &revokedAt); err != nil {
 			return nil, err
 		}
+		value.ExpiresAt, value.CreatedAt, value.UpdatedAt, value.RevokedAt = timestampString(expiresAt), timestampString(createdAt), timestampString(updatedAt), timestampString(revokedAt)
 		values = append(values, value)
 	}
 	return values, rows.Err()
@@ -166,7 +168,7 @@ func (s *WebPushSubscriptionStore) Upsert(ctx context.Context, workspaceID, user
 	}
 	hash := sha256.Sum256([]byte(endpoint))
 	endpointHash := hex.EncodeToString(hash[:])
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC().UnixMilli()
 	existing, found, err := s.material(ctx, workspaceID, id)
 	if err != nil {
 		return integrationmodel.WebPushSubscription{}, err
@@ -180,7 +182,7 @@ func (s *WebPushSubscriptionStore) Upsert(ctx context.Context, workspaceID, user
 		if whereErr != nil {
 			return integrationmodel.WebPushSubscription{}, whereErr
 		}
-		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint_hash", endpointHash).Set("endpoint", endpoint).Set("p256dh", strings.TrimSpace(input.P256DH)).Set("auth_secret", strings.TrimSpace(input.Auth)).Set("status", "active").Set("expires_at", input.ExpiresAt).Set("updated_at", now).Set("revoked_at", "").Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_web_push_subscriptions", id), where)).Build()
+		statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_web_push_subscriptions").Set("endpoint_hash", endpointHash).Set("endpoint", endpoint).Set("p256dh", strings.TrimSpace(input.P256DH)).Set("auth_secret", strings.TrimSpace(input.Auth)).Set("status", "active").Set("expires_at", timestampMillis(input.ExpiresAt)).Set("updated_at", now).Set("revoked_at", int64(0)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_web_push_subscriptions", id), where)).Build()
 		if err != nil {
 			return integrationmodel.WebPushSubscription{}, err
 		}
@@ -188,7 +190,7 @@ func (s *WebPushSubscriptionStore) Upsert(ctx context.Context, workspaceID, user
 			return integrationmodel.WebPushSubscription{}, err
 		}
 	} else {
-		statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_web_push_subscriptions").Columns("id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").Values(id, workspaceID, userID, endpointHash, endpoint, strings.TrimSpace(input.P256DH), strings.TrimSpace(input.Auth), "active", input.ExpiresAt, now, now, "").Build()
+		statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_web_push_subscriptions").Columns("id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").Values(id, workspaceID, userID, endpointHash, endpoint, strings.TrimSpace(input.P256DH), strings.TrimSpace(input.Auth), "active", timestampMillis(input.ExpiresAt), now, now, int64(0)).Build()
 		if err != nil {
 			return integrationmodel.WebPushSubscription{}, err
 		}
@@ -221,7 +223,7 @@ func (s *WebPushSubscriptionStore) Revoke(ctx context.Context, workspaceID, user
 	if value.Status == "revoked" {
 		return value.public(), nil
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := time.Now().UTC().UnixMilli()
 	where, err := scopedWhere(ctx, workspaceID, "user_id", "", query.Equal("id", id))
 	if err != nil {
 		return integrationmodel.WebPushSubscription{}, err
@@ -247,8 +249,8 @@ func (s *WebPushSubscriptionStore) CleanupExpired(ctx context.Context, workspace
 		})
 		return count, err
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("status", "active"), query.NotEqual("expires_at", ""), query.LessThan("expires_at", now))
+	now := time.Now().UTC().UnixMilli()
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("status", "active"), query.NotEqual("expires_at", int64(0)), query.LessThan("expires_at", now))
 	if err != nil {
 		return 0, err
 	}
@@ -284,7 +286,7 @@ func (s *WebPushSubscriptionStore) CleanupExpired(ctx context.Context, workspace
 		if end > len(ids) {
 			end = len(ids)
 		}
-		chunkWhere, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("status", "active"), query.NotEqual("expires_at", ""), query.LessThan("expires_at", now), query.In("id", stringsToAny(ids[start:end])...))
+		chunkWhere, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("status", "active"), query.NotEqual("expires_at", int64(0)), query.LessThan("expires_at", now), query.In("id", stringsToAny(ids[start:end])...))
 		if err != nil {
 			return 0, err
 		}
@@ -341,9 +343,11 @@ func (s *WebPushSubscriptionStore) material(ctx context.Context, workspaceID, id
 		return webPushMaterial{}, false, err
 	}
 	var v webPushMaterial
-	err = s.database.QueryRowContext(ctx, queryValue, args...).Scan(&v.ID, &v.WorkspaceID, &v.UserID, &v.EndpointHash, &v.Endpoint, &v.P256DH, &v.Auth, &v.Status, &v.ExpiresAt, &v.CreatedAt, &v.UpdatedAt, &v.RevokedAt)
+	var expiresAt, createdAt, updatedAt, revokedAt int64
+	err = s.database.QueryRowContext(ctx, queryValue, args...).Scan(&v.ID, &v.WorkspaceID, &v.UserID, &v.EndpointHash, &v.Endpoint, &v.P256DH, &v.Auth, &v.Status, &expiresAt, &createdAt, &updatedAt, &revokedAt)
 	if err == sql.ErrNoRows {
 		return webPushMaterial{}, false, nil
 	}
+	v.ExpiresAt, v.CreatedAt, v.UpdatedAt, v.RevokedAt = timestampString(expiresAt), timestampString(createdAt), timestampString(updatedAt), timestampString(revokedAt)
 	return v, err == nil, err
 }

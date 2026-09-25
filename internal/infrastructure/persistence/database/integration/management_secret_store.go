@@ -45,15 +45,17 @@ func (s *ManagementStore) ListSecrets(ctx context.Context, workspaceID string) (
 
 func scanSecret(row rowScanner) (integrationsdk.Secret, error) {
 	var value integrationsdk.Secret
-	var description, valueRef, fingerprint, createdBy, disabledAt, expiresAt, rotatedAt, revokedAt, lastTestedAt, lastTestStatus, lastTestError sql.NullString
-	err := row.Scan(&value.Key, &value.WorkspaceID, &value.Kind, &value.Status, &description, &valueRef, &fingerprint, &createdBy, &value.CreatedAt, &value.UpdatedAt, &disabledAt, &expiresAt, &rotatedAt, &revokedAt, &lastTestedAt, &lastTestStatus, &lastTestError)
+	var description, valueRef, fingerprint, createdBy, lastTestStatus, lastTestError sql.NullString
+	var createdAt, updatedAt, disabledAt, expiresAt, rotatedAt, revokedAt, lastTestedAt int64
+	err := row.Scan(&value.Key, &value.WorkspaceID, &value.Kind, &value.Status, &description, &valueRef, &fingerprint, &createdBy, &createdAt, &updatedAt, &disabledAt, &expiresAt, &rotatedAt, &revokedAt, &lastTestedAt, &lastTestStatus, &lastTestError)
 	if err != nil {
 		return value, err
 	}
 	value.Description, value.ValueRef, value.Fingerprint, value.CreatedBy = description.String, valueRef.String, fingerprint.String, createdBy.String
 	value.Configured = valueRef.String != "" || fingerprint.String != ""
-	value.DisabledAt, value.ExpiresAt, value.RotatedAt, value.RevokedAt = disabledAt.String, expiresAt.String, rotatedAt.String, revokedAt.String
-	value.LastTestedAt, value.LastTestStatus, value.LastTestError = lastTestedAt.String, lastTestStatus.String, lastTestError.String
+	value.CreatedAt, value.UpdatedAt = timestampString(createdAt), timestampString(updatedAt)
+	value.DisabledAt, value.ExpiresAt, value.RotatedAt, value.RevokedAt = timestampString(disabledAt), timestampString(expiresAt), timestampString(rotatedAt), timestampString(revokedAt)
+	value.LastTestedAt, value.LastTestStatus, value.LastTestError = timestampString(lastTestedAt), lastTestStatus.String, lastTestError.String
 	return value, nil
 }
 
@@ -143,7 +145,7 @@ func (s *ManagementStore) UpsertSecret(ctx context.Context, workspaceID, key, ac
 		actorID, _ = scopeOwner(ctx, actorID)
 		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_secrets").Columns(
 			"id", "secret_key", "workspace_id", "credential_type", "kind", "status", "description", "value_ref", "fingerprint", "scopes_json", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_used_at", "last_tested_at", "last_test_status", "last_test_error",
-		).Values(id, key, workspaceID, "secret", input.Kind, "active", input.Description, valueRef, fingerprint, "[]", actorID, now, now, "", input.ExpiresAt, "", "", "", "", "", "").Build()
+		).Values(id, key, workspaceID, "secret", input.Kind, "active", input.Description, valueRef, fingerprint, "[]", actorID, timestampMillis(now), timestampMillis(now), int64(0), timestampMillis(input.ExpiresAt), int64(0), int64(0), int64(0), int64(0), "", "").Build()
 		if buildErr != nil {
 			return integrationsdk.Secret{}, buildErr
 		}
@@ -151,7 +153,7 @@ func (s *ManagementStore) UpsertSecret(ctx context.Context, workspaceID, key, ac
 			return integrationsdk.Secret{}, fmt.Errorf("insert Integration secret: %w", err)
 		}
 	} else {
-		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("kind", input.Kind).Set("status", "active").Set("description", input.Description).Set("value_ref", valueRef).Set("fingerprint", fingerprint).Set("expires_at", input.ExpiresAt).Set("disabled_at", "").Set("revoked_at", "").Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_secrets", id), where)).Build()
+		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("kind", input.Kind).Set("status", "active").Set("description", input.Description).Set("value_ref", valueRef).Set("fingerprint", fingerprint).Set("expires_at", timestampMillis(input.ExpiresAt)).Set("disabled_at", int64(0)).Set("revoked_at", int64(0)).Set("updated_at", timestampMillis(now)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_secrets", id), where)).Build()
 		if buildErr != nil {
 			return integrationsdk.Secret{}, buildErr
 		}
@@ -176,14 +178,14 @@ func (s *ManagementStore) upsertSecretMaterial(ctx context.Context, workspaceID,
 		return lookupErr
 	}
 	if lookupErr == sql.ErrNoRows {
-		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_secret_materials").Columns("id", "workspace_id", "secret_key", "ciphertext", "created_at", "updated_at").Values(ownerID("secret_material_", workspaceID, key), workspaceID, key, ciphertext, now, now).Build()
+		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_secret_materials").Columns("id", "workspace_id", "secret_key", "ciphertext", "created_at", "updated_at").Values(ownerID("secret_material_", workspaceID, key), workspaceID, key, ciphertext, timestampMillis(now), timestampMillis(now)).Build()
 		if buildErr != nil {
 			return buildErr
 		}
 		_, err = s.database.ExecContext(ctx, statement, args...)
 		return err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", ciphertext).Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_secret_materials", id), query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", key)))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", ciphertext).Set("updated_at", timestampMillis(now)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_secret_materials", id), query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", key)))).Build()
 	if err != nil {
 		return err
 	}
@@ -208,16 +210,16 @@ func (s *ManagementStore) TransitionSecret(ctx context.Context, workspaceID, key
 		return integrationsdk.Secret{}, err
 	}
 	now := ownerNow()
-	builder := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("updated_at", now)
+	builder := query.NewUpdateBuilder(s.dialect, "_integration_secrets").Set("updated_at", timestampMillis(now))
 	switch strings.TrimSpace(transition) {
 	case "disable", "disabled":
-		builder.Set("status", "disabled").Set("disabled_at", now)
+		builder.Set("status", "disabled").Set("disabled_at", timestampMillis(now))
 	case "expire", "expired":
-		builder.Set("status", "expired").Set("expires_at", now)
+		builder.Set("status", "expired").Set("expires_at", timestampMillis(now))
 	case "revoke", "revoked":
-		builder.Set("status", "revoked").Set("revoked_at", now)
+		builder.Set("status", "revoked").Set("revoked_at", timestampMillis(now))
 	case "rotate", "rotated":
-		builder.Set("status", "active").Set("rotated_at", now)
+		builder.Set("status", "active").Set("rotated_at", timestampMillis(now))
 	default:
 		return integrationsdk.Secret{}, fmt.Errorf("Integration secret transition %q is unsupported", transition)
 	}

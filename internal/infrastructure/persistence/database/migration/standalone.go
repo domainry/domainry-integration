@@ -40,7 +40,7 @@ func ensureStandaloneLedger(ctx context.Context, database sqlhost.Database, rend
 	statement, args, err := schema.NewTable(renderer, LedgerTable).IfNotExists().Columns(
 		schema.Column("owner", schema.TextKey(191)).NotNull(), schema.Column("version", schema.BigInt()).NotNull(),
 		schema.Column("name", schema.TextKey(191)).NotNull(), schema.Column("checksum", schema.TextKey(64)).NotNull(),
-		schema.Column("dirty", schema.Boolean()).NotNull(), schema.Column("applied_at", schema.TextKey(40)).NotNull(),
+		schema.Column("dirty", schema.Boolean()).NotNull(), schema.Column("applied_at", schema.BigInt()).NotNull(),
 	).PrimaryKey("owner", "version").Build()
 	if err != nil {
 		return fmt.Errorf("build Integration migration ledger: %w", err)
@@ -66,7 +66,7 @@ func applyStandaloneMigration(ctx context.Context, database sqlhost.Database, re
 	}
 	insert, insertArgs, err := query.NewInsertBuilder(renderer, LedgerTable).
 		Columns("owner", "version", "name", "checksum", "dirty", "applied_at").
-		Values(owner, migration.Version, strings.TrimSpace(migration.Name), checksum, true, "").Build()
+		Values(owner, migration.Version, strings.TrimSpace(migration.Name), checksum, true, int64(0)).Build()
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func applyStandaloneMigration(ctx context.Context, database sqlhost.Database, re
 		}
 	}
 	complete, completeArgs, err := query.NewUpdateBuilder(renderer, LedgerTable).
-		Set("dirty", false).Set("applied_at", time.Now().UTC().Format(time.RFC3339Nano)).
+		Set("dirty", false).Set("applied_at", time.Now().UTC().UnixMilli()).
 		Where(query.And(query.Equal("owner", owner), query.Equal("version", migration.Version), query.Equal("checksum", checksum), query.Equal("dirty", true))).Build()
 	if err != nil {
 		return err

@@ -66,7 +66,7 @@ func TestModuleDeliveryResolvesWebPushMaterialInsideIntegrationOwner(t *testing.
 			}
 		}
 	}
-	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("push-connection", "push", "workspace-a", "notification", "web_push", "Push", "active", `{}`, `{}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("push-connection", "push", "workspace-a", "notification", "web_push", "Push", "active", `{}`, `{}`, "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z")).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestModuleDeliveryPersistsInvocationAndDeduplicatesProviderCall(t *testing.
 			}
 		}
 	}
-	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("connection-1", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z").Build()
+	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("connection-1", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z")).Build()
 	if err != nil {
 		t.Fatal(err)
 	}

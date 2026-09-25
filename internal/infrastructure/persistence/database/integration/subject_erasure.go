@@ -14,7 +14,6 @@ import (
 
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	model "github.com/domainry/domainry-integration/internal/domain/integration/model"
-	lifecyclemodel "github.com/domainry/domainry-lifecycle-sdk/model"
 	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 	"github.com/domainry/domainry-orm/query"
 )
@@ -76,6 +75,15 @@ type subjectStepExecutor interface {
 	subjectStepQueryer
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
+
+type persistedSubjectStep struct {
+	WorkspaceID string          `json:"workspace_id"`
+	RequestID   string          `json:"request_id"`
+	Owner       string          `json:"owner"`
+	Operation   string          `json:"operation"`
+	Payload     json.RawMessage `json:"payload"`
+	CompletedAt int64           `json:"completed_at"`
+}
 type subjectSpec struct {
 	table, status string
 	busy          []string
@@ -87,7 +95,7 @@ type subjectSpec struct {
 var subjectSpecs = []subjectSpec{
 	{table: "_integration_connection_accounts", values: map[string]any{"created_by": "anonymous"}},
 	{table: "_integration_connections", status: "status", values: map[string]any{"name": "", "config_json": "{}", "secret_refs_json": "{}", "granted_scopes_json": nil, "created_by": "anonymous", "status": "revoked"}},
-	{table: "_integration_provider_runs", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "status": "cancelled", "lease_owner": "", "lease_expires_at": "", "due_at": "", "last_error_code": "integration.subject_erased"}},
+	{table: "_integration_provider_runs", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "status": "cancelled", "lease_owner": "", "lease_expires_at": int64(0), "due_at": int64(0), "last_error_code": "integration.subject_erased"}},
 	{table: "_integration_webhook_subscriptions", status: "status", values: map[string]any{"name": "", "description": "", "event_types_json": "[]", "created_by": "anonymous", "status": "disabled"}},
 	{table: "_integration_oauth_sessions", status: "status", busy: []string{"exchanging"}, erase: true},
 	{table: "_integration_web_push_subscriptions", status: "status", erase: true},
@@ -95,7 +103,7 @@ var subjectSpecs = []subjectSpec{
 	{table: "_integration_secrets", status: "status", erase: true},
 	{table: "_integration_secret_materials", erase: true},
 	{table: "_integration_invocations", status: "status", busy: []string{"running", "processing", "reconciling"}, values: map[string]any{"metadata_json": "{}", "request_ref": "", "response_ref": "", "error": "", "status": "failed"}},
-	{table: "_integration_events", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "mapping_key": "", "target_type": "", "execution_json": "{}", "error": "", "status": "cancelled", "next_retry_at": "", "lease_owner": "", "lease_expires_at": ""}},
+	{table: "_integration_events", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "mapping_key": "", "target_type": "", "execution_json": "{}", "error": "", "status": "cancelled", "next_retry_at": int64(0), "lease_owner": "", "lease_expires_at": int64(0)}},
 }
 
 func subjectIn(column string, ids []string) query.Predicate {
@@ -148,7 +156,7 @@ func (s *SubjectLifecycleStore) sharedStep(ctx context.Context, db subjectStepQu
 	} else if err != nil {
 		return nil, false, err
 	}
-	var step lifecyclemodel.SubjectExecutionStep
+	var step persistedSubjectStep
 	if json.Unmarshal([]byte(raw), &step) != nil || step.WorkspaceID != r.WorkspaceID || step.RequestID != r.RequestID || step.Owner != integrationSubjectOwner || step.Operation != operation || !json.Valid(step.Payload) {
 		return nil, false, fmt.Errorf("Integration shared subject execution step invalid")
 	}
@@ -168,14 +176,14 @@ func (s *SubjectLifecycleStore) saveSharedStep(ctx context.Context, db subjectSt
 		return nil
 	}
 	completedAt := time.Now().UTC()
-	step := lifecyclemodel.SubjectExecutionStep{WorkspaceID: r.WorkspaceID, RequestID: r.RequestID, Owner: integrationSubjectOwner, Operation: operation, Payload: append(json.RawMessage(nil), payload...), CompletedAt: completedAt}
+	step := persistedSubjectStep{WorkspaceID: r.WorkspaceID, RequestID: r.RequestID, Owner: integrationSubjectOwner, Operation: operation, Payload: append(json.RawMessage(nil), payload...), CompletedAt: completedAt.UnixMilli()}
 	raw, err := json.Marshal(step)
 	if err != nil {
 		return err
 	}
 	stmt, args, err := query.NewWorkspaceInsertBuilder(s.dialect, sharedSubjectExecutionStepsTable, r.WorkspaceID).
 		Columns("request_id", "owner", "operation", "payload_json", "completed_at").
-		Values(r.RequestID, integrationSubjectOwner, operation, string(raw), completedAt.Format(time.RFC3339Nano)).Build()
+		Values(r.RequestID, integrationSubjectOwner, operation, string(raw), completedAt.UnixMilli()).Build()
 	if err != nil {
 		return err
 	}
@@ -486,7 +494,7 @@ func (s *SubjectLifecycleStore) PrepareSubjectErasure(ctx context.Context, r mod
 			}
 			b := query.NewWorkspaceUpdateBuilder(s.dialect, sp.table, r.WorkspaceID).Set(sp.status, "erasing").Where(query.Equal("id", row.ID))
 			if sp.token {
-				b.SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).Set("lease_owner", "").Set("lease_expires_at", "")
+				b.SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).Set("lease_owner", "").Set("lease_expires_at", int64(0))
 			}
 			stmt, args, e := b.Build()
 			if e != nil {
@@ -555,7 +563,7 @@ func (s *SubjectLifecycleStore) ErasePreparedSubject(ctx context.Context, r mode
 		if sp.erase {
 			stmt, args, err = query.NewWorkspaceDeleteBuilder(s.dialect, row.Table, r.WorkspaceID).Where(query.Equal("id", row.ID)).Build()
 		} else {
-			b := query.NewWorkspaceUpdateBuilder(s.dialect, row.Table, r.WorkspaceID).Set("updated_at", ownerNow()).Where(query.Equal("id", row.ID))
+			b := query.NewWorkspaceUpdateBuilder(s.dialect, row.Table, r.WorkspaceID).Set("updated_at", timestampMillis(ownerNow())).Where(query.Equal("id", row.ID))
 			keys := []string{}
 			for key := range sp.values {
 				keys = append(keys, key)

@@ -107,7 +107,7 @@ func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requireme
 	if err != nil {
 		return fmt.Errorf("encode Integration connection %q config: %w", requirement.Key, err)
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC().UnixMilli()
 	if lookupErr == nil {
 		update, updateArgs, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_connections").
 			Set("connector_key", requirement.ConnectorKey).Set("provider_key", requirement.ProviderKey).
