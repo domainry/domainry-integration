@@ -10,14 +10,27 @@ import (
 )
 
 func (h *handler) registerOperations() {
+	h.mux.HandleFunc("GET /integration/v1/operations/provider-run-snapshot", h.providerRunSnapshot)
 	h.mux.HandleFunc("POST /integration/v1/operations/call", h.callProvider)
 	h.mux.HandleFunc("GET /integration/v1/operations/invocations", h.listInvocations)
 	h.mux.HandleFunc("GET /integration/v1/operations/invocations/{id}", h.getInvocation)
 	h.mux.HandleFunc("POST /integration/v1/inbound/webhooks", h.acceptWebhook)
+	h.mux.HandleFunc("POST /integration/v1/inbound/routed-webhooks", h.acceptRoutedWebhook)
 	h.mux.HandleFunc("POST /integration/v1/public/webhooks/{workspaceID}/{connectorKey}/{connectionKey}", h.acceptPublicWebhook)
+	h.mux.HandleFunc("POST /integration/v1/public/routed-webhooks/{workspaceID}/{connectorKey}/{connectionKey}", h.acceptPublicRoutedWebhook)
 	h.mux.HandleFunc("GET /integration/v1/inbound/events", h.listEvents)
 	h.mux.HandleFunc("GET /integration/v1/inbound/events/{id}", h.getEvent)
 	h.mux.HandleFunc("POST /integration/v1/inbound/events/{id}/replay", h.replayEvent)
+}
+
+func (h *handler) providerRunSnapshot(w http.ResponseWriter, r *http.Request) {
+	monitor, ok := h.management.(integrationsdk.ProviderRunMonitoring)
+	if !ok {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "integration.provider_run_monitoring_unavailable"})
+		return
+	}
+	value, err := monitor.ProviderRunSnapshot(r.Context())
+	respond(w, value, err)
 }
 
 func (h *handler) callProvider(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +62,15 @@ func (h *handler) acceptWebhook(w http.ResponseWriter, r *http.Request) {
 	respond(w, value, err)
 }
 
+func (h *handler) acceptRoutedWebhook(w http.ResponseWriter, r *http.Request) {
+	var request integrationsdk.WebhookRequest
+	if !decode(w, r, &request) {
+		return
+	}
+	value, err := h.routedWebhooks.AcceptRoutedWebhook(r.Context(), request)
+	respond(w, value, err)
+}
+
 func (h *handler) acceptPublicWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
@@ -64,6 +86,33 @@ func (h *handler) acceptPublicWebhook(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(value.Challenge))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, value)
+}
+
+func (h *handler) acceptPublicRoutedWebhook(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "integration.invalid_body"})
+		return
+	}
+	value, err := h.routedWebhooks.AcceptRoutedWebhook(r.Context(), integrationsdk.WebhookRequest{
+		WorkspaceID: r.PathValue("workspaceID"), ConnectorKey: r.PathValue("connectorKey"), ConnectionKey: r.PathValue("connectionKey"),
+		Headers: r.Header.Clone(), Query: r.URL.Query(), Body: body, ReceivedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "integration.routed_webhook_rejected"})
+		return
+	}
+	if value.Challenge != "" {
+		if value.Format == "plain" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(value.Challenge))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"challenge": value.Challenge})
 		return
 	}
 	writeJSON(w, http.StatusAccepted, value)

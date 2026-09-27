@@ -34,11 +34,15 @@ func NewHandler(binding integrationsdk.Binding, serviceToken string) (http.Handl
 	if !ok || operations.Operations() == nil {
 		return nil, fmt.Errorf("Integration SaaS Operations binding is required")
 	}
+	routed, ok := binding.(integrationsdk.RoutedWebhooksBinding)
+	if !ok || routed.RoutedWebhooks() == nil {
+		return nil, fmt.Errorf("Integration SaaS routed webhook binding is required")
+	}
 	token := strings.TrimSpace(serviceToken)
 	if token == "" {
 		return nil, fmt.Errorf("Integration SaaS service token is required")
 	}
-	h := &handler{binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(), accounts: accounts.ConnectionAccounts(), accountAdmin: accountAdmin.ConnectionAccountAdministration(), operations: operations.Operations(), token: token, mux: http.NewServeMux()}
+	h := &handler{binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(), accounts: accounts.ConnectionAccounts(), accountAdmin: accountAdmin.ConnectionAccountAdministration(), operations: operations.Operations(), routedWebhooks: routed.RoutedWebhooks(), token: token, mux: http.NewServeMux()}
 	if port, ok := binding.(integrationsdk.ConnectionAccountReadsBinding); ok {
 		h.accountReads = port.ConnectionAccountReads()
 	}
@@ -69,12 +73,13 @@ type handler struct {
 	accountWrites       integrationsdk.ConnectionAccountWrites
 	accountAdmin        integrationsdk.ConnectionAccountAdministration
 	operations          integrationsdk.Operations
+	routedWebhooks      integrationsdk.RoutedWebhooks
 	token               string
 	mux                 *http.ServeMux
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/integration/v1/public/webhooks/") {
+	if r.Method == http.MethodPost && (strings.HasPrefix(r.URL.Path, "/integration/v1/public/webhooks/") || strings.HasPrefix(r.URL.Path, "/integration/v1/public/routed-webhooks/")) {
 		h.mux.ServeHTTP(w, r)
 		return
 	}

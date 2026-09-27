@@ -284,8 +284,34 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 		err = s.updateOAuthSession(completion, subject, record, "exchanging")
 		return record.Session, err
 	}
-	// Provision a distinct connection and four independently encrypted materials.
-	// There is no credential sharing with the administrative OAuth application.
+	// Resolve the stable upstream subject and routing keys while the freshly
+	// issued access token is available. A probe failure must not discard a
+	// successfully exchanged refresh token; users can retry the probe later.
+	var providerAccountDetails json.RawMessage
+	accountProbe, accountProbeEnabled := provider.(interface{ ProviderAccountProbeEnabled() bool })
+	if tester, ok := provider.(connector.ConnectionTester); ok && accountProbeEnabled && accountProbe.ProviderAccountProbeEnabled() {
+		probeConnection := connector.Connection{
+			Key: "account_" + record.Session.ID, WorkspaceID: subject.WorkspaceID,
+			ConnectorKey: app.ConnectorKey, ProviderKey: app.ProviderKey, Name: record.Name, Status: "active", Config: app.ConnectionConfig,
+		}
+		probe, probeErr := tester.TestConnection(completion, connector.TestConnectionRequest{
+			ConnectorKey: app.ConnectorKey, ProviderKey: app.ProviderKey, Connection: probeConnection,
+			Secrets:   map[string]string{"access_token": tokens.AccessToken, "refresh_token": tokens.RefreshToken, "client_id": app.ClientID, "client_secret": secret},
+			Principal: connector.Principal{UserID: subject.UserID, WorkspaceID: subject.WorkspaceID, IsAuthenticated: true},
+		})
+		if updated := strings.TrimSpace(probe.SecretUpdates["access_token"]); updated != "" {
+			tokens.AccessToken = updated
+		}
+		if updated := strings.TrimSpace(probe.SecretUpdates["refresh_token"]); updated != "" {
+			tokens.RefreshToken = updated
+		}
+		if probeErr == nil && probe.Connected {
+			providerAccountDetails = append(json.RawMessage(nil), probe.Details...)
+		}
+	}
+	// Access and refresh tokens belong to this account. OAuth application client
+	// credentials are referenced once per workspace so rotations take effect for
+	// every account without copying the client secret into every Connection.
 	err = s.withTransaction(completion, func(tx *ManagementStore) error {
 		current, e := tx.readOAuthSession(completion, subject, query.Equal("id", record.Session.ID))
 		if e != nil || current.Session.Status != "exchanging" {
@@ -296,8 +322,11 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 			return fmt.Errorf("Integration OAuth application changed")
 		}
 		trusted := integrationmodel.WithAccessScope(completion, integrationmodel.AccessScope{WorkspaceID: subject.WorkspaceID, ActorID: subject.UserID, PermissionKey: "integration.oauth_authorizations.complete", Unrestricted: true})
-		refs := map[string]string{}
-		for field, value := range map[string]string{"access_token": tokens.AccessToken, "refresh_token": tokens.RefreshToken, "client_id": app.ClientID, "client_secret": secret} {
+		refs := map[string]string{
+			"client_id":     oauthApplicationCredentialReference(app.Key, "client_id"),
+			"client_secret": oauthApplicationCredentialReference(app.Key, "client_secret"),
+		}
+		for field, value := range map[string]string{"access_token": tokens.AccessToken, "refresh_token": tokens.RefreshToken} {
 			key := record.Session.ID + "_" + field
 			if _, e = tx.UpsertSecret(trusted, subject.WorkspaceID, key, subject.UserID, integrationsdk.SecretInput{Kind: field, Value: value}); e != nil {
 				return e
@@ -315,7 +344,8 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 				config["scope"] = strings.Join(tokens.GrantedScopes, " ")
 			}
 		}
-		if _, e = tx.UpsertConnection(trusted, subject.WorkspaceID, key, subject.UserID, integrationsdk.ConnectionInput{ConnectorKey: app.ConnectorKey, ProviderKey: app.ProviderKey, Name: record.Name, Status: "active", Config: config, SecretRefs: refs}); e != nil {
+		connection, e := tx.UpsertConnection(trusted, subject.WorkspaceID, key, subject.UserID, integrationsdk.ConnectionInput{ConnectorKey: app.ConnectorKey, ProviderKey: app.ProviderKey, Name: record.Name, Status: "active", Config: config, SecretRefs: refs})
+		if e != nil {
 			return e
 		}
 		registration := integrationsdk.ConnectionAccountRegistration{Scope: record.Session.Scope}
@@ -329,6 +359,11 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 		if e = tx.saveConnectionGrant(completion, subject.WorkspaceID, key, tokens.GrantedScopes); e != nil {
 			return e
 		}
+		if len(providerAccountDetails) != 0 {
+			if e = tx.replaceProviderAccountRoutes(trusted, connection, providerAccountDetails); e != nil {
+				return e
+			}
+		}
 		if e = tx.enrichAccountReadiness(completion, &account); e != nil {
 			return e
 		}
@@ -340,7 +375,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth credentials could not be committed; inspect session before starting a new authorization")
 	}
-	return record.Session, nil
+	return s.GetOAuthAuthorization(completion, subject, record.Session.ID)
 }
 
 var _ integrationsdk.OAuthAuthorizations = (*ManagementStore)(nil)

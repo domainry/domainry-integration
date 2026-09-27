@@ -14,7 +14,7 @@ func TestSchemaMigrationsCoverOwnerTables(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s schema: %v", driver, err)
 		}
-		if len(migrations) != 1 || len(migrations[0].Statements) != 22 || migrations[0].Baseline != nil {
+		if len(migrations) != 1 || len(migrations[0].Statements) != 34 || migrations[0].Baseline != nil {
 			t.Fatalf("%s migrations=%#v", driver, migrations)
 		}
 		for _, migration := range migrations {

@@ -10,6 +10,7 @@ func (h *handler) registerManagement() {
 	h.mux.HandleFunc("GET /integration/v1/connection-accounts", h.listConnectionAccounts)
 	h.mux.HandleFunc("GET /integration/v1/connection-accounts/{key}", h.getConnectionAccount)
 	h.mux.HandleFunc("POST /integration/v1/connection-accounts/{key}/test", h.testConnectionAccount)
+	h.mux.HandleFunc("POST /integration/v1/connection-accounts/{key}/background/{taskKey}/retry", h.retryConnectionAccountBackgroundTask)
 	h.mux.HandleFunc("POST /integration/v1/connection-accounts/{key}/revoke", h.revokeConnectionAccount)
 	h.mux.HandleFunc("POST /integration/v1/connection-accounts/{key}/read-access", h.authorizeConnectionAccountRead)
 	h.mux.HandleFunc("POST /integration/v1/connection-accounts/{key}/read", h.readConnectionAccount)
@@ -58,6 +59,15 @@ func (h *handler) testConnectionAccount(w http.ResponseWriter, r *http.Request) 
 	}
 	v, e := h.accounts.TestConnectionAccount(r.Context(), accountSubject(r), r.PathValue("key"), input)
 	respond(w, v, e)
+}
+
+func (h *handler) retryConnectionAccountBackgroundTask(w http.ResponseWriter, r *http.Request) {
+	var input integrationsdk.ConnectionAccountBackgroundRetryRequest
+	if !decode(w, r, &input) {
+		return
+	}
+	task, err := h.accounts.RetryConnectionAccountBackgroundTask(r.Context(), accountSubject(r), r.PathValue("key"), r.PathValue("taskKey"), input)
+	respond(w, task, err)
 }
 
 func (h *handler) revokeConnectionAccount(w http.ResponseWriter, r *http.Request) {

@@ -53,12 +53,20 @@ func (s *ManagementStore) enrichAccountReadiness(ctx context.Context, a *sdk.Con
 			return nil
 		}
 	}
-	// The resolver consumes all configured references, including optional ones.
-	for _, ref := range connection.SecretRefs {
-		if !strings.HasPrefix(ref, "secret:") {
+	materialKeys, oauthApplicationKey, err := connectionAccountSecretReferences(connection.SecretRefs)
+	if err != nil {
+		return nil
+	}
+	if oauthApplicationKey != "" {
+		application, ciphertext, applicationErr := s.oauthApplication(ctx, a.WorkspaceID, oauthApplicationKey)
+		if applicationErr != nil || !application.Configured || strings.TrimSpace(application.ClientID) == "" || ciphertext == "" || application.ConnectorKey != connection.ConnectorKey || application.ProviderKey != connection.ProviderKey {
+			out.State = "credential_unavailable"
 			return nil
 		}
-		key := strings.TrimPrefix(ref, "secret:")
+	}
+	// Readiness checks metadata only. Actual provider execution resolves and
+	// decrypts both account material and shared OAuth application credentials.
+	for _, key := range materialKeys {
 		secret, err := s.getSecret(trusted, a.WorkspaceID, key)
 		if err != nil {
 			return err

@@ -3,20 +3,25 @@ package schema
 import "github.com/domainry/domainry-foundation/schemaownership"
 
 const (
-	MigrationOwner                       = "integration"
-	IntegrationConnectionAccountsTable   = "_integration_connection_accounts"
-	IntegrationConnectionsTable          = "_integration_connections"
-	IntegrationEventsTable               = "_integration_events"
-	IntegrationExternalIdentitiesTable   = "_integration_external_identities"
-	IntegrationInvocationsTable          = "_integration_invocations"
-	IntegrationOAuthApplicationsTable    = "_integration_oauth_applications"
-	IntegrationOAuthSessionsTable        = "_integration_oauth_sessions"
-	IntegrationProviderRunsTable         = "_integration_provider_runs"
-	IntegrationSecretMaterialsTable      = "_integration_secret_materials"
-	IntegrationSecretsTable              = "_integration_secrets"
-	IntegrationWebhookNoncesTable        = "_integration_webhook_nonces"
-	IntegrationWebhookSubscriptionsTable = "_integration_webhook_subscriptions"
-	IntegrationWebPushSubscriptionsTable = "_integration_web_push_subscriptions"
+	MigrationOwner                           = "integration"
+	IntegrationConnectionAccountsTable       = "_integration_connection_accounts"
+	IntegrationConnectionsTable              = "_integration_connections"
+	IntegrationEventsTable                   = "_integration_events"
+	IntegrationExternalIdentitiesTable       = "_integration_external_identities"
+	IntegrationInvocationsTable              = "_integration_invocations"
+	IntegrationOAuthApplicationsTable        = "_integration_oauth_applications"
+	IntegrationOAuthSessionsTable            = "_integration_oauth_sessions"
+	IntegrationProviderAccountRoutesTable    = "_integration_provider_account_routes"
+	IntegrationProviderConnectionLeasesTable = "_integration_provider_connection_leases"
+	IntegrationProviderInboxTable            = "_integration_provider_inbox"
+	IntegrationProviderMetricWindowsTable    = "_integration_provider_metric_windows"
+	IntegrationProviderRateLimitsTable       = "_integration_provider_rate_limits"
+	IntegrationProviderRunsTable             = "_integration_provider_runs"
+	IntegrationSecretMaterialsTable          = "_integration_secret_materials"
+	IntegrationSecretsTable                  = "_integration_secrets"
+	IntegrationWebhookNoncesTable            = "_integration_webhook_nonces"
+	IntegrationWebhookSubscriptionsTable     = "_integration_webhook_subscriptions"
+	IntegrationWebPushSubscriptionsTable     = "_integration_web_push_subscriptions"
 )
 
 var tableOwnership = []schemaownership.Table{
@@ -61,6 +66,36 @@ var tableOwnership = []schemaownership.Table{
 		RetentionClass: schemaownership.RetentionTechnicalTTL, PrimaryKey: []string{"workspace_id", "id"},
 		BoundedQueryPath: "globally unique state hash or exact workspace/user/session identity with expiry checks",
 		DeletionPolicy:   "consumed and expired authorization sessions are TTL-eligible; subject erasure removes user sessions after active exchange fencing",
+	},
+	{
+		Name: IntegrationProviderAccountRoutesTable, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+		RetentionClass: schemaownership.RetentionUserErase, PrimaryKey: []string{"workspace_id", "id"},
+		BoundedQueryPath: "workspace/connection routes and connector/provider/kind/hash/status/bucket push routing index",
+		DeletionPolicy:   "connection deletion and subject erasure remove account routes; inactive or revoked connections make routes ineligible for ingress",
+	},
+	{
+		Name: IntegrationProviderConnectionLeasesTable, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+		RetentionClass: schemaownership.RetentionTechnicalTTL, PrimaryKey: []string{"workspace_id", "id"},
+		BoundedQueryPath: "exact workspace/connection identity and expired lease cleanup index",
+		DeletionPolicy:   "leases are released after execution, expire after the bounded worker lease, and are removed with personal connections",
+	},
+	{
+		Name: IntegrationProviderInboxTable, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+		RetentionClass: schemaownership.RetentionTechnicalTTL, PrimaryKey: []string{"workspace_id", "id"},
+		BoundedQueryPath: "ingress workspace/provider/external event identity and indexed provider/status/received time-window observation",
+		DeletionPolicy:   "deduplication receipts retain only hashed account routes and bounded normalized payload until technical TTL expiry",
+	},
+	{
+		Name: IntegrationProviderMetricWindowsTable, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+		RetentionClass: schemaownership.RetentionTechnicalTTL, PrimaryKey: []string{"workspace_id", "id"},
+		BoundedQueryPath: "platform metric key and five-minute window range with fixed write shards",
+		DeletionPolicy:   "aggregate counters contain no account or provider payload and windows older than seven days are purged by the provider worker",
+	},
+	{
+		Name: IntegrationProviderRateLimitsTable, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+		RetentionClass: schemaownership.RetentionTechnicalTTL, PrimaryKey: []string{"workspace_id", "id"},
+		BoundedQueryPath: "exact scope-kind/scope-key rate bucket identity and expired window cleanup index",
+		DeletionPolicy:   "minute counters contain no provider payload or user identity and expire after the bounded rate window",
 	},
 	{
 		Name: IntegrationProviderRunsTable, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,

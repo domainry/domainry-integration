@@ -170,6 +170,9 @@ func TestOperationsStoreOwnsCallWebhookMappingAndRuntimeReceipt(t *testing.T) {
 	if trigger.request.MappingRevision == "" || trigger.request.Source.Provider != "probe" || trigger.request.Source.EventType != "contact.changed" || trigger.request.Source.ExternalID != "external-event-1" || trigger.request.Source.ReceivedAt != webhook.ReceivedAt.Format(time.RFC3339Nano) {
 		t.Fatalf("trigger provenance=%#v", trigger.request)
 	}
+	if trigger.request.Principal.OwnerUserID != "admin" {
+		t.Fatalf("trigger owner=%#v", trigger.request.Principal)
+	}
 }
 
 func TestOperationsStoreMapsVerifiedEventToFiniteAgentTargetAndCurrentIdentity(t *testing.T) {
@@ -340,6 +343,12 @@ func TestLocalWorkersPersistProviderStateBeforeDispatchingEvent(t *testing.T) {
 	workers := NewWorkerStore(database, dialect, delivery, operations, "runtime-a")
 	// Force the previously flaky precision prefix: .123Z sorts after .1231Z,
 	// although the second instant is later. Do not rely on the machine clock.
+	materializedAt := time.Date(2026, 9, 11, 10, 0, 0, 123000000, time.UTC)
+	if err := materializeProviderTasks(t.Context(), database, dialect, providers, nil, connector.Connection{
+		Key: "primary", WorkspaceID: "workspace-a", ConnectorKey: "crm", ProviderKey: "background", Name: "Primary", Status: "active",
+	}, materializedAt); err != nil {
+		t.Fatal(err)
+	}
 	clockCalls := 0
 	workers.clock = func() time.Time {
 		clockCalls++
@@ -354,11 +363,12 @@ func TestLocalWorkersPersistProviderStateBeforeDispatchingEvent(t *testing.T) {
 		t.Fatalf("processed=%d provider_calls=%d commit_calls=%d err=%v", processed, provider.calls, provider.commitCalls, err)
 	}
 	var state, status string
-	if err := database.QueryRowContext(t.Context(), "SELECT payload_json,status FROM _integration_provider_runs WHERE run_kind=? AND run_key=?", providerRunKindState, "poll").Scan(&state, &status); err != nil {
+	var lastSuccessAt int64
+	if err := database.QueryRowContext(t.Context(), "SELECT payload_json,status,last_success_at FROM _integration_provider_runs WHERE run_kind=? AND run_key=?", providerRunKindState, "poll").Scan(&state, &status, &lastSuccessAt); err != nil {
 		t.Fatal(err)
 	}
-	if state != `{"cursor":"next"}` || status != "ready" {
-		t.Fatalf("state=%s status=%s", state, status)
+	if state != `{"cursor":"next"}` || status != "ready" || lastSuccessAt != materializedAt.UnixMilli() {
+		t.Fatalf("state=%s status=%s last_success_at=%d", state, status, lastSuccessAt)
 	}
 	var stateRuns, commitRuns int
 	if err := database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM _integration_provider_runs WHERE run_kind=?", providerRunKindState).Scan(&stateRuns); err != nil {

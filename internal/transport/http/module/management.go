@@ -15,40 +15,41 @@ import (
 
 func (h *handler) managementHandlers() map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
-		integrationsdk.ActionIntegrationCatalogRead:                  h.integrationCatalog,
-		integrationsdk.ActionIntegrationConnectorsList:               h.integrationCatalog,
-		integrationsdk.ActionIntegrationConnectionsList:              h.listConnections,
-		integrationsdk.ActionIntegrationConnectionsGet:               h.getConnection,
-		integrationsdk.ActionIntegrationConnectionsValidate:          h.validateConnection,
-		integrationsdk.ActionIntegrationConnectionsUpsert:            h.upsertConnection,
-		integrationsdk.ActionIntegrationConnectionsDelete:            h.deleteConnection,
-		integrationsdk.ActionIntegrationConnectionsDisable:           h.disableConnection,
-		integrationsdk.ActionIntegrationConnectionsTestOperation:     h.testConnection,
-		integrationsdk.ActionIntegrationConnectionsRegisterAccount:   h.registerConnectionAccount,
-		integrationsdk.ActionIntegrationConnectionAccountsList:       h.listConnectionAccounts,
-		integrationsdk.ActionIntegrationConnectionAccountsGet:        h.getConnectionAccount,
-		integrationsdk.ActionIntegrationConnectionAccountsTest:       h.testConnectionAccount,
-		integrationsdk.ActionIntegrationConnectionAccountsRevoke:     h.revokeConnectionAccount,
-		integrationsdk.ActionIntegrationConnectionAccountsReadAccess: h.authorizeConnectionAccountRead,
-		integrationsdk.ActionIntegrationConnectionAccountsRead:       h.readConnectionAccount,
-		integrationsdk.ActionIntegrationSecretsList:                  h.listSecrets,
-		integrationsdk.ActionIntegrationSecretsUpsert:                h.upsertSecret,
-		integrationsdk.ActionIntegrationSecretsDisable:               h.transitionSecret("disable"),
-		integrationsdk.ActionIntegrationSecretsRotate:                h.rotateSecret,
-		integrationsdk.ActionIntegrationSecretsExpire:                h.transitionSecret("expire"),
-		integrationsdk.ActionIntegrationSecretsRevoke:                h.transitionSecret("revoke"),
-		integrationsdk.ActionIntegrationAPIKeysList:                  h.listAPIKeys,
-		integrationsdk.ActionIntegrationAPIKeysCreate:                h.createAPIKey,
-		integrationsdk.ActionIntegrationAPIKeysDisable:               h.disableAPIKey,
-		integrationsdk.ActionIntegrationAPIKeysRotate:                h.rotateAPIKey,
-		integrationsdk.ActionIntegrationExternalIdentitiesList:       h.listExternalIdentities,
-		integrationsdk.ActionIntegrationExternalIdentitiesUpsert:     h.upsertExternalIdentity,
-		integrationsdk.ActionIntegrationExternalIdentitiesDisable:    h.disableExternalIdentity,
-		integrationsdk.ActionIntegrationExternalIdentitiesResolve:    h.resolveExternalIdentity,
-		integrationsdk.ActionIntegrationWebhookSubscriptionsList:     h.listWebhookSubscriptions,
-		integrationsdk.ActionIntegrationWebhookSubscriptionsUpsert:   h.upsertWebhookSubscription,
-		integrationsdk.ActionIntegrationWebhookSubscriptionsDelete:   h.deleteWebhookSubscription,
-		integrationsdk.ActionIntegrationWebhookSubscriptionsDisable:  h.disableWebhookSubscription,
+		integrationsdk.ActionIntegrationCatalogRead:                       h.integrationCatalog,
+		integrationsdk.ActionIntegrationConnectorsList:                    h.integrationCatalog,
+		integrationsdk.ActionIntegrationConnectionsList:                   h.listConnections,
+		integrationsdk.ActionIntegrationConnectionsGet:                    h.getConnection,
+		integrationsdk.ActionIntegrationConnectionsValidate:               h.validateConnection,
+		integrationsdk.ActionIntegrationConnectionsUpsert:                 h.upsertConnection,
+		integrationsdk.ActionIntegrationConnectionsDelete:                 h.deleteConnection,
+		integrationsdk.ActionIntegrationConnectionsDisable:                h.disableConnection,
+		integrationsdk.ActionIntegrationConnectionsTestOperation:          h.testConnection,
+		integrationsdk.ActionIntegrationConnectionsRegisterAccount:        h.registerConnectionAccount,
+		integrationsdk.ActionIntegrationConnectionAccountsList:            h.listConnectionAccounts,
+		integrationsdk.ActionIntegrationConnectionAccountsGet:             h.getConnectionAccount,
+		integrationsdk.ActionIntegrationConnectionAccountsTest:            h.testConnectionAccount,
+		integrationsdk.ActionIntegrationConnectionAccountsRetryBackground: h.retryConnectionAccountBackgroundTask,
+		integrationsdk.ActionIntegrationConnectionAccountsRevoke:          h.revokeConnectionAccount,
+		integrationsdk.ActionIntegrationConnectionAccountsReadAccess:      h.authorizeConnectionAccountRead,
+		integrationsdk.ActionIntegrationConnectionAccountsRead:            h.readConnectionAccount,
+		integrationsdk.ActionIntegrationSecretsList:                       h.listSecrets,
+		integrationsdk.ActionIntegrationSecretsUpsert:                     h.upsertSecret,
+		integrationsdk.ActionIntegrationSecretsDisable:                    h.transitionSecret("disable"),
+		integrationsdk.ActionIntegrationSecretsRotate:                     h.rotateSecret,
+		integrationsdk.ActionIntegrationSecretsExpire:                     h.transitionSecret("expire"),
+		integrationsdk.ActionIntegrationSecretsRevoke:                     h.transitionSecret("revoke"),
+		integrationsdk.ActionIntegrationAPIKeysList:                       h.listAPIKeys,
+		integrationsdk.ActionIntegrationAPIKeysCreate:                     h.createAPIKey,
+		integrationsdk.ActionIntegrationAPIKeysDisable:                    h.disableAPIKey,
+		integrationsdk.ActionIntegrationAPIKeysRotate:                     h.rotateAPIKey,
+		integrationsdk.ActionIntegrationExternalIdentitiesList:            h.listExternalIdentities,
+		integrationsdk.ActionIntegrationExternalIdentitiesUpsert:          h.upsertExternalIdentity,
+		integrationsdk.ActionIntegrationExternalIdentitiesDisable:         h.disableExternalIdentity,
+		integrationsdk.ActionIntegrationExternalIdentitiesResolve:         h.resolveExternalIdentity,
+		integrationsdk.ActionIntegrationWebhookSubscriptionsList:          h.listWebhookSubscriptions,
+		integrationsdk.ActionIntegrationWebhookSubscriptionsUpsert:        h.upsertWebhookSubscription,
+		integrationsdk.ActionIntegrationWebhookSubscriptionsDelete:        h.deleteWebhookSubscription,
+		integrationsdk.ActionIntegrationWebhookSubscriptionsDisable:       h.disableWebhookSubscription,
 	}
 }
 
@@ -114,6 +115,23 @@ func (h *handler) testConnectionAccount(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
+}
+
+func (h *handler) retryConnectionAccountBackgroundTask(w http.ResponseWriter, r *http.Request) {
+	subject, ok := connectionAccountSubject(w, r)
+	if !ok {
+		return
+	}
+	var input integrationsdk.ConnectionAccountBackgroundRetryRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	task, err := h.accounts.RetryConnectionAccountBackgroundTask(r.Context(), subject, strings.TrimSpace(r.PathValue("connectionKey")), strings.TrimSpace(r.PathValue("taskKey")), input)
+	if err != nil {
+		writeConnectionAccountError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, task)
 }
 
 func (h *handler) revokeConnectionAccount(w http.ResponseWriter, r *http.Request) {

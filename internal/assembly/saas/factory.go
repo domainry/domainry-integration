@@ -61,6 +61,11 @@ func (f *Factory) OpenSaaS(ctx context.Context, application integrationsdk.Appli
 		_ = binding.Close(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("Integration SaaS Binding does not expose Operations")
 	}
+	routed, ok := binding.(integrationsdk.RoutedWebhooksBinding)
+	if !ok || routed.RoutedWebhooks() == nil {
+		_ = binding.Close(context.WithoutCancel(ctx))
+		return nil, fmt.Errorf("Integration SaaS Binding does not expose routed webhooks")
+	}
 	adapter, err := integrationhttp.NewAdapter(binding)
 	if err != nil {
 		_ = binding.Close(context.WithoutCancel(ctx))
@@ -69,18 +74,19 @@ func (f *Factory) OpenSaaS(ctx context.Context, application integrationsdk.Appli
 	return &bindingWithHTTPAdapter{
 		Binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(),
 		accounts: accounts.ConnectionAccounts(), accountAdmin: accountAdmin.ConnectionAccountAdministration(),
-		operations: operations.Operations(), adapters: []modulehttp.Adapter{adapter},
+		operations: operations.Operations(), routedWebhooks: routed.RoutedWebhooks(), adapters: []modulehttp.Adapter{adapter},
 	}, nil
 }
 
 type bindingWithHTTPAdapter struct {
 	integrationsdk.Binding
-	webPush      integrationsdk.WebPushSubscriptions
-	management   integrationsdk.Management
-	accounts     integrationsdk.ConnectionAccounts
-	accountAdmin integrationsdk.ConnectionAccountAdministration
-	operations   integrationsdk.Operations
-	adapters     []modulehttp.Adapter
+	webPush        integrationsdk.WebPushSubscriptions
+	management     integrationsdk.Management
+	accounts       integrationsdk.ConnectionAccounts
+	accountAdmin   integrationsdk.ConnectionAccountAdministration
+	operations     integrationsdk.Operations
+	routedWebhooks integrationsdk.RoutedWebhooks
+	adapters       []modulehttp.Adapter
 }
 
 func (b *bindingWithHTTPAdapter) WebPushSubscriptions() integrationsdk.WebPushSubscriptions {
@@ -100,6 +106,9 @@ func (b *bindingWithHTTPAdapter) ConnectionAccountAdministration() integrationsd
 	return b.accountAdmin
 }
 func (b *bindingWithHTTPAdapter) Operations() integrationsdk.Operations { return b.operations }
+func (b *bindingWithHTTPAdapter) RoutedWebhooks() integrationsdk.RoutedWebhooks {
+	return b.routedWebhooks
+}
 func (b *bindingWithHTTPAdapter) HTTPAdapters() []modulehttp.Adapter {
 	return append([]modulehttp.Adapter(nil), b.adapters...)
 }
@@ -111,6 +120,7 @@ var _ integrationsdk.ManagementBinding = (*bindingWithHTTPAdapter)(nil)
 var _ integrationsdk.ConnectionAccountsBinding = (*bindingWithHTTPAdapter)(nil)
 var _ integrationsdk.ConnectionAccountAdministrationBinding = (*bindingWithHTTPAdapter)(nil)
 var _ integrationsdk.OperationsBinding = (*bindingWithHTTPAdapter)(nil)
+var _ integrationsdk.RoutedWebhooksBinding = (*bindingWithHTTPAdapter)(nil)
 var _ modulehttp.Provider = (*bindingWithHTTPAdapter)(nil)
 
 func (b *bindingWithHTTPAdapter) OAuthApplications() integrationsdk.OAuthApplications {

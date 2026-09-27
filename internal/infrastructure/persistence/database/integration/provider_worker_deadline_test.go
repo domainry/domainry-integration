@@ -1,9 +1,66 @@
 package integration
 
 import (
+	"errors"
 	"testing"
 	"time"
+
+	connector "github.com/domainry/domainry-connector-sdk"
 )
+
+func TestProviderTaskFailurePersistsOnlyValidatedProviderCode(t *testing.T) {
+	database, dialect := webPushTestDatabase(t, "provider-task-coded-failure")
+	worker := NewWorkerStore(database, dialect, nil, nil, "worker")
+	now := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"run", "workspace-a", providerRunKindState, "poll", "crm", "probe", "primary", "poll", 1, "", "", `{}`, "processing", "", 0, now.UnixMilli(), worker.workerID, now.Add(time.Minute).UnixMilli(), 5, now.UnixMilli(), now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	providerErr := connector.RetryableError("google.http_429", errors.New("private response body"))
+	if err := worker.failProviderTask(t.Context(), providerTaskCandidate{id: "run", workspaceID: "workspace-a", fencingToken: 4}, providerErr, now); err == nil {
+		t.Fatal("provider failure was swallowed")
+	}
+	var stored string
+	if err := database.QueryRowContext(t.Context(), `SELECT last_error_code FROM _integration_provider_runs WHERE id='run'`).Scan(&stored); err != nil || stored != "google.http_429" {
+		t.Fatalf("stored provider error=%q err=%v", stored, err)
+	}
+	snapshot, err := NewManagementStore(database, dialect, nil, nil).providerRunSnapshot(t.Context(), now)
+	if err != nil || snapshot.GoogleHTTP429Failures != 1 || snapshot.GoogleHTTP429Events5m != 1 || snapshot.GoogleHTTP429EventsHour != 1 {
+		t.Fatalf("Google HTTP 429 snapshot=%+v err=%v", snapshot, err)
+	}
+	if err := worker.failProviderTask(t.Context(), providerTaskCandidate{id: "run", workspaceID: "workspace-a", fencingToken: 4}, providerErr, now); err == nil {
+		t.Fatal("stale worker failure was accepted")
+	}
+	snapshot, err = NewManagementStore(database, dialect, nil, nil).providerRunSnapshot(t.Context(), now)
+	if err != nil || snapshot.GoogleHTTP429Events5m != 1 {
+		t.Fatalf("stale worker duplicated 429 metric=%+v err=%v", snapshot, err)
+	}
+}
+
+func TestProviderTaskFailurePreservesLastCommittedSuccess(t *testing.T) {
+	database, dialect := webPushTestDatabase(t, "provider-task-last-success")
+	worker := NewWorkerStore(database, dialect, nil, nil, "worker")
+	now := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	previousSuccess := now.Add(-time.Hour).UnixMilli()
+	_, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,last_success_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"run", "workspace-a", providerRunKindState, "poll", "crm", "probe", "primary", "poll", 1, "", "", `{}`, "processing", "", 0, now.UnixMilli(), previousSuccess, worker.workerID, now.Add(time.Minute).UnixMilli(), 5, now.UnixMilli(), now.UnixMilli())
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := providerTaskCandidate{id: "run", workspaceID: "workspace-a", fencingToken: 4}
+	if err = worker.failProviderTask(t.Context(), candidate, errors.New("provider temporarily unavailable"), now); err == nil {
+		t.Fatal("provider failure was swallowed")
+	}
+	var status string
+	var lastSuccessAt int64
+	var attempts int
+	if err = database.QueryRowContext(t.Context(), "SELECT status,last_success_at,attempt_count FROM _integration_provider_runs WHERE workspace_id=? AND id=?", "workspace-a", "run").Scan(&status, &lastSuccessAt, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || lastSuccessAt != previousSuccess || attempts != 1 {
+		t.Fatalf("failed run status=%q last_success_at=%d attempts=%d", status, lastSuccessAt, attempts)
+	}
+}
 
 func TestProviderDeadlineComparisonUsesInstants(t *testing.T) {
 	now := time.Date(2026, 9, 11, 10, 0, 0, 123100000, time.UTC)

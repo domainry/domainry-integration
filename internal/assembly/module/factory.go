@@ -81,6 +81,7 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	delivery := integrationpersistence.NewDeliveryStoreWithSubjectLifecycle(host.Database(), host.Dialect(), host.Providers(), resolver, webPush, subjectLifecyclePersistence)
 	operations := integrationpersistence.NewOperationsStore(host.Database(), host.Dialect(), delivery, host.RuntimeTriggers(), definitions, subjectLifecyclePersistence)
 	workers := integrationpersistence.NewWorkerStore(host.Database(), host.Dialect(), delivery, operations, application.RuntimeID, subjectLifecyclePersistence)
+	routedWebhooks := integrationpersistence.NewRoutedWebhookStore(host.Database(), host.Dialect(), delivery, subjectLifecyclePersistence)
 	domain := integrationservice.New(
 		integrationpersistence.NewCatalogStore(definitions),
 		integrationpersistence.NewRequirementsStore(host.Database(), host.Dialect(), host.Providers(), definitions, subjectLifecyclePersistence),
@@ -96,6 +97,7 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	}
 	binding.SetConnectionAccountReads(integrationapplication.NewAccountReadService(management, domain))
 	binding.SetConnectionAccountWrites(integrationapplication.NewAccountWriteService(management, accountwrite.Codec{}, operations, operations))
+	binding.SetRoutedWebhooks(routedWebhooks)
 	binding.SetSubjectLifecycle(integrationsdkadapter.NewSubjectLifecycleBinding(integrationapplication.NewSubjectLifecycleService(integrationpersistence.NewSubjectLifecycleStore(host.Database(), host.Dialect(), definitions, subjectLifecyclePersistence))))
 	if mode == integrationsdk.DeploymentModeModule {
 		adapter, err := modulehttp.NewAdapter(binding)

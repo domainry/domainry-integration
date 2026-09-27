@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
 	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
@@ -112,7 +113,7 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 		t.Fatalf("remote descriptor=%+v err=%v", binding.Descriptor(), err)
 	}
 	provider, ok := binding.(modulehttp.Provider)
-	if !ok || len(provider.HTTPAdapters()) != 1 || len(provider.HTTPAdapters()[0].Routes()) != 51 {
+	if !ok || len(provider.HTTPAdapters()) != 1 || len(provider.HTTPAdapters()[0].Routes()) != 53 {
 		t.Fatalf("SaaS Integration HTTP adapters=%v", provider)
 	}
 	if values, err := binding.Catalog().ListConnectorDefinitions(t.Context()); err != nil || len(values) < 50 {
@@ -124,6 +125,18 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 	management, ok := binding.(integrationsdk.ManagementBinding)
 	if !ok || management.Management() == nil {
 		t.Fatal("SaaS binding does not expose Integration Management")
+	}
+	monitor, ok := management.Management().(integrationsdk.ProviderRunMonitoring)
+	if !ok {
+		t.Fatal("SaaS binding does not expose provider-run monitoring")
+	}
+	now := time.Now().UTC().Add(-time.Minute).UnixMilli()
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"due-monitor-run", "workspace-a", "state", "poll", "crm", "probe", "monitor-connection", "poll", 1, "", "", `{}`, "ready", "", 0, now, "", int64(0), 0, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err := monitor.ProviderRunSnapshot(t.Context()); err != nil || snapshot.ReadyDue != 1 {
+		t.Fatalf("SaaS provider-run snapshot=%+v err=%v", snapshot, err)
 	}
 	connection, err := management.Management().GetConnection(t.Context(), "workspace-a", "primary")
 	if err != nil || connection.ConnectorKey != "crm" {

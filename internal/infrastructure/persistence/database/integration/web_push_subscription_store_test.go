@@ -134,7 +134,7 @@ func TestWebPushCleanupRollsBackWholeCandidateSet(t *testing.T) {
 	}
 }
 
-func webPushTestDatabase(t *testing.T, name string) (*sql.DB, modulehost.Dialect) {
+func webPushTestDatabase(t testing.TB, name string) (*sql.DB, modulehost.Dialect) {
 	t.Helper()
 	database, err := sql.Open("sqlite", "file:"+name+"?mode=memory&cache=shared")
 	if err != nil {

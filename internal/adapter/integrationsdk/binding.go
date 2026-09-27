@@ -21,6 +21,7 @@ type Binding struct {
 	accountWrites *integrationapplication.AccountWriteService
 	subjects      integrationsdk.SubjectLifecycle
 	accountAdmin  integrationsdk.ConnectionAccountAdministration
+	routed        integrationsdk.RoutedWebhooks
 	workers       integrationsdk.LocalWorkers
 	adapters      []modulehttp.Adapter
 }
@@ -57,6 +58,9 @@ func (b *Binding) Descriptor() integrationsdk.Descriptor {
 	if b.subjects != nil {
 		capabilities = append(capabilities, "subjects.lifecycle")
 	}
+	if b.routed != nil {
+		capabilities = append(capabilities, "inbound.routed_webhooks.accept")
+	}
 	return integrationsdk.Descriptor{ProtocolVersion: integrationsdk.ProtocolVersionV1, Mode: b.mode, Capabilities: capabilities}
 }
 func (b *Binding) Catalog() integrationsdk.Catalog                       { return catalogBinding{b} }
@@ -76,7 +80,9 @@ func (b *Binding) SetConnectionAccountReads(reads *integrationapplication.Accoun
 func (b *Binding) ConnectionAccountAdministration() integrationsdk.ConnectionAccountAdministration {
 	return b.accountAdmin
 }
-func (b *Binding) Operations() integrationsdk.Operations { return operationsBinding{b} }
+func (b *Binding) Operations() integrationsdk.Operations                  { return operationsBinding{b} }
+func (b *Binding) RoutedWebhooks() integrationsdk.RoutedWebhooks          { return b.routed }
+func (b *Binding) SetRoutedWebhooks(routed integrationsdk.RoutedWebhooks) { b.routed = routed }
 func (b *Binding) LocalWorkers() (integrationsdk.LocalWorkers, bool) {
 	return b.workers, b.workers != nil
 }
@@ -227,6 +233,7 @@ var _ integrationsdk.ManagementBinding = (*Binding)(nil)
 var _ integrationsdk.ConnectionAccountsBinding = (*Binding)(nil)
 var _ integrationsdk.ConnectionAccountAdministrationBinding = (*Binding)(nil)
 var _ integrationsdk.OperationsBinding = (*Binding)(nil)
+var _ integrationsdk.RoutedWebhooksBinding = (*Binding)(nil)
 var _ integrationsdk.LocalWorkerBinding = (*Binding)(nil)
 var _ modulehttp.Provider = (*Binding)(nil)
 

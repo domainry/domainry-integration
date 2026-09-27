@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
@@ -15,8 +16,9 @@ import (
 )
 
 var (
-	errConnectionAccountNotFound = errors.New("Integration connection account was not found")
-	errConnectionAccountChanged  = errors.New("Integration connection account changed")
+	errConnectionAccountNotFound               = errors.New("Integration connection account was not found")
+	errConnectionAccountChanged                = errors.New("Integration connection account changed")
+	errConnectionAccountBackgroundNotRetryable = errors.New("Integration background task is not retryable")
 )
 
 func normalizedConnectionAccountSubject(subject integrationsdk.ConnectionAccountSubject) (integrationsdk.ConnectionAccountSubject, error) {
@@ -74,19 +76,23 @@ func scanConnectionAccount(row rowScanner) (integrationsdk.ConnectionAccount, er
 }
 
 func connectionAccountAccess(subject integrationsdk.ConnectionAccountSubject) query.Predicate {
-	personal, workspace := query.AlwaysFalse(), query.AlwaysFalse()
+	branches := []query.Predicate{}
 	if subject.Access.Personal {
-		personal = query.And(
+		branches = append(branches, query.And(
 			query.EqualValue(query.QualifiedColumn("a", "scope"), string(integrationsdk.ConnectionAccountScopePersonal)),
-			query.EqualValue(query.QualifiedColumn("a", "owner_user_id"), subject.UserID))
+			query.EqualValue(query.QualifiedColumn("a", "owner_user_id"), subject.UserID)))
 	}
 	if subject.Access.Workspace {
-		workspace = query.EqualValue(query.QualifiedColumn("a", "scope"), string(integrationsdk.ConnectionAccountScopeWorkspace))
+		branches = append(branches, query.EqualValue(query.QualifiedColumn("a", "scope"), string(integrationsdk.ConnectionAccountScopeWorkspace)))
 	}
-	return query.And(
-		query.EqualValue(query.QualifiedColumn("a", "workspace_id"), subject.WorkspaceID),
-		query.Or(personal, workspace),
-	)
+	if len(branches) == 0 {
+		return query.AlwaysFalse()
+	}
+	access := branches[0]
+	if len(branches) > 1 {
+		access = query.Or(branches...)
+	}
+	return query.And(query.EqualValue(query.QualifiedColumn("a", "workspace_id"), subject.WorkspaceID), access)
 }
 
 func (s *ManagementStore) ListConnectionAccounts(ctx context.Context, subject integrationsdk.ConnectionAccountSubject) ([]integrationsdk.ConnectionAccount, error) {
@@ -100,7 +106,7 @@ func (s *ManagementStore) ListConnectionAccounts(ctx context.Context, subject in
 	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_connection_accounts").Alias("a").
 		Projections(connectionAccountProjection()...).Join(connectionAccountJoin()).Where(connectionAccountAccess(subject)).
-		OrderBy(query.AscendingExpression(query.QualifiedColumn("c", "connection_key"))).Build()
+		OrderBy(query.AscendingExpression(query.QualifiedColumn("a", "connection_key"))).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +132,9 @@ func (s *ManagementStore) ListConnectionAccounts(ctx context.Context, subject in
 	// Release the cursor before owner-side credential queries (one-connection hosts).
 	for i := range values {
 		if err = s.enrichAccountReadiness(ctx, &values[i]); err != nil {
+			return nil, err
+		}
+		if err = s.enrichAccountBackground(ctx, &values[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -172,8 +181,119 @@ func (s *ManagementStore) GetConnectionAccount(ctx context.Context, subject inte
 	value, err := s.connectionAccount(ctx, subject.WorkspaceID, key, connectionAccountAccess(subject))
 	if err == nil {
 		err = s.enrichAccountReadiness(ctx, &value)
+		if err == nil {
+			err = s.enrichAccountBackground(ctx, &value)
+		}
 	}
 	return value, err
+}
+
+// The account has already passed the current user's ownership check. The
+// provider run lookup is then constrained to its workspace, connection and
+// state kind; the provider-runs unique index has this exact left prefix.
+func (s *ManagementStore) enrichAccountBackground(ctx context.Context, account *integrationsdk.ConnectionAccount) error {
+	statement, args, err := query.NewSelectBuilder(s.dialect, providerRunTable).
+		Columns("task_key", "status", "attempt_count", "due_at", "last_success_at", "last_error_code", "updated_at").
+		Where(query.And(
+			query.Equal("workspace_id", account.WorkspaceID),
+			query.Equal("run_kind", providerRunKindState),
+			query.Equal("connection_key", account.Key),
+			query.NotEqual("status", "cancelled"),
+		)).OrderBy(query.Ascending("task_key")).Build()
+	if err != nil {
+		return err
+	}
+	rows, err := s.database.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return fmt.Errorf("list Integration account background tasks: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var task integrationsdk.ConnectionAccountBackgroundTask
+		var dueAt, lastSuccessAt, updatedAt int64
+		if err = rows.Scan(&task.TaskKey, &task.Status, &task.AttemptCount, &dueAt, &lastSuccessAt, &task.LastErrorCode, &updatedAt); err != nil {
+			return err
+		}
+		task.DueAt, task.LastSuccessAt, task.UpdatedAt = timestampString(dueAt), timestampString(lastSuccessAt), timestampString(updatedAt)
+		account.Background = append(account.Background, task)
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	summarizeConnectionAccountHealth(account, time.Now().UTC())
+	return nil
+}
+
+func (s *ManagementStore) RetryConnectionAccountBackgroundTask(ctx context.Context, subject integrationsdk.ConnectionAccountSubject, key, taskKey string, request integrationsdk.ConnectionAccountBackgroundRetryRequest) (integrationsdk.ConnectionAccountBackgroundTask, error) {
+	var err error
+	subject, err = normalizedConnectionAccountSubject(subject)
+	if err != nil {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, err
+	}
+	if err = requireConnectionAccountSubjectScope(ctx, subject); err != nil {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, err
+	}
+	taskKey = strings.TrimSpace(taskKey)
+	if taskKey == "" {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, fmt.Errorf("Integration background task key is required")
+	}
+	if err = request.Validate(); err != nil {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, err
+	}
+	if s.transactions != nil {
+		var task integrationsdk.ConnectionAccountBackgroundTask
+		err = s.withTransaction(ctx, func(store *ManagementStore) error {
+			var retryErr error
+			task, retryErr = store.RetryConnectionAccountBackgroundTask(ctx, subject, key, taskKey, request)
+			return retryErr
+		})
+		return task, err
+	}
+	account, err := s.connectionAccount(ctx, subject.WorkspaceID, key, connectionAccountAccess(subject))
+	if err != nil {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, err
+	}
+	if account.Status != "active" {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, errConnectionAccountBackgroundNotRetryable
+	}
+	if err = guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, subject.WorkspaceID, subjectFenceReference{"connection", "", account.Key}, subjectFenceReference{"subject", "", subject.UserID}); err != nil {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, err
+	}
+	expected := timestampMillis(request.ExpectedUpdatedAt)
+	now := time.Now().UTC().UnixMilli()
+	updatedAt := now
+	if updatedAt <= expected {
+		updatedAt = expected + 1
+	}
+	statement, args, err := query.NewUpdateBuilder(s.dialect, providerRunTable).
+		Set("status", "ready").Set("due_at", now).Set("attempt_count", 0).
+		Set("lease_owner", "").Set("lease_expires_at", int64(0)).Set("updated_at", updatedAt).
+		SetExpression("wake_sequence", query.Add(query.Column("wake_sequence"), query.Value(1))).
+		Where(query.And(
+			subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, subject.WorkspaceID, providerRunTable, ""),
+			query.Equal("workspace_id", subject.WorkspaceID), query.Equal("run_kind", providerRunKindState),
+			query.Equal("connection_key", account.Key), query.Equal("run_key", taskKey),
+			query.Equal("updated_at", expected), query.In("status", "failed", "dead_letter"),
+		)).Build()
+	if err != nil {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, err
+	}
+	result, err := s.database.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, errConnectionAccountBackgroundNotRetryable
+	}
+	if err = s.enrichAccountBackground(ctx, &account); err != nil {
+		return integrationsdk.ConnectionAccountBackgroundTask{}, err
+	}
+	for _, task := range account.Background {
+		if task.TaskKey == taskKey {
+			return task, nil
+		}
+	}
+	return integrationsdk.ConnectionAccountBackgroundTask{}, fmt.Errorf("Integration retried background task disappeared")
 }
 
 func (s *ManagementStore) TestConnectionAccount(ctx context.Context, subject integrationsdk.ConnectionAccountSubject, key string, request integrationsdk.ConnectionTestRequest) (integrationsdk.ConnectionAccountTestResult, error) {
@@ -272,13 +392,23 @@ func (s *ManagementStore) RegisterConnectionAccount(ctx context.Context, workspa
 	return s.connectionAccount(ctx, workspaceID, key, nil)
 }
 
-func materialSecretKeys(refs map[string]string) ([]string, error) {
+func connectionAccountSecretReferences(refs map[string]string) ([]string, string, error) {
 	seen := map[string]bool{}
 	values := make([]string, 0, len(refs))
+	oauthApplicationKey := ""
+	oauthFields := map[string]bool{}
 	for field, reference := range refs {
 		reference = strings.TrimSpace(reference)
+		if applicationKey, credentialField, recognized := parseOAuthApplicationCredentialReference(reference); recognized {
+			if applicationKey == "" || field != credentialField || oauthApplicationKey != "" && oauthApplicationKey != applicationKey {
+				return nil, "", fmt.Errorf("Integration connection account OAuth application reference %q is invalid", field)
+			}
+			oauthApplicationKey = applicationKey
+			oauthFields[field] = true
+			continue
+		}
 		if !strings.HasPrefix(reference, "secret:") || strings.TrimSpace(strings.TrimPrefix(reference, "secret:")) == "" {
-			return nil, fmt.Errorf("Integration connection account secret %q must use managed material", field)
+			return nil, "", fmt.Errorf("Integration connection account secret %q must use managed material", field)
 		}
 		key := strings.TrimSpace(strings.TrimPrefix(reference, "secret:"))
 		if !seen[key] {
@@ -286,8 +416,11 @@ func materialSecretKeys(refs map[string]string) ([]string, error) {
 			values = append(values, key)
 		}
 	}
+	if oauthApplicationKey != "" && (!oauthFields["client_id"] || !oauthFields["client_secret"]) {
+		return nil, "", fmt.Errorf("Integration connection account OAuth application credentials must be referenced together")
+	}
 	sort.Strings(values)
-	return values, nil
+	return values, oauthApplicationKey, nil
 }
 
 func (s *ManagementStore) syncConnectionAccountSecrets(ctx context.Context, connection integrationsdk.Connection) error {
@@ -305,9 +438,15 @@ func (s *ManagementStore) syncConnectionAccountSecrets(ctx context.Context, conn
 	} else if err != nil {
 		return err
 	}
-	keys, err := materialSecretKeys(connection.SecretRefs)
+	keys, oauthApplicationKey, err := connectionAccountSecretReferences(connection.SecretRefs)
 	if err != nil {
 		return err
+	}
+	if oauthApplicationKey != "" {
+		application, ciphertext, applicationErr := s.oauthApplication(ctx, connection.WorkspaceID, oauthApplicationKey)
+		if applicationErr != nil || !application.Configured || application.ClientID == "" || ciphertext == "" || application.ConnectorKey != connection.ConnectorKey || application.ProviderKey != connection.ProviderKey {
+			return fmt.Errorf("Integration connection account OAuth application credentials are unavailable")
+		}
 	}
 	if err = s.rejectExistingCredentialAliases(ctx, connection, keys); err != nil {
 		return err
@@ -407,6 +546,12 @@ func (s *ManagementStore) RevokeConnectionAccount(ctx context.Context, subject i
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return integrationsdk.ConnectionAccount{}, errConnectionAccountChanged
+	}
+	if err = cancelProviderTasksForConnection(ctx, s.database, s.dialect, s.subjectLifecycle, subject.WorkspaceID, account.Key, time.UnixMilli(timestampMillis(now))); err != nil {
+		return integrationsdk.ConnectionAccount{}, err
+	}
+	if err = s.setProviderAccountRoutesInactive(ctx, subject.WorkspaceID, account.Key); err != nil {
+		return integrationsdk.ConnectionAccount{}, err
 	}
 	secretQuery, secretArgs, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns("secret_key").Where(query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("credential_type", "secret"), query.Equal("connection_key", account.Key))).OrderBy(query.Ascending("secret_key")).Build()
 	if err != nil {

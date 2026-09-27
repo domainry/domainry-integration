@@ -22,11 +22,24 @@ func TestMySQLCompositeIndexesUseBoundedColumns(t *testing.T) {
 		"`lease_expires_at` BIGINT NOT NULL",
 		"idx_integration_connection_account_owner",
 		"idx_integration_provider_run_due",
+		"idx_integration_provider_run_workspace_due",
+		"`published_at` BIGINT NOT NULL DEFAULT 0",
+		"idx_integration_provider_inbox_status",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("MySQL connection-account migration is missing %q: %s", want, joined)
 		}
 	}
+	for _, statement := range migrations[0].Statements {
+		if !strings.Contains(statement, "CREATE TABLE `_integration_provider_runs`") {
+			continue
+		}
+		if !strings.Contains(statement, "`status` VARCHAR(32) NOT NULL") {
+			t.Fatalf("provider run status is too wide for the workspace/due composite index: %s", statement)
+		}
+		return
+	}
+	t.Fatal("provider runs table is missing")
 }
 
 func TestSchemaOwnershipMatchesCanonicalFinalDDL(t *testing.T) {
@@ -34,7 +47,7 @@ func TestSchemaOwnershipMatchesCanonicalFinalDDL(t *testing.T) {
 	if err := schemaownership.ValidateAll(ownership); err != nil {
 		t.Fatal(err)
 	}
-	if len(ownership) != 13 || !slices.Equal(OwnedTables(), schemaownership.Names(ownership)) {
+	if len(ownership) != 18 || !slices.Equal(OwnedTables(), schemaownership.Names(ownership)) {
 		t.Fatalf("Integration schema ownership=%+v", ownership)
 	}
 	migrations, err := SchemaMigrations("sqlite", "")

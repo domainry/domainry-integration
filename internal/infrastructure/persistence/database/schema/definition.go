@@ -21,7 +21,7 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 	}
 	renderer := dialect.WithSchema(schema)
 	builders := []*ormschema.TableBuilder{
-		connectionsTable(renderer), providerRunsTable(renderer),
+		connectionsTable(renderer), providerAccountRoutesTable(renderer), providerConnectionLeasesTable(renderer), providerInboxTable(renderer), providerMetricWindowsTable(renderer), providerRateLimitsTable(renderer), providerRunsTable(renderer),
 		secretMaterialsTable(renderer), secretsTable(renderer), externalIdentitiesTable(renderer),
 		invocationsTable(renderer), eventsTable(renderer),
 		webhookNoncesTable(renderer), webhookSubscriptionsTable(renderer),
@@ -61,7 +61,14 @@ func indexes() []struct {
 		{"idx_integration_webhook_subscription_connection", IntegrationWebhookSubscriptionsTable, []string{"workspace_id", "connection_key"}},
 		{"idx_integration_credentials_status", IntegrationSecretsTable, []string{"workspace_id", "credential_type", "status"}},
 		{"idx_integration_secret_connection", IntegrationSecretsTable, []string{"workspace_id", "connection_key", "secret_key"}},
+		{"idx_integration_provider_account_connection", IntegrationProviderAccountRoutesTable, []string{"workspace_id", "connection_key", "status"}},
+		{"idx_integration_provider_account_route", IntegrationProviderAccountRoutesTable, []string{"connector_key", "provider_key", "route_kind", "route_hash", "status", "route_bucket"}},
+		{"idx_integration_provider_connection_lease_expiry", IntegrationProviderConnectionLeasesTable, []string{"lease_expires_at"}},
+		{"idx_integration_provider_inbox_status", IntegrationProviderInboxTable, []string{"connector_key", "provider_key", "status", "received_at", "published_at", "route_bucket"}},
+		{"idx_integration_provider_metric_window", IntegrationProviderMetricWindowsTable, []string{"metric_key", "window_started_at"}},
+		{"idx_integration_provider_rate_window", IntegrationProviderRateLimitsTable, []string{"window_started_at"}},
 		{"idx_integration_provider_run_due", IntegrationProviderRunsTable, []string{"run_kind", "status", "due_at", "lease_expires_at"}},
+		{"idx_integration_provider_run_workspace_due", IntegrationProviderRunsTable, []string{"run_kind", "workspace_id", "due_at", "connection_key", "task_key", "status", "lease_expires_at"}},
 		{"idx_integration_external_identities_actor", IntegrationExternalIdentitiesTable, []string{"actor_id", "role_key"}},
 		{"idx_web_push_subscription_user", IntegrationWebPushSubscriptionsTable, []string{"workspace_id", "user_id", "status"}},
 		{"idx_integration_connection_account_owner", IntegrationConnectionAccountsTable, []string{"workspace_id", "scope", "owner_user_id", "connection_key"}},
@@ -111,14 +118,55 @@ func connectionAccountsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationConnectionAccountsTable, key("id"), scope("workspace_id"), scope("connection_key"), req("scope", ormschema.TextKey(32)), req("owner_user_id", ormschema.TextKey(191)), key("created_by"), timestamp("created_at"), timestamp("updated_at")).Unique("workspace_id", "connection_key")
 }
 
+func providerAccountRoutesTable(r modulehost.Dialect) *ormschema.TableBuilder {
+	return table(r, IntegrationProviderAccountRoutesTable,
+		key("id"), scope("workspace_id"), scope("connection_key"), scope("connector_key"), key("provider_key"),
+		key("subject_hash"), key("route_kind"), key("route_hash"), integer("route_bucket"), key("status"),
+		timestamp("created_at"), timestamp("updated_at"),
+	).Unique("workspace_id", "connection_key", "route_kind", "route_hash")
+}
+
+func providerInboxTable(r modulehost.Dialect) *ormschema.TableBuilder {
+	return table(r, IntegrationProviderInboxTable,
+		key("id"), scope("workspace_id"), scope("connector_key"), key("provider_key"), scope("ingress_connection_key"),
+		key("external_id"), key("route_kind"), key("route_hash"), integer("route_bucket"), text("payload_json"),
+		key("status"), integer("routed_count"), timestamp("received_at"), optionalTimestamp("published_at"), timestamp("updated_at"),
+	).Unique("workspace_id", "provider_key", "ingress_connection_key", "external_id")
+}
+
+func providerMetricWindowsTable(r modulehost.Dialect) *ormschema.TableBuilder {
+	return table(r, IntegrationProviderMetricWindowsTable,
+		key("id"), scope("workspace_id"), req("metric_key", ormschema.TextKey(64)), integer("shard"),
+		timestamp("window_started_at"), integer("event_count"), timestamp("updated_at"),
+	).Unique("metric_key", "window_started_at", "shard")
+}
+
+func providerConnectionLeasesTable(r modulehost.Dialect) *ormschema.TableBuilder {
+	return table(r, IntegrationProviderConnectionLeasesTable,
+		key("id"), scope("workspace_id"), scope("connection_key"), key("lease_owner"),
+		optionalTimestamp("lease_expires_at"), integer("fencing_token"), timestamp("updated_at"),
+	).Unique("workspace_id", "connection_key")
+}
+
+func providerRateLimitsTable(r modulehost.Dialect) *ormschema.TableBuilder {
+	return table(r, IntegrationProviderRateLimitsTable,
+		key("id"), scope("workspace_id"), req("scope_kind", ormschema.TextKey(32)), key("scope_key"),
+		timestamp("window_started_at"), integer("used_count"), timestamp("updated_at"),
+	).Unique("scope_kind", "scope_key")
+}
+
 func providerRunsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationProviderRunsTable,
 		key("id"), scope("workspace_id"), req("run_kind", ormschema.TextKey(32)), scope("run_key"),
 		scope("connector_key"), scope("provider_key"), scope("connection_key"), scope("task_key"),
 		integer("state_version"), key("operation_key"), key("contract_sha256"), text("payload_json"),
-		key("status"), key("last_error_code"), integer("attempt_count"), timestamp("due_at"),
+		req("status", ormschema.TextKey(32)), key("last_error_code"), integer("attempt_count"), timestamp("due_at"), optionalTimestamp("last_success_at"), integerWithDefault("wake_sequence", 0),
 		key("lease_owner"), optionalTimestamp("lease_expires_at"), integer("fencing_token"), timestamp("created_at"), timestamp("updated_at"),
 	).Unique("workspace_id", "run_kind", "connection_key", "run_key")
+}
+
+func integerWithDefault(name string, value int64) ormschema.ColumnDefinition {
+	return req(name, ormschema.BigInt()).DefaultValue(value)
 }
 
 func secretMaterialsTable(r modulehost.Dialect) *ormschema.TableBuilder {

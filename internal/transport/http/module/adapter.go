@@ -48,7 +48,11 @@ func NewAdapter(binding integrationsdk.Binding) (modulehttp.Adapter, error) {
 	if !ok || operationsBinding.Operations() == nil {
 		return nil, errors.New("Integration Operations binding is unavailable")
 	}
-	h := &handler{catalog: binding.Catalog(), management: managementBinding.Management(), accounts: accountsBinding.ConnectionAccounts(), accountAdmin: accountAdminBinding.ConnectionAccountAdministration(), operations: operationsBinding.Operations(), subscriptions: webPushBinding.WebPushSubscriptions(), mux: http.NewServeMux()}
+	routedBinding, ok := binding.(integrationsdk.RoutedWebhooksBinding)
+	if !ok || routedBinding.RoutedWebhooks() == nil {
+		return nil, errors.New("Integration routed webhook binding is unavailable")
+	}
+	h := &handler{catalog: binding.Catalog(), management: managementBinding.Management(), accounts: accountsBinding.ConnectionAccounts(), accountAdmin: accountAdminBinding.ConnectionAccountAdministration(), operations: operationsBinding.Operations(), routedWebhooks: routedBinding.RoutedWebhooks(), subscriptions: webPushBinding.WebPushSubscriptions(), mux: http.NewServeMux()}
 	if port, ok := binding.(integrationsdk.ConnectionAccountReadsBinding); ok {
 		h.accountReads = port.ConnectionAccountReads()
 	}
@@ -69,7 +73,7 @@ func NewAdapter(binding integrationsdk.Binding) (modulehttp.Adapter, error) {
 		if !found {
 			return nil, fmt.Errorf("Integration Action %q has no HTTP handler", key)
 		}
-		if key != integrationsdk.ActionIntegrationWebhooksIngest {
+		if key != integrationsdk.ActionIntegrationWebhooksIngest && key != integrationsdk.ActionIntegrationRoutedWebhooksIngest {
 			implementation = authorizeAction(key, implementation)
 		}
 		h.mux.HandleFunc(route.Pattern(), implementation)
@@ -117,6 +121,7 @@ func requiresAllDataScope(permissionKey string) bool {
 		integrationsdk.ActionIntegrationConnectionAccountsList,
 		integrationsdk.ActionIntegrationConnectionAccountsGet,
 		integrationsdk.ActionIntegrationConnectionAccountsTest,
+		integrationsdk.ActionIntegrationConnectionAccountsRetryBackground,
 		integrationsdk.ActionIntegrationConnectionAccountsReadAccess,
 		integrationsdk.ActionIntegrationConnectionAccountsRead,
 		integrationsdk.ActionIntegrationConnectionAccountsRevoke:
@@ -154,6 +159,7 @@ type handler struct {
 	accountReads        integrationsdk.ConnectionAccountReads
 	accountAdmin        integrationsdk.ConnectionAccountAdministration
 	operations          integrationsdk.Operations
+	routedWebhooks      integrationsdk.RoutedWebhooks
 	subscriptions       integrationsdk.WebPushSubscriptions
 	mux                 *http.ServeMux
 }
@@ -174,6 +180,7 @@ func (h *handler) handlers() map[string]http.HandlerFunc {
 	handlers[integrationsdk.ActionIntegrationEventsGet] = h.getEvent
 	handlers[integrationsdk.ActionIntegrationEventsReplay] = h.replayEvent
 	handlers[integrationsdk.ActionIntegrationWebhooksIngest] = h.webhook
+	handlers[integrationsdk.ActionIntegrationRoutedWebhooksIngest] = h.routedWebhook
 	return handlers
 }
 
@@ -262,6 +269,33 @@ func (h *handler) webhook(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(receipt.Challenge))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, receipt)
+}
+
+func (h *handler) routedWebhook(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "backend.integration.routed_webhook_body_invalid")
+		return
+	}
+	receipt, err := h.routedWebhooks.AcceptRoutedWebhook(r.Context(), integrationsdk.WebhookRequest{
+		WorkspaceID: r.PathValue("workspaceID"), ConnectorKey: r.PathValue("connectorKey"), ConnectionKey: r.PathValue("connectionKey"),
+		Headers: r.Header.Clone(), Query: r.URL.Query(), Body: body, ReceivedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "backend.integration.routed_webhook_rejected")
+		return
+	}
+	if receipt.Challenge != "" {
+		if receipt.Format == "plain" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(receipt.Challenge))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"challenge": receipt.Challenge})
 		return
 	}
 	writeJSON(w, http.StatusAccepted, receipt)

@@ -94,19 +94,28 @@ func (s *ManagementStore) UpsertOAuthApplication(ctx context.Context, workspace,
 		return integrationsdk.OAuthApplication{}, fmt.Errorf("Integration OAuth application protocol configuration is invalid")
 	}
 	where := query.And(query.Equal("workspace_id", workspace), query.Equal("application_key", key))
-	lookup, args, err := query.NewSelectBuilder(s.dialect, "_integration_oauth_applications").Columns("updated_at", "client_ciphertext").Where(where).Limit(1).Build()
+	lookup, args, err := query.NewSelectBuilder(s.dialect, "_integration_oauth_applications").Columns("updated_at", "client_ciphertext", "application_json").Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.OAuthApplication{}, err
 	}
 	var revisionMillis int64
-	var ciphertext string
-	lookupErr := s.database.QueryRowContext(ctx, lookup, args...).Scan(&revisionMillis, &ciphertext)
+	var ciphertext, currentRaw string
+	lookupErr := s.database.QueryRowContext(ctx, lookup, args...).Scan(&revisionMillis, &ciphertext, &currentRaw)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return integrationsdk.OAuthApplication{}, lookupErr
 	}
 	revision := timestampString(revisionMillis)
 	if lookupErr == nil && input.ExpectedUpdatedAt != revision || lookupErr == sql.ErrNoRows && input.ExpectedUpdatedAt != "" {
 		return integrationsdk.OAuthApplication{}, fmt.Errorf("Integration OAuth application changed")
+	}
+	if lookupErr == nil {
+		var current integrationsdk.OAuthApplication
+		if err = json.Unmarshal([]byte(currentRaw), &current); err != nil {
+			return integrationsdk.OAuthApplication{}, fmt.Errorf("Integration OAuth application configuration is invalid")
+		}
+		if current.ConnectorKey != input.ConnectorKey || current.ProviderKey != input.ProviderKey {
+			return integrationsdk.OAuthApplication{}, fmt.Errorf("Integration OAuth application Provider identity is immutable; create a separate application")
+		}
 	}
 	if input.ClientSecret != "" {
 		ciphertext, err = s.cipher.EncryptSecretMaterial(ctx, workspace, "oauth_application_"+key, input.ClientSecret)

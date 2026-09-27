@@ -22,9 +22,6 @@ func (r EventMappingRequirement) Validate() error {
 		if strings.TrimSpace(r.ObjectKey) == "" || strings.TrimSpace(r.ActionKey) == "" {
 			return fmt.Errorf("Integration action event mapping requires object_key and action_key")
 		}
-		if strings.TrimSpace(r.RecordID) == "" && strings.TrimSpace(r.RecordIDPath) == "" {
-			return fmt.Errorf("Integration action event mapping requires record_id or record_id_path")
-		}
 	case "workflow":
 		if strings.TrimSpace(r.WorkflowKey) == "" {
 			return fmt.Errorf("Integration workflow event mapping requires workflow_key")

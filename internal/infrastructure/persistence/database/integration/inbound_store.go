@@ -50,7 +50,11 @@ func (s *OperationsStore) AcceptWebhook(ctx context.Context, request integration
 	if strings.TrimSpace(verified.EventType) == "" || strings.TrimSpace(verified.ExternalID) == "" || !json.Valid(verified.Payload) {
 		return integrationmodel.WebhookReceipt{}, fmt.Errorf("Integration verified webhook event is incomplete")
 	}
-	verified.Payload, err = integrationWebhookEventPayload(verified.Payload, request.ConnectorKey, request.ConnectionKey)
+	ownerUserID, err := connectionOwnerUserID(ctx, s.database, s.dialect, request.WorkspaceID, request.ConnectionKey)
+	if err != nil {
+		return integrationmodel.WebhookReceipt{}, err
+	}
+	verified.Payload, err = integrationWebhookEventPayload(verified.Payload, request.ConnectorKey, request.ConnectionKey, ownerUserID)
 	if err != nil {
 		return integrationmodel.WebhookReceipt{}, err
 	}
@@ -303,6 +307,9 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 		}
 	}
 	principal := integrationsdk.TriggerPrincipal{}
+	if value, ok := integrationPayloadPath(payload, "_integration_context.owner_user_id"); ok {
+		principal.OwnerUserID = strings.TrimSpace(fmt.Sprint(value))
+	}
 	identityProvider, identitySubject, identityName := strings.TrimSpace(mapping.ExternalIdentity.Provider), "", ""
 	if identityProvider == "" {
 		identityProvider = event.Provider
@@ -324,6 +331,7 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 		principal.ExternalName = identityName
 		if identity, ok := s.resolveExternalIdentity(ctx, event.WorkspaceID, identityProvider, identitySubject); ok {
 			principal.ActorID, principal.RoleKey = identity.ActorID, identity.RoleKey
+			principal.OwnerUserID = ""
 		} else if strings.TrimSpace(mapping.ExternalIdentity.SubjectPath) != "" || mapping.ExternalIdentity.OnUnmapped != "" {
 			err := fmt.Errorf("Integration external identity %s/%s is unmapped", identityProvider, identitySubject)
 			event, _ = s.updateEventStatus(ctx, event, "failed", err.Error())
@@ -523,13 +531,16 @@ func integrationPayloadPath(payload map[string]any, path string) (any, bool) {
 	return current, true
 }
 
-func integrationWebhookEventPayload(raw json.RawMessage, connectorKey, connectionKey string) (json.RawMessage, error) {
+func integrationWebhookEventPayload(raw json.RawMessage, connectorKey, connectionKey, ownerUserID string) (json.RawMessage, error) {
 	payload := map[string]any{}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("Integration webhook event payload must be a JSON object: %w", err)
 	}
 	contextValue := map[string]any{}
 	contextValue["connector_key"], contextValue["connection_key"] = strings.TrimSpace(connectorKey), strings.TrimSpace(connectionKey)
+	if ownerUserID = strings.TrimSpace(ownerUserID); ownerUserID != "" {
+		contextValue["owner_user_id"] = ownerUserID
+	}
 	payload["_integration_context"] = contextValue
 	encoded, err := json.Marshal(payload)
 	if err != nil {

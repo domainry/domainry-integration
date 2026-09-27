@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/domainry/domainry-foundation v0.1.41
 	github.com/domainry/domainry-identity-sdk v0.1.18
-	github.com/domainry/domainry-integration-sdk v0.1.12
+	github.com/domainry/domainry-integration-sdk v0.1.13
 	github.com/domainry/domainry-metadata-sdk v0.1.8
 	github.com/domainry/domainry-orm v0.1.32
 	modernc.org/sqlite v1.57.0

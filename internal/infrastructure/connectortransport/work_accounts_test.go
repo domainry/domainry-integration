@@ -75,6 +75,19 @@ func TestWorkAccountsRejectsUnknownEndpointsAndBoundsResponses(t *testing.T) {
 	}
 }
 
+func TestWorkAccountsAllowsOnlyOfficialFeishuHosts(t *testing.T) {
+	for _, target := range []string{"https://open.feishu.cn/open-apis/calendar/v4/calendars", "https://accounts.feishu.cn/open-apis/authen/v1/authorize"} {
+		if _, err := allowedURL(target); err != nil {
+			t.Fatalf("official Feishu endpoint rejected: %s: %v", target, err)
+		}
+	}
+	for _, target := range []string{"https://feishu.cn/open-apis", "https://open.feishu.cn.evil.test/open-apis", "https://open.feishu.cn:444/open-apis", "http://open.feishu.cn/open-apis"} {
+		if _, err := allowedURL(target); err == nil {
+			t.Fatalf("non-official Feishu endpoint accepted: %s", target)
+		}
+	}
+}
+
 func TestWorkAccountsDoesNotFollowRedirects(t *testing.T) {
 	var calls int
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

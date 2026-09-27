@@ -276,6 +276,15 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 	if err = s.syncConnectionAccountSecrets(ctx, connection); err != nil {
 		return integrationsdk.Connection{}, err
 	}
+	if err = materializeProviderTasks(ctx, s.database, s.dialect, s.delivery.providers, s.subjectLifecycle, connector.Connection{
+		Key: connection.Key, WorkspaceID: connection.WorkspaceID, ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey,
+		Name: connection.Name, Status: connection.Status, Config: connection.Config, SecretRefs: connection.SecretRefs,
+	}, time.UnixMilli(timestampMillis(now))); err != nil {
+		return integrationsdk.Connection{}, err
+	}
+	if err = s.syncProviderAccountRouteStatus(ctx, connection); err != nil {
+		return integrationsdk.Connection{}, err
+	}
 	return s.GetConnection(ctx, workspaceID, key)
 }
 
@@ -287,6 +296,12 @@ func (s *ManagementStore) DeleteConnection(ctx context.Context, workspaceID, key
 		return s.withTransaction(ctx, func(store *ManagementStore) error { return store.DeleteConnection(ctx, workspaceID, key) })
 	}
 	if err := s.requireScopedCandidate(ctx, "_integration_connections", "connection_key", workspaceID, key); err != nil {
+		return err
+	}
+	if err := cancelProviderTasksForConnection(ctx, s.database, s.dialect, s.subjectLifecycle, strings.TrimSpace(workspaceID), strings.TrimSpace(key), time.Now().UTC()); err != nil {
+		return err
+	}
+	if err := s.deleteProviderAccountRoutes(ctx, workspaceID, key); err != nil {
 		return err
 	}
 	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("connection_key", strings.TrimSpace(key)))
@@ -362,7 +377,8 @@ func (s *ManagementStore) SetConnectionStatus(ctx context.Context, workspaceID, 
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", status).Set("updated_at", timestampMillis(ownerNow())).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, strings.TrimSpace(workspaceID), "_integration_connections", ownerID("connection_", workspaceID, key)), where)).Build()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", status).Set("updated_at", now.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, strings.TrimSpace(workspaceID), "_integration_connections", ownerID("connection_", workspaceID, key)), where)).Build()
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}
@@ -373,7 +389,20 @@ func (s *ManagementStore) SetConnectionStatus(ctx context.Context, workspaceID, 
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		return integrationsdk.Connection{}, fmt.Errorf("Integration connection %q was not found", key)
 	}
-	return s.GetConnection(ctx, workspaceID, key)
+	connection, err := s.GetConnection(ctx, workspaceID, key)
+	if err != nil {
+		return integrationsdk.Connection{}, err
+	}
+	if err = materializeProviderTasks(ctx, s.database, s.dialect, s.delivery.providers, s.subjectLifecycle, connector.Connection{
+		Key: connection.Key, WorkspaceID: connection.WorkspaceID, ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey,
+		Name: connection.Name, Status: connection.Status, Config: connection.Config, SecretRefs: connection.SecretRefs,
+	}, now); err != nil {
+		return integrationsdk.Connection{}, err
+	}
+	if err = s.syncProviderAccountRouteStatus(ctx, connection); err != nil {
+		return integrationsdk.Connection{}, err
+	}
+	return connection, nil
 }
 
 func (s *ManagementStore) TestConnection(ctx context.Context, workspaceID, key string, request integrationsdk.ConnectionTestRequest) (integrationsdk.ConnectionTestResult, error) {
@@ -408,6 +437,9 @@ func (s *ManagementStore) TestConnection(ctx context.Context, workspaceID, key s
 		Secrets: resolvedSecrets.Values, Principal: connector.Principal{WorkspaceID: workspaceID, IsAuthenticated: true},
 	})
 	err = s.delivery.persistProviderSecretUpdates(ctx, workspaceID, connection.SecretRefs, resolvedSecrets.Versions, result.SecretUpdates, err)
+	if err == nil && result.Connected {
+		err = s.replaceProviderAccountRoutes(ctx, connection, result.Details)
+	}
 	status := integrationsdk.DeliveryStatusSucceeded
 	if err != nil || !result.Connected {
 		status = integrationsdk.DeliveryStatusFailed

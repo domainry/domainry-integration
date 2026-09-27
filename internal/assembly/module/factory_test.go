@@ -132,10 +132,10 @@ func TestFactoryAssemblesDeploymentNeutralModuleBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	routes := provider.HTTPAdapters()[0].Routes()
-	if len(routes) != 51 {
+	if len(routes) != 53 {
 		t.Fatalf("Integration product routes=%d", len(routes))
 	}
-	for _, required := range []string{"GET /integration/connectors", "PUT /integration/connections/{connectionKey}", "GET /integration/connection-accounts", "GET /integration/web-push/readiness"} {
+	for _, required := range []string{"GET /integration/connectors", "PUT /integration/connections/{connectionKey}", "GET /integration/connection-accounts", "GET /integration/web-push/readiness", "POST /integration/routed-webhooks/{workspaceID}/{connectorKey}/{connectionKey}"} {
 		found := false
 		for _, route := range routes {
 			if route.Pattern() == required {

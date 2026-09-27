@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -23,6 +24,41 @@ type SecretResolver struct {
 	dialect          modulehost.Dialect
 	cipher           modulehost.SecretMaterialCipher
 	subjectLifecycle *SubjectLifecyclePersistence
+}
+
+const (
+	oauthApplicationClientIDReferencePrefix     = "oauth-application-client-id:"
+	oauthApplicationClientSecretReferencePrefix = "oauth-application-client-secret:"
+)
+
+type oauthApplicationCredentials struct {
+	clientID, clientSecret string
+}
+
+func oauthApplicationCredentialReference(applicationKey, field string) string {
+	switch field {
+	case "client_id":
+		return oauthApplicationClientIDReferencePrefix + strings.TrimSpace(applicationKey)
+	case "client_secret":
+		return oauthApplicationClientSecretReferencePrefix + strings.TrimSpace(applicationKey)
+	default:
+		panic("unsupported OAuth application credential field")
+	}
+}
+
+// parseOAuthApplicationCredentialReference reports recognized=true even when
+// the application key is empty. Callers must reject an empty key rather than
+// treating a malformed shared reference as some other reference type.
+func parseOAuthApplicationCredentialReference(reference string) (applicationKey, field string, recognized bool) {
+	reference = strings.TrimSpace(reference)
+	switch {
+	case strings.HasPrefix(reference, oauthApplicationClientIDReferencePrefix):
+		return strings.TrimSpace(strings.TrimPrefix(reference, oauthApplicationClientIDReferencePrefix)), "client_id", true
+	case strings.HasPrefix(reference, oauthApplicationClientSecretReferencePrefix):
+		return strings.TrimSpace(strings.TrimPrefix(reference, oauthApplicationClientSecretReferencePrefix)), "client_secret", true
+	default:
+		return "", "", false
+	}
 }
 
 func (s *SecretResolver) ApplySecretUpdates(ctx context.Context, workspaceID string, references, updates map[string]string) error {
@@ -178,11 +214,38 @@ func (s *SecretResolver) ResolveSecretReferences(ctx context.Context, workspaceI
 
 func (s *SecretResolver) ResolveSecretReferencesSnapshot(ctx context.Context, workspaceID string, references map[string]string) (resolvedProviderSecrets, error) {
 	resolved := resolvedProviderSecrets{Values: make(map[string]string, len(references)), Versions: make(map[string]providerSecretVersion, len(references))}
+	oauthApplications := map[string]oauthApplicationCredentials{}
+	workspaceID = strings.TrimSpace(workspaceID)
 	for name, reference := range references {
 		if err := ctx.Err(); err != nil {
 			return resolvedProviderSecrets{}, err
 		}
-		value, version, err := s.resolveReferenceSnapshot(ctx, strings.TrimSpace(workspaceID), strings.TrimSpace(reference))
+		reference = strings.TrimSpace(reference)
+		var value string
+		var version *providerSecretVersion
+		var err error
+		if applicationKey, field, recognized := parseOAuthApplicationCredentialReference(reference); recognized {
+			if applicationKey == "" {
+				err = fmt.Errorf("OAuth application credential reference is invalid")
+			} else {
+				credentials, found := oauthApplications[applicationKey]
+				if !found {
+					credentials, err = s.resolveOAuthApplicationCredentials(ctx, workspaceID, applicationKey)
+					if err == nil {
+						oauthApplications[applicationKey] = credentials
+					}
+				}
+				if err == nil {
+					if field == "client_id" {
+						value = credentials.clientID
+					} else {
+						value = credentials.clientSecret
+					}
+				}
+			}
+		} else {
+			value, version, err = s.resolveReferenceSnapshot(ctx, workspaceID, reference)
+		}
 		if err != nil {
 			return resolvedProviderSecrets{}, fmt.Errorf("resolve Integration provider secret %q: %w", name, err)
 		}
@@ -203,6 +266,19 @@ func (s *SecretResolver) resolveReferenceSnapshot(ctx context.Context, workspace
 	if strings.HasPrefix(reference, "env:") {
 		value, err := environmentSecret(reference)
 		return value, nil, err
+	}
+	if applicationKey, field, recognized := parseOAuthApplicationCredentialReference(reference); recognized {
+		if applicationKey == "" {
+			return "", nil, fmt.Errorf("OAuth application credential reference is invalid")
+		}
+		credentials, err := s.resolveOAuthApplicationCredentials(ctx, workspaceID, applicationKey)
+		if err != nil {
+			return "", nil, err
+		}
+		if field == "client_id" {
+			return credentials.clientID, nil, nil
+		}
+		return credentials.clientSecret, nil, nil
 	}
 	if !strings.HasPrefix(reference, "secret:") {
 		return "", nil, fmt.Errorf("secret reference is invalid")
@@ -246,6 +322,36 @@ func (s *SecretResolver) resolveReferenceSnapshot(ctx context.Context, workspace
 		return "", nil, err
 	}
 	return value, &providerSecretVersion{SecretKey: secretKey, Fingerprint: fingerprint.String, UpdatedAt: timestampString(updatedAt)}, nil
+}
+
+func (s *SecretResolver) resolveOAuthApplicationCredentials(ctx context.Context, workspaceID, applicationKey string) (oauthApplicationCredentials, error) {
+	if workspaceID == "" || applicationKey == "" || s.cipher == nil {
+		return oauthApplicationCredentials{}, fmt.Errorf("OAuth application credentials are unavailable")
+	}
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_oauth_applications").Columns("application_json", "client_ciphertext").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("application_key", applicationKey))).Limit(1).Build()
+	if err != nil {
+		return oauthApplicationCredentials{}, err
+	}
+	var raw, ciphertext string
+	if err = s.database.QueryRowContext(ctx, statement, args...).Scan(&raw, &ciphertext); err != nil {
+		return oauthApplicationCredentials{}, fmt.Errorf("OAuth application credentials are unavailable")
+	}
+	var application struct {
+		ClientID   string `json:"client_id"`
+		Configured bool   `json:"configured"`
+	}
+	if err = json.Unmarshal([]byte(raw), &application); err != nil {
+		return oauthApplicationCredentials{}, fmt.Errorf("OAuth application configuration is invalid")
+	}
+	application.ClientID = strings.TrimSpace(application.ClientID)
+	if !application.Configured || application.ClientID == "" || ciphertext == "" {
+		return oauthApplicationCredentials{}, fmt.Errorf("OAuth application credentials are unavailable")
+	}
+	clientSecret, err := s.cipher.DecryptSecretMaterial(ctx, workspaceID, "oauth_application_"+applicationKey, ciphertext)
+	if err != nil || clientSecret == "" {
+		return oauthApplicationCredentials{}, fmt.Errorf("OAuth application credentials are unavailable")
+	}
+	return oauthApplicationCredentials{clientID: application.ClientID, clientSecret: clientSecret}, nil
 }
 
 func environmentSecret(reference string) (string, error) {

@@ -31,7 +31,7 @@ func allowedURL(raw string) (*url.URL, error) {
 		return nil, errors.New("Integration work-account endpoint is not allowed")
 	}
 	switch u.Hostname() {
-	case "www.googleapis.com", "gmail.googleapis.com", "pubsub.googleapis.com", "oauth2.googleapis.com", "login.microsoftonline.com", "graph.microsoft.com":
+	case "www.googleapis.com", "gmail.googleapis.com", "pubsub.googleapis.com", "oauth2.googleapis.com", "login.microsoftonline.com", "graph.microsoft.com", "open.feishu.cn", "accounts.feishu.cn":
 		return u, nil
 	default:
 		return nil, errors.New("Integration work-account endpoint is not allowed")

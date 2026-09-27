@@ -123,6 +123,92 @@ func TestOAuthSessionAtomicallyCreatesPrivateAccountAndReplaysReceipt(t *testing
 		t.Fatal("completed verifier was retained", err)
 	}
 }
+
+func TestOAuthAccountsOwnTokensAndShareApplicationCredentialsByReference(t *testing.T) {
+	store, _, first, application := setupOAuthStore(t)
+	complete := func(subject integrationsdk.ConnectionAccountSubject) integrationsdk.OAuthAuthorizationSession {
+		t.Helper()
+		_, state := startOAuthStore(t, store, subject)
+		value, err := store.CompleteOAuthAuthorization(t.Context(), subject, integrationsdk.OAuthAuthorizationCallback{State: state, Code: "accepted"})
+		if err != nil || value.Status != "connected" || value.Account == nil {
+			t.Fatalf("complete OAuth for %s: value=%+v error=%v", subject.UserID, value, err)
+		}
+		return value
+	}
+	firstSession := complete(first)
+	second := first
+	second.UserID = "user-b"
+	secondSession := complete(second)
+
+	firstConnection, err := store.GetConnection(t.Context(), first.WorkspaceID, firstSession.Account.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondConnection, err := store.GetConnection(t.Context(), second.WorkspaceID, secondSession.Account.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantClientIDRef := oauthApplicationCredentialReference(application.Key, "client_id")
+	wantClientSecretRef := oauthApplicationCredentialReference(application.Key, "client_secret")
+	for _, connection := range []integrationsdk.Connection{firstConnection, secondConnection} {
+		if connection.SecretRefs["client_id"] != wantClientIDRef || connection.SecretRefs["client_secret"] != wantClientSecretRef {
+			t.Fatalf("connection copied or misreferenced OAuth application credentials: %+v", connection.SecretRefs)
+		}
+		if !strings.HasPrefix(connection.SecretRefs["access_token"], "secret:") || !strings.HasPrefix(connection.SecretRefs["refresh_token"], "secret:") {
+			t.Fatalf("connection did not retain account-owned tokens: %+v", connection.SecretRefs)
+		}
+	}
+	if firstConnection.SecretRefs["access_token"] == secondConnection.SecretRefs["access_token"] || firstConnection.SecretRefs["refresh_token"] == secondConnection.SecretRefs["refresh_token"] {
+		t.Fatal("different users share account token material")
+	}
+	var secrets, materials int
+	if err = store.database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM _integration_secrets").Scan(&secrets); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM _integration_secret_materials").Scan(&materials); err != nil {
+		t.Fatal(err)
+	}
+	if secrets != 4 || materials != 4 {
+		t.Fatalf("two accounts created copied application credentials: secrets=%d materials=%d", secrets, materials)
+	}
+
+	resolver, ok := store.delivery.secrets.(*SecretResolver)
+	if !ok {
+		t.Fatal("OAuth store does not use the production secret resolver")
+	}
+	for _, connection := range []integrationsdk.Connection{firstConnection, secondConnection} {
+		resolved, resolveErr := resolver.ResolveSecretReferencesSnapshot(t.Context(), connection.WorkspaceID, connection.SecretRefs)
+		if resolveErr != nil || resolved.Values["client_id"] != "client" || resolved.Values["client_secret"] != "private-client" {
+			t.Fatalf("shared application credentials did not resolve: values=%+v error=%v", resolved.Values, resolveErr)
+		}
+		if _, versioned := resolved.Versions["client_secret"]; versioned {
+			t.Fatal("shared application client secret was exposed as account-writable material")
+		}
+		if updateErr := resolver.ApplySecretUpdates(t.Context(), connection.WorkspaceID, connection.SecretRefs, map[string]string{"client_secret": "provider-overwrite"}); updateErr == nil {
+			t.Fatal("provider updated shared OAuth application credentials")
+		}
+	}
+
+	rotated, err := store.UpsertOAuthApplication(t.Context(), application.WorkspaceID, application.Key, "admin", integrationsdk.OAuthApplicationInput{
+		ConnectorKey: application.ConnectorKey, ProviderKey: application.ProviderKey, Name: application.Name,
+		ClientID: "rotated-client", ClientSecret: "rotated-private-client", RedirectURI: application.RedirectURI,
+		Scopes: application.Scopes, ConnectionConfig: application.ConnectionConfig, Enabled: true, ExpectedUpdatedAt: application.UpdatedAt,
+	})
+	if err != nil || rotated.ClientID != "rotated-client" {
+		t.Fatal("rotate shared OAuth application", err)
+	}
+	resolved, err := resolver.ResolveSecretReferences(t.Context(), secondConnection.WorkspaceID, secondConnection.SecretRefs)
+	if err != nil || resolved["client_id"] != "rotated-client" || resolved["client_secret"] != "rotated-private-client" {
+		t.Fatalf("account did not observe shared credential rotation: values=%+v error=%v", resolved, err)
+	}
+	if _, err = store.RevokeConnectionAccount(t.Context(), first, firstSession.Account.Key, firstSession.Account.UpdatedAt); err != nil {
+		t.Fatal("revoke first account", err)
+	}
+	resolved, err = resolver.ResolveSecretReferences(t.Context(), secondConnection.WorkspaceID, secondConnection.SecretRefs)
+	if err != nil || resolved["client_secret"] != "rotated-private-client" {
+		t.Fatalf("revoking one account damaged shared application credentials: values=%+v error=%v", resolved, err)
+	}
+}
 func TestOAuthSessionRejectsCrossUserWorkspaceScopeAndState(t *testing.T) {
 	store, provider, subject, _ := setupOAuthStore(t)
 	session, state := startOAuthStore(t, store, subject)
