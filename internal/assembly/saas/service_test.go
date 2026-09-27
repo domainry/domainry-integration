@@ -186,7 +186,7 @@ func TestServiceBindsSubjectLifecycleOnlyAfterSharedSchemaExists(t *testing.T) {
 	}
 	for _, statement := range []string{
 		`CREATE TABLE _subject_requests (id TEXT NOT NULL, workspace_id TEXT NOT NULL, request_type TEXT NOT NULL, kind TEXT NOT NULL, resolved_identity TEXT NOT NULL, PRIMARY KEY(workspace_id,id))`,
-		`CREATE TABLE _subject_steps (workspace_id TEXT NOT NULL, request_id TEXT NOT NULL, owner TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, completed_at TEXT NOT NULL, PRIMARY KEY(workspace_id,request_id,owner,operation))`,
+		`CREATE TABLE _subject_steps (workspace_id TEXT NOT NULL, request_id TEXT NOT NULL, owner TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, completed_at BIGINT NOT NULL, PRIMARY KEY(workspace_id,request_id,owner,operation))`,
 	} {
 		if _, err := database.ExecContext(t.Context(), statement); err != nil {
 			t.Fatal(err)

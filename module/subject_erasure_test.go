@@ -166,7 +166,7 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 				t.Fatal("legal hold accepted")
 			}
 			execIntegration(t, db, "INSERT INTO _subject_requests(id,workspace_id,request_type,kind,resolved_identity) VALUES(?,?,'subject_request','erase',?)", request.RequestID, request.WorkspaceID, request.SubjectID)
-			execIntegration(t, db, "INSERT INTO _subject_steps(workspace_id,request_id,owner,operation,payload_json,completed_at) VALUES(?,?,'lifecycle','erase_fence','{}',?)", request.WorkspaceID, request.RequestID, time.Now().UTC().Format(time.RFC3339Nano))
+			execIntegration(t, db, "INSERT INTO _subject_steps(workspace_id,request_id,owner,operation,payload_json,completed_at) VALUES(?,?,'lifecycle','erase_fence','{}',?)", request.WorkspaceID, request.RequestID, time.Now().UTC().UnixMilli())
 			// In-flight synchronous delivery blocks cleanup before any owner fence.
 			execIntegration(t, db, "UPDATE _integration_invocations SET status='running' WHERE request_ref='message-alice'")
 			if _, err = subjects.PrepareSubjectErasure(trusted, request); err == nil {
@@ -280,7 +280,7 @@ func installIntegrationSharedSubjectLifecycle(t *testing.T, db *sql.DB) {
 	t.Helper()
 	for _, statement := range []string{
 		`CREATE TABLE _subject_requests (id TEXT NOT NULL, workspace_id TEXT NOT NULL, request_type TEXT NOT NULL, kind TEXT NOT NULL, resolved_identity TEXT NOT NULL, PRIMARY KEY(workspace_id,id))`,
-		`CREATE TABLE _subject_steps (workspace_id TEXT NOT NULL, request_id TEXT NOT NULL, owner TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, completed_at TEXT NOT NULL, PRIMARY KEY(workspace_id,request_id,owner,operation))`,
+		`CREATE TABLE _subject_steps (workspace_id TEXT NOT NULL, request_id TEXT NOT NULL, owner TEXT NOT NULL, operation TEXT NOT NULL, payload_json TEXT NOT NULL, completed_at BIGINT NOT NULL, PRIMARY KEY(workspace_id,request_id,owner,operation))`,
 	} {
 		execIntegration(t, db, statement)
 	}

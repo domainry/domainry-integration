@@ -180,7 +180,7 @@ func TestAccountReadsRejectChangedTargetBeforeExecutionAndRevokeBeforeReturn(t *
 				var err error
 				switch name {
 				case "before-revision":
-					_, err = store.database.ExecContext(t.Context(), "UPDATE _integration_connections SET updated_at='2026-09-11T00:00:00Z' WHERE connection_key='personal-a'")
+					_, err = store.database.ExecContext(t.Context(), "UPDATE _integration_connections SET updated_at=? WHERE connection_key='personal-a'", timestampMillis("2026-09-11T00:00:00Z"))
 				case "before-effect":
 					p.effect = connector.EffectWrite
 				case "before-contract":
