@@ -66,6 +66,7 @@ func (s *ManagementStore) enrichAccountReadiness(ctx context.Context, a *sdk.Con
 	}
 	// Readiness checks metadata only. Actual provider execution resolves and
 	// decrypts both account material and shared OAuth application credentials.
+	var earliestExpiry time.Time
 	for _, key := range materialKeys {
 		secret, err := s.getSecret(trusted, a.WorkspaceID, key)
 		if err != nil {
@@ -80,7 +81,15 @@ func (s *ManagementStore) enrichAccountReadiness(ctx context.Context, a *sdk.Con
 		}
 		if secret.ExpiresAt != "" {
 			expiry, err := time.Parse(time.RFC3339, secret.ExpiresAt)
-			if err != nil || !expiry.After(time.Now().UTC()) {
+			if err != nil {
+				out.State = "credential_expired"
+				return nil
+			}
+			if earliestExpiry.IsZero() || expiry.Before(earliestExpiry) {
+				earliestExpiry = expiry
+				out.CredentialExpiresAt = expiry.UTC().Format(time.RFC3339)
+			}
+			if !expiry.After(time.Now().UTC()) {
 				out.State = "credential_expired"
 				return nil
 			}

@@ -99,6 +99,60 @@ func providerAccountRouteDigest(connectorKey, providerKey, kind, value string) [
 	return sha256.Sum256([]byte(strings.TrimSpace(connectorKey) + "\x00" + strings.TrimSpace(providerKey) + "\x00" + kind + "\x00" + value))
 }
 
+func providerAccountSubjectHash(providerKey, subject string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(providerKey) + "\x00" + strings.TrimSpace(subject)))
+	return hex.EncodeToString(digest[:])
+}
+
+// providerAccountConnectionKey reuses a connection already bound to the same
+// upstream account. For a first authorization the stable provider subject,
+// rather than the one-time OAuth session, owns the key. The connections table's
+// workspace/key uniqueness then closes concurrent duplicate authorizations.
+func (s *ManagementStore) providerAccountConnectionKey(ctx context.Context, workspaceID, connectorKey, providerKey string, probe *providerAccountProbe) (string, error) {
+	if probe == nil || strings.TrimSpace(probe.Subject) == "" {
+		return "", fmt.Errorf("Integration provider account identity is unavailable")
+	}
+	subjectHash := providerAccountSubjectHash(providerKey, probe.Subject)
+	statement, args, err := query.NewSelectBuilder(s.dialect, providerAccountRouteTable).
+		Columns("connection_key").
+		Where(query.And(
+			query.Equal("workspace_id", strings.TrimSpace(workspaceID)),
+			query.Equal("connector_key", strings.TrimSpace(connectorKey)),
+			query.Equal("provider_key", strings.TrimSpace(providerKey)),
+			query.Equal("subject_hash", subjectHash),
+		)).Build()
+	if err != nil {
+		return "", err
+	}
+	rows, err := s.database.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	keys := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err = rows.Scan(&key); err != nil {
+			return "", err
+		}
+		key = strings.TrimSpace(key)
+		if key != "" {
+			keys[key] = true
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return "", err
+	}
+	if len(keys) > 1 {
+		return "", fmt.Errorf("Integration provider account is already bound to multiple connections")
+	}
+	for key := range keys {
+		return key, nil
+	}
+	identity := strings.TrimSpace(connectorKey) + "\x00" + strings.TrimSpace(providerKey) + "\x00" + strings.TrimSpace(probe.Subject)
+	return ownerID("account_oauth_", workspaceID, identity), nil
+}
+
 func (s *ManagementStore) replaceProviderAccountRoutes(ctx context.Context, tested integrationsdk.Connection, raw json.RawMessage) error {
 	probe, err := decodeProviderAccountProbe(raw)
 	if err != nil || probe == nil {
@@ -128,14 +182,14 @@ func (s *ManagementStore) replaceProviderAccountRoutes(ctx context.Context, test
 		return err
 	}
 	now := timestampMillis(ownerNow())
-	subject := sha256.Sum256([]byte(current.ProviderKey + "\x00" + probe.Subject))
+	subjectHash := providerAccountSubjectHash(current.ProviderKey, probe.Subject)
 	for _, route := range probe.Routes {
 		digest := providerAccountRouteDigest(current.ConnectorKey, current.ProviderKey, route.Kind, route.Value)
 		hash := hex.EncodeToString(digest[:])
 		id := ownerID("provider_account_route_", current.WorkspaceID, current.Key+"\x00"+route.Kind+"\x00"+hash)
 		insert, values, buildErr := query.NewInsertBuilder(s.dialect, providerAccountRouteTable).
 			Columns("id", "workspace_id", "connection_key", "connector_key", "provider_key", "subject_hash", "route_kind", "route_hash", "route_bucket", "status", "created_at", "updated_at").
-			Values(id, current.WorkspaceID, current.Key, current.ConnectorKey, current.ProviderKey, hex.EncodeToString(subject[:]), route.Kind, hash, int(digest[0]), providerAccountRouteStatus(current.Status), now, now).Build()
+			Values(id, current.WorkspaceID, current.Key, current.ConnectorKey, current.ProviderKey, subjectHash, route.Kind, hash, int(digest[0]), providerAccountRouteStatus(current.Status), now, now).Build()
 		if buildErr != nil {
 			return buildErr
 		}

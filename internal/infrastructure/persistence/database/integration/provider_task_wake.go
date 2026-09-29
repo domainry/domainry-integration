@@ -13,9 +13,14 @@ import (
 )
 
 func wakeProviderTasks(ctx context.Context, database sqlhost.DBTX, dialect modulehost.Dialect, subjectLifecycle *SubjectLifecyclePersistence, workspaceID, connectionKey string, taskKeys []string, now time.Time) (int64, error) {
+	sequences, err := wakeProviderTasksWithSequences(ctx, database, dialect, subjectLifecycle, workspaceID, connectionKey, taskKeys, now)
+	return int64(len(sequences)), err
+}
+
+func wakeProviderTasksWithSequences(ctx context.Context, database sqlhost.DBTX, dialect modulehost.Dialect, subjectLifecycle *SubjectLifecyclePersistence, workspaceID, connectionKey string, taskKeys []string, now time.Time) (map[string]int64, error) {
 	workspaceID, connectionKey = strings.TrimSpace(workspaceID), strings.TrimSpace(connectionKey)
 	if workspaceID == "" || connectionKey == "" {
-		return 0, fmt.Errorf("Integration Provider task wake target is incomplete")
+		return nil, fmt.Errorf("Integration Provider task wake target is incomplete")
 	}
 	seen := map[string]bool{}
 	keys := make([]string, 0, len(taskKeys))
@@ -28,44 +33,68 @@ func wakeProviderTasks(ctx context.Context, database sqlhost.DBTX, dialect modul
 		keys = append(keys, key)
 	}
 	if len(keys) == 0 || len(keys) > 10 {
-		return 0, fmt.Errorf("Integration Provider task wake set is invalid")
+		return nil, fmt.Errorf("Integration Provider task wake set is invalid")
 	}
 	sort.Strings(keys)
-	values := make([]any, len(keys))
-	for index := range keys {
-		values[index] = keys[index]
-	}
 	if err := guardSubjectWrite(ctx, database, dialect, subjectLifecycle, workspaceID, subjectFenceReference{"connection", "", connectionKey}); err != nil {
-		return 0, err
+		return nil, err
 	}
-	base := query.And(
-		subjectRowsWriteAllowed(subjectLifecycle, dialect, workspaceID, providerRunTable),
-		query.Equal("workspace_id", workspaceID), query.Equal("connection_key", connectionKey), query.Equal("run_kind", providerRunKindState), query.In("run_key", values...),
-	)
 	nowMillis := now.UTC().UnixMilli()
-	processing, args, err := query.NewUpdateBuilder(dialect, providerRunTable).
-		Set("due_at", nowMillis).SetExpression("wake_sequence", query.Add(query.Column("wake_sequence"), query.Value(1))).Set("updated_at", nowMillis).
-		Where(query.And(base, query.Equal("status", "processing"))).Build()
-	if err != nil {
-		return 0, err
+	sequences := make(map[string]int64, len(keys))
+	for _, key := range keys {
+		base := query.And(
+			subjectRowsWriteAllowed(subjectLifecycle, dialect, workspaceID, providerRunTable),
+			query.Equal("workspace_id", workspaceID), query.Equal("connection_key", connectionKey), query.Equal("run_kind", providerRunKindState), query.Equal("run_key", key),
+		)
+		processing, args, err := query.NewUpdateBuilder(dialect, providerRunTable).
+			Set("due_at", nowMillis).SetExpression("wake_sequence", query.Add(query.Column("wake_sequence"), query.Value(1))).Set("updated_at", nowMillis).
+			Where(query.And(base, query.Equal("status", "processing"))).Build()
+		if err != nil {
+			return nil, err
+		}
+		result, err := database.ExecContext(ctx, processing, args...)
+		if err != nil {
+			return nil, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if affected == 0 {
+			ready, readyArgs, buildErr := query.NewUpdateBuilder(dialect, providerRunTable).
+				Set("status", "ready").Set("due_at", nowMillis).Set("attempt_count", 0).
+				Set("lease_owner", "").Set("lease_expires_at", int64(0)).
+				SetExpression("wake_sequence", query.Add(query.Column("wake_sequence"), query.Value(1))).Set("updated_at", nowMillis).
+				Where(query.And(base, query.In("status", "ready", "failed", "dead_letter"))).Build()
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result, err = database.ExecContext(ctx, ready, readyArgs...)
+			if err != nil {
+				return nil, err
+			}
+			affected, err = result.RowsAffected()
+			if err != nil {
+				return nil, err
+			}
+		}
+		if affected == 0 {
+			continue
+		}
+		if affected != 1 {
+			return nil, fmt.Errorf("Integration Provider task wake changed %d rows", affected)
+		}
+		statement, args, err := query.NewSelectBuilder(dialect, providerRunTable).Columns("wake_sequence").Where(query.And(
+			query.Equal("workspace_id", workspaceID), query.Equal("connection_key", connectionKey), query.Equal("run_kind", providerRunKindState), query.Equal("run_key", key),
+		)).Build()
+		if err != nil {
+			return nil, err
+		}
+		var sequence int64
+		if err := database.QueryRowContext(ctx, statement, args...).Scan(&sequence); err != nil {
+			return nil, err
+		}
+		sequences[key] = sequence
 	}
-	result, err := database.ExecContext(ctx, processing, args...)
-	if err != nil {
-		return 0, err
-	}
-	affected, _ := result.RowsAffected()
-	ready, args, err := query.NewUpdateBuilder(dialect, providerRunTable).
-		Set("status", "ready").Set("due_at", nowMillis).Set("attempt_count", 0).
-		Set("lease_owner", "").Set("lease_expires_at", int64(0)).
-		SetExpression("wake_sequence", query.Add(query.Column("wake_sequence"), query.Value(1))).Set("updated_at", nowMillis).
-		Where(query.And(base, query.In("status", "ready", "failed", "dead_letter"))).Build()
-	if err != nil {
-		return 0, err
-	}
-	result, err = database.ExecContext(ctx, ready, args...)
-	if err != nil {
-		return 0, err
-	}
-	current, _ := result.RowsAffected()
-	return affected + current, nil
+	return sequences, nil
 }

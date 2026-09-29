@@ -110,6 +110,10 @@ func TestRoutedWebhookDeduplicatesRoutesAndCoalescesProviderTaskWake(t *testing.
 	}
 	assertRoutedWebhookTask(t, database, targetA.WorkspaceID, targetA.Key, "processing", "worker-a", 6, now.UnixMilli(), 0, "")
 	assertRoutedWebhookTask(t, database, targetB.WorkspaceID, targetB.Key, "ready", "", 8, now.UnixMilli(), 0, "temporary")
+	var wakeReceipts, wakeSequenceTotal int
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*),COALESCE(SUM(wake_sequence),0) FROM _integration_provider_wake_receipts WHERE inbox_id=(SELECT id FROM _integration_provider_inbox WHERE external_id=?)`, "message-1").Scan(&wakeReceipts, &wakeSequenceTotal); err != nil || wakeReceipts != 2 || wakeSequenceTotal != 14 {
+		t.Fatalf("wake receipts=%d sequence total=%d err=%v", wakeReceipts, wakeSequenceTotal, err)
+	}
 
 	receipt, err = store.AcceptRoutedWebhook(t.Context(), request)
 	if err != nil || !receipt.Duplicate || receipt.Routed != 0 {
@@ -117,6 +121,9 @@ func TestRoutedWebhookDeduplicatesRoutesAndCoalescesProviderTaskWake(t *testing.
 	}
 	assertRoutedWebhookTask(t, database, targetA.WorkspaceID, targetA.Key, "processing", "worker-a", 6, now.UnixMilli(), 0, "")
 	assertRoutedWebhookTask(t, database, targetB.WorkspaceID, targetB.Key, "ready", "", 8, now.UnixMilli(), 0, "temporary")
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM _integration_provider_wake_receipts`).Scan(&wakeReceipts); err != nil || wakeReceipts != 2 {
+		t.Fatalf("duplicate Push changed wake receipt count=%d err=%v", wakeReceipts, err)
+	}
 
 	var routeKind, routeHash, payload string
 	if err = database.QueryRowContext(t.Context(), `SELECT route_kind,route_hash,payload_json FROM _integration_provider_inbox WHERE workspace_id=? AND external_id=?`, ingress.WorkspaceID, "message-1").Scan(&routeKind, &routeHash, &payload); err != nil {
@@ -193,6 +200,95 @@ func TestRoutedGooglePushStoresVerifiedPublishTimeOnce(t *testing.T) {
 	var count int
 	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM _integration_provider_inbox`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("Google Push inbox count=%d err=%v", count, err)
+	}
+}
+
+func TestGooglePushWakeSequenceCompletesOnlyTheSynchronizationThatObservedIt(t *testing.T) {
+	database, dialect := webPushTestDatabase(t, "google-push-sync-completion")
+	provider := &timedGooglePushTestProvider{}
+	delivery := NewDeliveryStore(database, dialect, deliveryTestProviders{provider: provider}, emptyDeliveryTestSecrets{})
+	management := NewManagementStore(database, dialect, nil, delivery)
+	ingress, err := management.UpsertConnection(t.Context(), "platform", "google-push", "admin", integrationsdk.ConnectionInput{
+		ConnectorKey: "google_workspace", ProviderKey: "google", Name: "Google Push", Status: "active",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := management.UpsertConnection(t.Context(), "workspace-a", "gmail-a", "admin", integrationsdk.ConnectionInput{
+		ConnectorKey: "google_workspace", ProviderKey: "google", Name: "Gmail", Status: "active",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := management.replaceProviderAccountRoutes(t.Context(), target, json.RawMessage(`{
+		"provider_account":{"subject":"google-subject-a","routes":[{"kind":"email","value":"ada@example.com"}]}
+	}`)); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 9, 27, 12, 30, 0, 0, time.UTC)
+	store := NewRoutedWebhookStore(database, dialect, delivery)
+	request := integrationsdk.WebhookRequest{
+		WorkspaceID: ingress.WorkspaceID, ConnectorKey: ingress.ConnectorKey, ConnectionKey: ingress.Key,
+		Headers: map[string][]string{
+			"Authorization": {"Bearer valid"}, "X-Message-ID": {"google-sync-1"},
+			"X-Publish-Time": {now.Add(-6 * time.Minute).Format(time.RFC3339Nano)},
+		},
+		Body: []byte(`{"message":"opaque"}`), ReceivedAt: now,
+	}
+	if receipt, err := store.AcceptRoutedWebhook(t.Context(), request); err != nil || receipt.Routed != 1 {
+		t.Fatalf("first Google Push receipt=%+v err=%v", receipt, err)
+	}
+
+	worker := NewWorkerStore(database, dialect, delivery, nil, "worker")
+	var runID string
+	if err := database.QueryRowContext(t.Context(), `SELECT id FROM _integration_provider_runs WHERE workspace_id=? AND connection_key=? AND run_kind=? AND run_key=?`, target.WorkspaceID, target.Key, providerRunKindState, "gmail_sync").Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(t.Context(), `UPDATE _integration_provider_runs SET status='processing',lease_owner=?,lease_expires_at=?,fencing_token=1 WHERE workspace_id=? AND id=?`, worker.workerID, now.Add(time.Minute).UnixMilli(), target.WorkspaceID, runID); err != nil {
+		t.Fatal(err)
+	}
+
+	request.Headers["X-Message-ID"] = []string{"google-sync-2"}
+	request.Headers["X-Publish-Time"] = []string{now.Format(time.RFC3339Nano)}
+	request.ReceivedAt = now.Add(time.Minute)
+	if receipt, err := store.AcceptRoutedWebhook(t.Context(), request); err != nil || receipt.Routed != 1 {
+		t.Fatalf("second Google Push receipt=%+v err=%v", receipt, err)
+	}
+	firstCandidate := providerTaskCandidate{
+		id: runID, workspaceID: target.WorkspaceID, connectorKey: target.ConnectorKey, providerKey: target.ProviderKey,
+		connectionKey: target.Key, taskKey: "gmail_sync", stateVersion: 1, payload: `{}`, fencingToken: 0, wakeSequence: 1,
+	}
+	if err := worker.commitProviderTaskResult(t.Context(), firstCandidate, connector.BackgroundResult{State: json.RawMessage(`{}`), NextDueAt: now.Add(time.Hour)}, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	var completed, pending int
+	if err := database.QueryRowContext(t.Context(), `SELECT COALESCE(SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) FROM _integration_provider_wake_receipts`).Scan(&completed, &pending); err != nil || completed != 1 || pending != 1 {
+		t.Fatalf("first completion receipts completed=%d pending=%d err=%v", completed, pending, err)
+	}
+	snapshot, err := management.providerRunSnapshot(t.Context(), now.Add(2*time.Minute))
+	if err != nil || snapshot.GoogleSyncCompletedHour != 1 || snapshot.GoogleSyncTimedHour != 1 || snapshot.GoogleSyncDelayed5mHour != 1 || snapshot.GoogleSyncMaxEndToEndDelayMsHour != (8*time.Minute).Milliseconds() || snapshot.GoogleSyncPending != 1 || snapshot.GoogleSyncPendingOver5m != 0 {
+		t.Fatalf("first Google synchronization snapshot=%+v err=%v", snapshot, err)
+	}
+
+	if _, err := database.ExecContext(t.Context(), `UPDATE _integration_provider_runs SET status='processing',lease_owner=?,lease_expires_at=?,fencing_token=2 WHERE workspace_id=? AND id=?`, worker.workerID, now.Add(8*time.Minute).UnixMilli(), target.WorkspaceID, runID); err != nil {
+		t.Fatal(err)
+	}
+	secondCandidate := firstCandidate
+	secondCandidate.fencingToken, secondCandidate.wakeSequence = 1, 2
+	if err := worker.commitProviderTaskResult(t.Context(), secondCandidate, connector.BackgroundResult{State: json.RawMessage(`{}`), NextDueAt: now.Add(time.Hour)}, now.Add(7*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = management.providerRunSnapshot(t.Context(), now.Add(7*time.Minute))
+	if err != nil || snapshot.GoogleSyncCompletedHour != 2 || snapshot.GoogleSyncTimedHour != 2 || snapshot.GoogleSyncDelayed5mHour != 2 || snapshot.GoogleSyncMaxEndToEndDelayMsHour != (8*time.Minute).Milliseconds() || snapshot.GoogleSyncPending != 0 {
+		t.Fatalf("final Google synchronization snapshot=%+v err=%v", snapshot, err)
+	}
+	if err := management.DeleteConnection(t.Context(), target.WorkspaceID, target.Key); err != nil {
+		t.Fatal(err)
+	}
+	var receipts int
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM _integration_provider_wake_receipts WHERE workspace_id=? AND connection_key=?`, target.WorkspaceID, target.Key).Scan(&receipts); err != nil || receipts != 0 {
+		t.Fatalf("deleted connection wake receipts=%d err=%v", receipts, err)
 	}
 }
 

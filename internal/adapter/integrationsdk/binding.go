@@ -16,6 +16,7 @@ type Binding struct {
 	mode          integrationsdk.DeploymentMode
 	service       *integrationapplication.Service
 	management    integrationsdk.Management
+	apiKeys       integrationsdk.APIKeyAuthentication
 	accounts      integrationsdk.ConnectionAccounts
 	accountReads  *integrationapplication.AccountReadService
 	accountWrites *integrationapplication.AccountWriteService
@@ -29,17 +30,18 @@ type Binding struct {
 func NewBinding(mode integrationsdk.DeploymentMode, service *integrationapplication.Service, management integrationsdk.Management, workers ...integrationsdk.LocalWorkers) (*Binding, error) {
 	accounts, accountsOK := management.(integrationsdk.ConnectionAccounts)
 	accountAdmin, accountAdminOK := management.(integrationsdk.ConnectionAccountAdministration)
-	if !accountsOK || !accountAdminOK {
+	apiKeys, apiKeysOK := management.(integrationsdk.APIKeyAuthentication)
+	if !accountsOK || !accountAdminOK || !apiKeysOK {
 		return nil, fmt.Errorf("Integration connection account stores are required")
 	}
-	binding := &Binding{mode: mode, service: service, management: management, accounts: accounts, accountAdmin: accountAdmin}
+	binding := &Binding{mode: mode, service: service, management: management, apiKeys: apiKeys, accounts: accounts, accountAdmin: accountAdmin}
 	if len(workers) != 0 {
 		binding.workers = workers[0]
 	}
 	return binding, nil
 }
 func (b *Binding) Descriptor() integrationsdk.Descriptor {
-	capabilities := []string{"catalog.read", "requirements.connections.sync", "delivery.accept", "delivery.query", "web_push_subscriptions.manage", "management.connections", "connection_accounts.manage", "management.secrets", "management.api_keys", "management.external_identities", "management.webhook_subscriptions", "operations.call", "operations.invocations.query", "inbound.webhooks.accept", "inbound.events.query"}
+	capabilities := []string{"catalog.read", "requirements.connections.sync", "delivery.accept", "delivery.query", "web_push_subscriptions.manage", "management.connections", "connection_accounts.manage", "management.secrets", "management.api_keys", "api_keys.authenticate", "management.external_identities", "management.webhook_subscriptions", "operations.call", "operations.invocations.query", "inbound.webhooks.accept", "inbound.events.query"}
 	if port, ok := b.management.(integrationsdk.OAuthApplications); ok && port != nil {
 		capabilities = append(capabilities, "oauth_applications.manage")
 	}
@@ -63,11 +65,12 @@ func (b *Binding) Descriptor() integrationsdk.Descriptor {
 	}
 	return integrationsdk.Descriptor{ProtocolVersion: integrationsdk.ProtocolVersionV1, Mode: b.mode, Capabilities: capabilities}
 }
-func (b *Binding) Catalog() integrationsdk.Catalog                       { return catalogBinding{b} }
-func (b *Binding) Requirements() integrationsdk.Requirements             { return requirementsBinding{b} }
-func (b *Binding) Delivery() integrationsdk.Delivery                     { return deliveryBinding{b} }
-func (b *Binding) Management() integrationsdk.Management                 { return b.management }
-func (b *Binding) ConnectionAccounts() integrationsdk.ConnectionAccounts { return b.accounts }
+func (b *Binding) Catalog() integrationsdk.Catalog                           { return catalogBinding{b} }
+func (b *Binding) Requirements() integrationsdk.Requirements                 { return requirementsBinding{b} }
+func (b *Binding) Delivery() integrationsdk.Delivery                         { return deliveryBinding{b} }
+func (b *Binding) Management() integrationsdk.Management                     { return b.management }
+func (b *Binding) APIKeyAuthentication() integrationsdk.APIKeyAuthentication { return b.apiKeys }
+func (b *Binding) ConnectionAccounts() integrationsdk.ConnectionAccounts     { return b.accounts }
 func (b *Binding) ConnectionAccountReads() integrationsdk.ConnectionAccountReads {
 	if b.accountReads == nil {
 		return nil
@@ -230,6 +233,7 @@ func convert[T any](value any, sourceErr error) (T, error) {
 var _ integrationsdk.Binding = (*Binding)(nil)
 var _ integrationsdk.WebPushBinding = (*Binding)(nil)
 var _ integrationsdk.ManagementBinding = (*Binding)(nil)
+var _ integrationsdk.APIKeyAuthenticationBinding = (*Binding)(nil)
 var _ integrationsdk.ConnectionAccountsBinding = (*Binding)(nil)
 var _ integrationsdk.ConnectionAccountAdministrationBinding = (*Binding)(nil)
 var _ integrationsdk.OperationsBinding = (*Binding)(nil)

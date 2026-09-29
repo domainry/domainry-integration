@@ -23,6 +23,12 @@ const (
 	providerRunTable      = "_integration_provider_runs"
 	providerRunKindState  = "state"
 	providerRunKindCommit = "commit"
+
+	// Provider I/O is independent across connections. Keep the execution pool
+	// bounded so one process can overlap vendor latency without creating an
+	// unbounded goroutine or database-write burst. The connection lease below
+	// continues to serialize tasks that belong to the same connection.
+	providerTaskExecutionConcurrency = 32
 )
 
 type WorkerStore struct {
@@ -77,6 +83,9 @@ func (s *WorkerStore) cleanupExpiredProviderMetricWindows(ctx context.Context, n
 	if err := cleanupProviderMetricWindows(ctx, s.database, s.dialect, now); err != nil {
 		return err
 	}
+	if err := cleanupProviderWakeReceipts(ctx, s.database, s.dialect, now); err != nil {
+		return err
+	}
 	s.metricCleanupAt = now
 	return nil
 }
@@ -98,28 +107,78 @@ func (s *WorkerStore) processProviderTasks(ctx context.Context, limit int) (int,
 	if err != nil {
 		return 0, err
 	}
-	processed := 0
+	type claimedProviderTask struct {
+		candidate  providerTaskCandidate
+		leaseOwner string
+	}
 	var firstErr error
-	for _, candidate := range candidates {
-		leaseOwner, claimed, err := s.acquireProviderTask(ctx, candidate, now)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
+	processed := 0
+	pending := candidates
+	for len(pending) > 0 {
+		// A connection may own multiple task rows. Put duplicates in a later
+		// wave so they retain the previous in-batch behavior while unrelated
+		// connections overlap their Provider I/O.
+		wave := make([]providerTaskCandidate, 0, len(pending))
+		deferred := make([]providerTaskCandidate, 0)
+		connections := make(map[string]struct{}, len(pending))
+		for _, candidate := range pending {
+			connectionID := candidate.workspaceID + "\x00" + candidate.connectionKey
+			if _, exists := connections[connectionID]; exists {
+				deferred = append(deferred, candidate)
+				continue
 			}
-			continue
+			connections[connectionID] = struct{}{}
+			wave = append(wave, candidate)
 		}
-		if !claimed {
-			continue
+		claimedTasks := make([]claimedProviderTask, 0, len(wave))
+		for _, candidate := range wave {
+			leaseOwner, claimed, err := s.acquireProviderTask(ctx, candidate, now)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if !claimed {
+				continue
+			}
+			claimedTasks = append(claimedTasks, claimedProviderTask{candidate: candidate, leaseOwner: leaseOwner})
 		}
-		processed++
-		executionErr := s.executeProviderTask(ctx, candidate, now)
-		releaseErr := s.releaseProviderConnectionLease(ctx, candidate, leaseOwner, now)
-		if executionErr != nil && firstErr == nil {
-			firstErr = executionErr
+		if len(claimedTasks) > 0 {
+			processed += len(claimedTasks)
+			concurrency := min(providerTaskExecutionConcurrency, len(claimedTasks))
+			jobs := make(chan claimedProviderTask)
+			var workers sync.WaitGroup
+			var errorMu sync.Mutex
+			recordError := func(err error) {
+				if err == nil {
+					return
+				}
+				errorMu.Lock()
+				defer errorMu.Unlock()
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+			workers.Add(concurrency)
+			for range concurrency {
+				go func() {
+					defer workers.Done()
+					for task := range jobs {
+						executionErr := s.executeProviderTask(ctx, task.candidate, now)
+						releaseErr := s.releaseProviderConnectionLease(ctx, task.candidate, task.leaseOwner, now)
+						recordError(executionErr)
+						recordError(releaseErr)
+					}
+				}()
+			}
+			for _, task := range claimedTasks {
+				jobs <- task
+			}
+			close(jobs)
+			workers.Wait()
 		}
-		if releaseErr != nil && firstErr == nil {
-			firstErr = releaseErr
-		}
+		pending = deferred
 	}
 	return processed, firstErr
 }
@@ -327,6 +386,12 @@ func (s *WorkerStore) commitProviderTaskResult(ctx context.Context, candidate pr
 	if affected, _ := updated.RowsAffected(); affected != 1 {
 		return fmt.Errorf("Integration Provider task %q lost its lease", candidate.id)
 	}
+	if err := recordProviderHistoryObservations(ctx, tx, s.dialect, candidate, result.Observations, now); err != nil {
+		return err
+	}
+	if err := completeProviderWakeReceipts(ctx, tx, s.dialect, candidate, now); err != nil {
+		return err
+	}
 	ownerUserID, err := connectionOwnerUserID(ctx, tx, s.dialect, candidate.workspaceID, candidate.connectionKey)
 	if err != nil {
 		return err
@@ -408,6 +473,16 @@ func (s *WorkerStore) failProviderTask(ctx context.Context, candidate providerTa
 	if errorCode == "google.http_429" {
 		if err := recordGoogleHTTP429(ctx, tx, s.dialect, candidate.id, now); err != nil {
 			return fmt.Errorf("record Integration Google HTTP 429 event: %w", err)
+		}
+	}
+	if isGoogleGmailRateLimitCode(errorCode) {
+		if err := recordGoogleGmailRateLimit(ctx, tx, s.dialect, errorCode, candidate.id, false, now); err != nil {
+			return fmt.Errorf("record Integration Google Gmail rate-limit event: %w", err)
+		}
+	}
+	if isFeishuRateLimitCode(errorCode) {
+		if err := recordFeishuRateLimit(ctx, tx, s.dialect, candidate.id, false, now); err != nil {
+			return fmt.Errorf("record Integration Feishu rate-limit event: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

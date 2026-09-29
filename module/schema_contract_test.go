@@ -12,7 +12,7 @@ func TestPublicSchemaContractMatchesIntegrationInventory(t *testing.T) {
 	if err := schemaownership.ValidateAll(tables); err != nil {
 		t.Fatal(err)
 	}
-	if len(tables) != 18 || !slices.Equal(OwnedTables(), schemaownership.Names(tables)) {
+	if len(tables) != 19 || !slices.Equal(OwnedTables(), schemaownership.Names(tables)) {
 		t.Fatalf("Integration public schema inventory=%+v", tables)
 	}
 	if MigrationOwner != "integration" {

@@ -21,7 +21,7 @@ func SchemaMigrations(driver, schema string) ([]modulehost.SchemaMigration, erro
 	}
 	renderer := dialect.WithSchema(schema)
 	builders := []*ormschema.TableBuilder{
-		connectionsTable(renderer), providerAccountRoutesTable(renderer), providerConnectionLeasesTable(renderer), providerInboxTable(renderer), providerMetricWindowsTable(renderer), providerRateLimitsTable(renderer), providerRunsTable(renderer),
+		connectionsTable(renderer), providerAccountRoutesTable(renderer), providerConnectionLeasesTable(renderer), providerInboxTable(renderer), providerMetricWindowsTable(renderer), providerWakeReceiptsTable(renderer), providerRateLimitsTable(renderer), providerRunsTable(renderer),
 		secretMaterialsTable(renderer), secretsTable(renderer), externalIdentitiesTable(renderer),
 		invocationsTable(renderer), eventsTable(renderer),
 		webhookNoncesTable(renderer), webhookSubscriptionsTable(renderer),
@@ -66,6 +66,8 @@ func indexes() []struct {
 		{"idx_integration_provider_connection_lease_expiry", IntegrationProviderConnectionLeasesTable, []string{"lease_expires_at"}},
 		{"idx_integration_provider_inbox_status", IntegrationProviderInboxTable, []string{"connector_key", "provider_key", "status", "received_at", "published_at", "route_bucket"}},
 		{"idx_integration_provider_metric_window", IntegrationProviderMetricWindowsTable, []string{"metric_key", "window_started_at"}},
+		{"idx_integration_provider_wake_completion", IntegrationProviderWakeReceiptsTable, []string{"connector_key", "provider_key", "status", "completed_at", "published_at"}},
+		{"idx_integration_provider_wake_target", IntegrationProviderWakeReceiptsTable, []string{"workspace_id", "connection_key", "task_key", "status", "wake_sequence"}},
 		{"idx_integration_provider_rate_window", IntegrationProviderRateLimitsTable, []string{"window_started_at"}},
 		{"idx_integration_provider_run_due", IntegrationProviderRunsTable, []string{"run_kind", "status", "due_at", "lease_expires_at"}},
 		{"idx_integration_provider_run_workspace_due", IntegrationProviderRunsTable, []string{"run_kind", "workspace_id", "due_at", "connection_key", "task_key", "status", "lease_expires_at"}},
@@ -139,6 +141,14 @@ func providerMetricWindowsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 		key("id"), scope("workspace_id"), req("metric_key", ormschema.TextKey(64)), integer("shard"),
 		timestamp("window_started_at"), integer("event_count"), timestamp("updated_at"),
 	).Unique("metric_key", "window_started_at", "shard")
+}
+
+func providerWakeReceiptsTable(r modulehost.Dialect) *ormschema.TableBuilder {
+	return table(r, IntegrationProviderWakeReceiptsTable,
+		key("id"), scope("workspace_id"), key("inbox_id"), scope("connector_key"), key("provider_key"),
+		scope("connection_key"), scope("task_key"), integer("wake_sequence"), key("status"),
+		optionalTimestamp("published_at"), timestamp("received_at"), optionalTimestamp("completed_at"), timestamp("created_at"), timestamp("updated_at"),
+	).Unique("workspace_id", "inbox_id", "connection_key", "task_key")
 }
 
 func providerConnectionLeasesTable(r modulehost.Dialect) *ormschema.TableBuilder {

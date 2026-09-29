@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"strings"
 	"testing"
+	"time"
 
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
@@ -15,6 +17,66 @@ type transactionTestCipher struct{}
 
 func (transactionTestCipher) EncryptSecretMaterial(_ context.Context, _, _, plaintext string) (string, error) {
 	return "encrypted:" + plaintext, nil
+}
+
+func TestAPIKeyAuthenticationUsesHashWorkspaceLifecycleAndExactScopes(t *testing.T) {
+	database, dialect := webPushTestDatabase(t, "integration-api-key-authentication")
+	store := NewManagementStore(database, dialect, transactionTestCipher{}, nil)
+	ctx := integrationmodel.WithAccessScope(context.Background(), integrationmodel.AccessScope{
+		WorkspaceID: "workspace-a", PermissionKey: "integration.api_keys.manage", ActorID: "admin-a", Unrestricted: true,
+	})
+	created, err := store.CreateAPIKey(ctx, "workspace-a", "ignored", integrationsdk.APIKeyInput{
+		Key: "crm-service", ActorID: "service-a", RoleKey: "sales", Scopes: []string{"opportunity.read", "account.read", "account.read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticated, err := store.AuthenticateAPIKey(t.Context(), created.Token, "workspace-a")
+	if err != nil || authenticated.Key != "crm-service" || authenticated.ActorID != "service-a" || authenticated.RoleKey != "sales" || authenticated.LastUsedAt == "" || len(authenticated.Scopes) != 2 || authenticated.Scopes[0] != "account.read" {
+		t.Fatalf("authenticated=%#v err=%v", authenticated, err)
+	}
+	for name, test := range map[string]struct{ token, workspace string }{
+		"wrong token":     {"itg_" + strings.Repeat("x", 43), "workspace-a"},
+		"wrong workspace": {created.Token, "workspace-b"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := store.AuthenticateAPIKey(t.Context(), test.token, test.workspace); err == nil {
+				t.Fatal("invalid API key authentication was accepted")
+			}
+		})
+	}
+	rotated, err := store.RotateAPIKey(ctx, "workspace-a", "crm-service", "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.AuthenticateAPIKey(t.Context(), created.Token, "workspace-a"); err == nil {
+		t.Fatal("rotated API key token remained valid")
+	}
+	if _, err = store.AuthenticateAPIKey(t.Context(), rotated.Token, "workspace-a"); err != nil {
+		t.Fatalf("rotated API key was rejected: %v", err)
+	}
+	if _, err = store.DisableAPIKey(ctx, "workspace-a", "crm-service", "ignored"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.AuthenticateAPIKey(t.Context(), rotated.Token, "workspace-a"); err == nil {
+		t.Fatal("disabled API key was accepted")
+	}
+
+	expired, err := store.CreateAPIKey(ctx, "workspace-a", "ignored", integrationsdk.APIKeyInput{
+		Key: "expired", ActorID: "service-a", RoleKey: "sales", Scopes: []string{"account.read"}, ExpiresAt: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.AuthenticateAPIKey(t.Context(), expired.Token, "workspace-a"); err == nil {
+		t.Fatal("expired API key was accepted")
+	}
+	if _, err = store.CreateAPIKey(ctx, "workspace-a", "ignored", integrationsdk.APIKeyInput{Key: "unscoped", ActorID: "service-a", RoleKey: "sales"}); err == nil {
+		t.Fatal("unscoped API key was accepted")
+	}
+	if _, err = store.CreateAPIKey(ctx, "workspace-a", "ignored", integrationsdk.APIKeyInput{Key: "wildcard", ActorID: "service-a", RoleKey: "sales", Scopes: []string{"account.*"}}); err == nil {
+		t.Fatal("wildcard API key scope was accepted")
+	}
 }
 
 func TestAPIKeyUsesTypedCredentialRowWithoutSecretProjection(t *testing.T) {

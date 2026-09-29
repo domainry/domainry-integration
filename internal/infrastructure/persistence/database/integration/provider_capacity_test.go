@@ -3,6 +3,8 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +25,89 @@ func (*providerCapacityTestProvider) BackgroundTasks(connector.Connection) []con
 }
 func (*providerCapacityTestProvider) ProcessBackground(context.Context, connector.BackgroundRequest) (connector.BackgroundResult, error) {
 	return connector.BackgroundResult{State: json.RawMessage(`{}`), NextDueAt: time.Now().UTC().Add(time.Hour)}, nil
+}
+
+type concurrentProviderCapacityTestProvider struct {
+	active   atomic.Int32
+	maximum  atomic.Int32
+	started  chan string
+	release  chan struct{}
+	finished chan string
+}
+
+func (*concurrentProviderCapacityTestProvider) Descriptor() connector.ProviderDescriptor {
+	return connector.ProviderDescriptor{ConnectorKey: "crm", ProviderKey: "capacity_parallel", ProviderRevision: "1.0.0"}
+}
+
+func (*concurrentProviderCapacityTestProvider) Call(context.Context, connector.CallRequest) (connector.CallResult, error) {
+	return connector.CallResult{}, nil
+}
+
+func (*concurrentProviderCapacityTestProvider) BackgroundTasks(connector.Connection) []connector.BackgroundTaskDescriptor {
+	return []connector.BackgroundTaskDescriptor{{Key: "sync", StateVersion: 1}}
+}
+
+func (p *concurrentProviderCapacityTestProvider) ProcessBackground(ctx context.Context, request connector.BackgroundRequest) (connector.BackgroundResult, error) {
+	active := p.active.Add(1)
+	defer p.active.Add(-1)
+	for {
+		maximum := p.maximum.Load()
+		if active <= maximum || p.maximum.CompareAndSwap(maximum, active) {
+			break
+		}
+	}
+	p.started <- request.Connection.Key
+	select {
+	case <-ctx.Done():
+		return connector.BackgroundResult{}, ctx.Err()
+	case <-p.release:
+	}
+	p.finished <- request.Connection.Key
+	return connector.BackgroundResult{State: json.RawMessage(`{}`), NextDueAt: request.Now.Add(time.Hour)}, nil
+}
+
+func TestProviderTasksExecuteConcurrentlyAcrossConnections(t *testing.T) {
+	database, dialect := webPushTestDatabase(t, "provider-capacity-parallel")
+	provider := &concurrentProviderCapacityTestProvider{
+		started: make(chan string, 4), release: make(chan struct{}), finished: make(chan string, 4),
+	}
+	delivery := NewDeliveryStore(database, dialect, deliveryTestProviders{provider: provider}, emptyDeliveryTestSecrets{})
+	management := NewManagementStore(database, dialect, nil, delivery)
+	for index := range 4 {
+		workspaceID := fmt.Sprintf("workspace-%d", index)
+		if _, err := management.UpsertConnection(t.Context(), workspaceID, "connection", "admin", integrationsdk.ConnectionInput{ConnectorKey: "crm", ProviderKey: "capacity_parallel", Status: "active"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	worker := NewWorkerStore(database, dialect, delivery, nil, "parallel-worker")
+	worker.clock = func() time.Time { return time.Now().UTC().Add(time.Second) }
+	done := make(chan error, 1)
+	go func() {
+		processed, err := worker.ProcessDueProviderTasks(t.Context(), 4)
+		if err == nil && processed != 4 {
+			err = fmt.Errorf("processed %d tasks, want 4", processed)
+		}
+		done <- err
+	}()
+	for index := range 4 {
+		select {
+		case <-provider.started:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("only %d provider calls started before release", index)
+		}
+	}
+	if maximum := provider.maximum.Load(); maximum != 4 {
+		t.Fatalf("maximum concurrent provider calls=%d, want 4", maximum)
+	}
+	close(provider.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("parallel provider batch did not finish")
+	}
 }
 
 func TestProviderTaskSelectionIsFairAcrossWorkspaces(t *testing.T) {

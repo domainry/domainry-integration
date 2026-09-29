@@ -55,6 +55,14 @@ func TestConnectionProbePersistsHashedProviderAccountRoute(t *testing.T) {
 	if leaked != 0 {
 		t.Fatal("provider account PII was stored in routing columns")
 	}
+	probe, err := decodeProviderAccountProbe(provider.details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := management.providerAccountConnectionKey(t.Context(), "workspace-a", "mail", "route_probe", probe)
+	if err != nil || resolved != connection.Key {
+		t.Fatalf("provider identity did not reuse existing connection: key=%q error=%v", resolved, err)
+	}
 
 	if _, err = management.SetConnectionStatus(t.Context(), "workspace-a", "personal-mail", "inactive", "user-a"); err != nil {
 		t.Fatal(err)

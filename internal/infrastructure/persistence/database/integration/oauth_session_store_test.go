@@ -20,6 +20,9 @@ import (
 type oauthStoreProvider struct {
 	calls              int
 	probes             int
+	probeEnabled       bool
+	probeDetails       json.RawMessage
+	probeErr           error
 	testScopes         [][]string
 	testScopesDeclared bool
 	during             func()
@@ -29,9 +32,13 @@ type oauthStoreProvider struct {
 func (p *oauthStoreProvider) OAuthConnectionTestScopes() ([][]string, bool) {
 	return p.testScopes, p.testScopesDeclared
 }
+func (p *oauthStoreProvider) ProviderAccountProbeEnabled() bool { return p.probeEnabled }
 func (p *oauthStoreProvider) TestConnection(context.Context, connector.TestConnectionRequest) (connector.TestConnectionResult, error) {
 	p.probes++
-	return connector.TestConnectionResult{Connected: true}, nil
+	if p.probeErr != nil {
+		return connector.TestConnectionResult{}, p.probeErr
+	}
+	return connector.TestConnectionResult{Connected: true, Details: append(json.RawMessage(nil), p.probeDetails...)}, nil
 }
 func (*oauthStoreProvider) Descriptor() connector.ProviderDescriptor {
 	fields := []connector.SecretField{}
@@ -121,6 +128,65 @@ func TestOAuthSessionAtomicallyCreatesPrivateAccountAndReplaysReceipt(t *testing
 	record, err := store.readOAuthSession(t.Context(), subject, query.Equal("id", session.ID))
 	if err != nil || record.VerifierCiphertext != "" {
 		t.Fatal("completed verifier was retained", err)
+	}
+}
+
+func TestOAuthProviderIdentityDeduplicatesSameAccountAndKeepsDifferentAccounts(t *testing.T) {
+	store, provider, subject, _ := setupOAuthStore(t)
+	provider.probeEnabled = true
+	provider.probeDetails = json.RawMessage(`{"provider_account":{"subject":"provider-user-1","routes":[{"kind":"email","value":"first@example.test"}]}}`)
+
+	complete := func() integrationsdk.OAuthAuthorizationSession {
+		t.Helper()
+		_, state := startOAuthStore(t, store, subject)
+		value, err := store.CompleteOAuthAuthorization(t.Context(), subject, integrationsdk.OAuthAuthorizationCallback{State: state, Code: "accepted"})
+		if err != nil || value.Status != "connected" || value.Account == nil {
+			t.Fatalf("complete OAuth: value=%+v error=%v", value, err)
+		}
+		return value
+	}
+
+	first := complete()
+	repeated := complete()
+	if repeated.Account.Key != first.Account.Key {
+		t.Fatalf("same provider account created a duplicate connection: first=%q repeated=%q", first.Account.Key, repeated.Account.Key)
+	}
+	accounts, err := store.ListConnectionAccounts(t.Context(), subject)
+	if err != nil || len(accounts) != 1 {
+		t.Fatalf("same provider account count=%d error=%v", len(accounts), err)
+	}
+	var secrets int
+	if err = store.database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM _integration_secrets").Scan(&secrets); err != nil || secrets != 2 {
+		t.Fatalf("same provider account token secrets=%d error=%v", secrets, err)
+	}
+
+	provider.probeDetails = json.RawMessage(`{"provider_account":{"subject":"provider-user-2","routes":[{"kind":"email","value":"second@example.test"}]}}`)
+	second := complete()
+	if second.Account.Key == first.Account.Key {
+		t.Fatal("different provider accounts shared one connection")
+	}
+	accounts, err = store.ListConnectionAccounts(t.Context(), subject)
+	if err != nil || len(accounts) != 2 {
+		t.Fatalf("different provider account count=%d error=%v", len(accounts), err)
+	}
+}
+
+func TestOAuthProviderIdentityFailureDoesNotCreateUnresolvedAccount(t *testing.T) {
+	store, provider, subject, _ := setupOAuthStore(t)
+	provider.probeEnabled = true
+	provider.probeErr = connector.RetryableError("test.identity_rate_limited", errors.New("rate limited"))
+	_, state := startOAuthStore(t, store, subject)
+	value, err := store.CompleteOAuthAuthorization(t.Context(), subject, integrationsdk.OAuthAuthorizationCallback{State: state, Code: "accepted"})
+	if err != nil || value.Status != "needs_reauthorization" || value.Account != nil {
+		t.Fatalf("identity failure result=%+v error=%v", value, err)
+	}
+	accounts, listErr := store.ListConnectionAccounts(t.Context(), subject)
+	if listErr != nil || len(accounts) != 0 {
+		t.Fatalf("identity failure created accounts=%d error=%v", len(accounts), listErr)
+	}
+	var secrets int
+	if err = store.database.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM _integration_secrets").Scan(&secrets); err != nil || secrets != 0 {
+		t.Fatalf("identity failure persisted token secrets=%d error=%v", secrets, err)
 	}
 }
 

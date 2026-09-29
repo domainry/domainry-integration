@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-orm/query"
@@ -95,6 +97,24 @@ func newAPIKeyCredential(input integrationsdk.APIKeyInput) (string, string, stri
 	return key, token, hex.EncodeToString(digest[:]), nil
 }
 
+func normalizeAPIKeyScopes(values []string) ([]string, error) {
+	if len(values) == 0 || len(values) > 256 {
+		return nil, fmt.Errorf("Integration API key requires between 1 and 256 exact permission scopes")
+	}
+	result := make([]string, len(values))
+	for i, value := range values {
+		value = strings.TrimSpace(value)
+		separator := strings.LastIndexByte(value, '.')
+		if value == "" || len(value) > 255 || separator <= 0 || separator == len(value)-1 || strings.ContainsAny(value, "* \t\r\n") {
+			return nil, fmt.Errorf("Integration API key scope %q is not an exact permission key", value)
+		}
+		result[i] = value
+	}
+	slices.Sort(result)
+	result = slices.Compact(result)
+	return result, nil
+}
+
 func (s *ManagementStore) CreateAPIKey(ctx context.Context, workspaceID, actorID string, input integrationsdk.APIKeyInput) (integrationsdk.APIKeyCredential, error) {
 	if err := requireAllDataScope(ctx, strings.TrimSpace(workspaceID)); err != nil {
 		return integrationsdk.APIKeyCredential{}, err
@@ -120,6 +140,10 @@ func (s *ManagementStore) CreateAPIKey(ctx context.Context, workspaceID, actorID
 		return integrationsdk.APIKeyCredential{}, err
 	}
 	input.RoleKey, err = requiredOwnerValue("API key role key", input.RoleKey)
+	if err != nil {
+		return integrationsdk.APIKeyCredential{}, err
+	}
+	input.Scopes, err = normalizeAPIKeyScopes(input.Scopes)
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
 	}
@@ -225,3 +249,66 @@ func (s *ManagementStore) RotateAPIKey(ctx context.Context, workspaceID, key, _ 
 	current.TokenPrefix, current.Status, current.DisabledAt, current.UpdatedAt = prefix, "active", "", now
 	return integrationsdk.APIKeyCredential{APIKey: current, Token: token}, nil
 }
+
+// AuthenticateAPIKey verifies only the Integration-owned credential state.
+// It deliberately does not turn the stored actor/role into Runtime authority:
+// Runtime must resolve that Identity again and intersect its current bundle
+// with APIKey.Scopes before serving a request.
+func (s *ManagementStore) AuthenticateAPIKey(ctx context.Context, token, workspaceID string) (integrationsdk.APIKey, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	token = strings.TrimSpace(token)
+	if workspaceID == "" || token == "" || len(token) > 512 || !strings.HasPrefix(token, "itg_") {
+		return integrationsdk.APIKey{}, integrationsdk.ErrAPIKeyInvalid
+	}
+	digest := sha256.Sum256([]byte(token))
+	lookupHash := hex.EncodeToString(digest[:])
+	where, err := scopedWhere(ctx, workspaceID, "", "",
+		query.Equal("credential_type", "api_key"), query.Equal("lookup_hash", lookupHash), query.Equal("status", "active"),
+	)
+	if err != nil {
+		return integrationsdk.APIKey{}, err
+	}
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_secrets").Columns(
+		"secret_key", "workspace_id", "name", "display_prefix", "actor_id", "role_key", "scopes_json", "status", "expires_at", "last_used_at", "created_by", "created_at", "updated_at", "disabled_at",
+	).Where(where).Limit(1).Build()
+	if err != nil {
+		return integrationsdk.APIKey{}, err
+	}
+	value, err := scanAPIKey(s.database.QueryRowContext(ctx, statement, args...))
+	if err == sql.ErrNoRows {
+		return integrationsdk.APIKey{}, integrationsdk.ErrAPIKeyInvalid
+	}
+	if err != nil {
+		return integrationsdk.APIKey{}, err
+	}
+	if value.WorkspaceID != workspaceID || value.Status != "active" {
+		return integrationsdk.APIKey{}, integrationsdk.ErrAPIKeyInvalid
+	}
+	if value.ExpiresAt != "" {
+		expiresAt, parseErr := time.Parse(time.RFC3339Nano, value.ExpiresAt)
+		if parseErr != nil || !expiresAt.After(time.Now().UTC()) {
+			return integrationsdk.APIKey{}, integrationsdk.ErrAPIKeyInvalid
+		}
+	}
+	if value.Scopes, err = normalizeAPIKeyScopes(value.Scopes); err != nil {
+		return integrationsdk.APIKey{}, integrationsdk.ErrAPIKeyInvalid
+	}
+	now := ownerNow()
+	update, updateArgs, err := query.NewUpdateBuilder(s.dialect, "_integration_secrets").
+		Set("last_used_at", timestampMillis(now)).
+		Where(query.And(where, query.Equal("secret_key", value.Key))).Build()
+	if err != nil {
+		return integrationsdk.APIKey{}, err
+	}
+	result, err := s.database.ExecContext(ctx, update, updateArgs...)
+	if err != nil {
+		return integrationsdk.APIKey{}, fmt.Errorf("record Integration API key use: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return integrationsdk.APIKey{}, fmt.Errorf("Integration API key changed during authentication")
+	}
+	value.LastUsedAt = now
+	return value, nil
+}
+
+var _ integrationsdk.APIKeyAuthentication = (*ManagementStore)(nil)

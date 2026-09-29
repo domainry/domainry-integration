@@ -46,6 +46,11 @@ func (f *Factory) OpenSaaS(ctx context.Context, application integrationsdk.Appli
 		_ = binding.Close(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("Integration SaaS Binding does not expose Management")
 	}
+	apiKeys, ok := binding.(integrationsdk.APIKeyAuthenticationBinding)
+	if !ok || apiKeys.APIKeyAuthentication() == nil {
+		_ = binding.Close(context.WithoutCancel(ctx))
+		return nil, fmt.Errorf("Integration SaaS Binding does not expose API key authentication")
+	}
 	accounts, ok := binding.(integrationsdk.ConnectionAccountsBinding)
 	if !ok || accounts.ConnectionAccounts() == nil {
 		_ = binding.Close(context.WithoutCancel(ctx))
@@ -73,6 +78,7 @@ func (f *Factory) OpenSaaS(ctx context.Context, application integrationsdk.Appli
 	}
 	return &bindingWithHTTPAdapter{
 		Binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(),
+		apiKeys:  apiKeys.APIKeyAuthentication(),
 		accounts: accounts.ConnectionAccounts(), accountAdmin: accountAdmin.ConnectionAccountAdministration(),
 		operations: operations.Operations(), routedWebhooks: routed.RoutedWebhooks(), adapters: []modulehttp.Adapter{adapter},
 	}, nil
@@ -82,6 +88,7 @@ type bindingWithHTTPAdapter struct {
 	integrationsdk.Binding
 	webPush        integrationsdk.WebPushSubscriptions
 	management     integrationsdk.Management
+	apiKeys        integrationsdk.APIKeyAuthentication
 	accounts       integrationsdk.ConnectionAccounts
 	accountAdmin   integrationsdk.ConnectionAccountAdministration
 	operations     integrationsdk.Operations
@@ -93,6 +100,9 @@ func (b *bindingWithHTTPAdapter) WebPushSubscriptions() integrationsdk.WebPushSu
 	return b.webPush
 }
 func (b *bindingWithHTTPAdapter) Management() integrationsdk.Management { return b.management }
+func (b *bindingWithHTTPAdapter) APIKeyAuthentication() integrationsdk.APIKeyAuthentication {
+	return b.apiKeys
+}
 func (b *bindingWithHTTPAdapter) ConnectionAccounts() integrationsdk.ConnectionAccounts {
 	return b.accounts
 }
@@ -117,6 +127,7 @@ var _ integrationsdk.Factory = (*Factory)(nil)
 var _ saashost.Factory = (*Factory)(nil)
 var _ integrationsdk.WebPushBinding = (*bindingWithHTTPAdapter)(nil)
 var _ integrationsdk.ManagementBinding = (*bindingWithHTTPAdapter)(nil)
+var _ integrationsdk.APIKeyAuthenticationBinding = (*bindingWithHTTPAdapter)(nil)
 var _ integrationsdk.ConnectionAccountsBinding = (*bindingWithHTTPAdapter)(nil)
 var _ integrationsdk.ConnectionAccountAdministrationBinding = (*bindingWithHTTPAdapter)(nil)
 var _ integrationsdk.OperationsBinding = (*bindingWithHTTPAdapter)(nil)

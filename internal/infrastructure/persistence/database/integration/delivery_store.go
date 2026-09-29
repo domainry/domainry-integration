@@ -114,7 +114,7 @@ func (s *DeliveryStore) Accept(ctx context.Context, request integrationmodel.Del
 	if callErr != nil {
 		status, errorText = "failed", callErr.Error()
 	}
-	if err := s.finishInvocation(ctx, request.WorkspaceID, id, status, result.ResponseRef, errorText); err != nil {
+	if err := s.finishInvocationWithProviderError(ctx, request.WorkspaceID, id, status, result.ResponseRef, errorText, callErr); err != nil {
 		return integrationmodel.DeliveryReceipt{}, err
 	}
 	receipt := integrationmodel.DeliveryReceipt{MessageID: request.MessageID, InvocationID: id, Status: status, ResultRef: result.ResponseRef}
@@ -276,11 +276,21 @@ func (s *DeliveryStore) insertInvocation(ctx context.Context, id string, request
 }
 
 func (s *DeliveryStore) finishInvocation(ctx context.Context, workspaceID, id, status, responseRef, errorText string) error {
-	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", time.Now().UTC().UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_invocations", id), query.Equal("id", id))).Build()
+	return s.finishInvocationWithProviderError(ctx, workspaceID, id, status, responseRef, errorText, nil)
+}
+
+func (s *DeliveryStore) finishInvocationWithProviderError(ctx context.Context, workspaceID, id, status, responseRef, errorText string, callErr error) error {
+	completedAt := time.Now().UTC()
+	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", completedAt.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_invocations", id), query.Equal("id", id))).Build()
 	if err != nil {
 		return err
 	}
-	result, err := s.database.ExecContext(ctx, queryValue, args...)
+	tx, err := s.database.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, queryValue, args...)
 	if err != nil {
 		return err
 	}
@@ -291,7 +301,24 @@ func (s *DeliveryStore) finishInvocation(ctx context.Context, workspaceID, id, s
 	if count != 1 {
 		return fmt.Errorf("Integration invocation completion changed")
 	}
-	return nil
+	if code, ok := connector.ProviderErrorCodeOf(callErr); ok {
+		if code == "google.http_429" {
+			if err := recordGoogleHTTP429Foreground(ctx, tx, s.dialect, id, completedAt); err != nil {
+				return fmt.Errorf("record Integration foreground Google HTTP 429 event: %w", err)
+			}
+		}
+		if isGoogleGmailRateLimitCode(code) {
+			if err := recordGoogleGmailRateLimit(ctx, tx, s.dialect, code, id, true, completedAt); err != nil {
+				return fmt.Errorf("record Integration foreground Google Gmail rate-limit event: %w", err)
+			}
+		}
+		if isFeishuRateLimitCode(code) {
+			if err := recordFeishuRateLimit(ctx, tx, s.dialect, id, true, completedAt); err != nil {
+				return fmt.Errorf("record Integration foreground Feishu rate-limit event: %w", err)
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *DeliveryStore) receipt(ctx context.Context, messageID, id string) (integrationmodel.DeliveryReceipt, bool, error) {

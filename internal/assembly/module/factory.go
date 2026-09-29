@@ -4,6 +4,9 @@ package moduleassembly
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
 	shareddefinition "github.com/domainry/domainry-foundation/definition"
@@ -16,15 +19,40 @@ import (
 	integrationservice "github.com/domainry/domainry-integration/internal/domain/integration/service"
 	integrationpersistence "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/integration"
 	databaseschema "github.com/domainry/domainry-integration/internal/infrastructure/persistence/database/schema"
+	googlequota "github.com/domainry/domainry-integration/internal/infrastructure/providerquota/googlecloud"
 	modulehttp "github.com/domainry/domainry-integration/internal/transport/http/module"
 	metadatasdk "github.com/domainry/domainry-metadata-sdk"
 )
 
 type Options struct {
-	ConnectorCatalog connector.DefinitionCatalog
+	ConnectorCatalog             connector.DefinitionCatalog
+	GoogleQuotaProjectID         string
+	GoogleQuotaServices          []string
+	GoogleQuotaCredentialsFile   string
+	GoogleQuotaMonitoringBaseURL string
+	GoogleQuotaTimeout           time.Duration
 }
 
-func OptionsFromEnvironment() Options { return Options{} }
+func OptionsFromEnvironment() Options {
+	services := []string{}
+	for _, raw := range strings.Split(os.Getenv("INTEGRATION_GOOGLE_QUOTA_SERVICES"), ",") {
+		if value := strings.TrimSpace(raw); value != "" {
+			services = append(services, value)
+		}
+	}
+	timeout := 10 * time.Second
+	if raw := strings.TrimSpace(os.Getenv("INTEGRATION_GOOGLE_QUOTA_TIMEOUT")); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil {
+			timeout = parsed
+		}
+	}
+	return Options{
+		GoogleQuotaProjectID:       strings.TrimSpace(os.Getenv("INTEGRATION_GOOGLE_QUOTA_PROJECT_ID")),
+		GoogleQuotaServices:        services,
+		GoogleQuotaCredentialsFile: strings.TrimSpace(os.Getenv("INTEGRATION_GOOGLE_QUOTA_CREDENTIALS_FILE")),
+		GoogleQuotaTimeout:         timeout,
+	}
+}
 
 type Factory struct{ options Options }
 
@@ -90,6 +118,17 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 		operations,
 	)
 	management := integrationpersistence.NewManagementStore(host.Database(), host.Dialect(), host.SecretCipher(), delivery, subjectLifecyclePersistence)
+	if strings.TrimSpace(options.GoogleQuotaProjectID) != "" {
+		quotaObserver, quotaErr := googlequota.New(ctx, googlequota.Config{
+			ProjectID: options.GoogleQuotaProjectID, Services: options.GoogleQuotaServices,
+			CredentialsFile: options.GoogleQuotaCredentialsFile, BaseURL: options.GoogleQuotaMonitoringBaseURL,
+			Timeout: options.GoogleQuotaTimeout,
+		})
+		if quotaErr != nil {
+			return nil, fmt.Errorf("configure Google official quota monitoring: %w", quotaErr)
+		}
+		management.ConfigureProviderQuotaObserver(quotaObserver)
+	}
 	applicationService := integrationapplication.New(domain)
 	binding, err := integrationsdkadapter.NewBinding(mode, applicationService, management, workers)
 	if err != nil {

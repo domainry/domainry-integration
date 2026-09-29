@@ -6,8 +6,9 @@ import (
 )
 
 // Validate closes the Integration-owned half of an inbound mapping contract.
-// Runtime separately verifies that the finite Action or Workflow target exists
-// and that the declared input bindings match that target's authored contract.
+// Runtime separately verifies that the finite Action, Workflow or Automation
+// target exists and that the declared input bindings match that target's
+// authored contract.
 func (r EventMappingRequirement) Validate() error {
 	for name, value := range map[string]string{"key": r.Key, "workspace_id": r.WorkspaceID, "provider": r.Provider, "target_type": r.TargetType} {
 		if strings.TrimSpace(value) == "" {
@@ -25,6 +26,10 @@ func (r EventMappingRequirement) Validate() error {
 	case "workflow":
 		if strings.TrimSpace(r.WorkflowKey) == "" {
 			return fmt.Errorf("Integration workflow event mapping requires workflow_key")
+		}
+	case "automation":
+		if strings.TrimSpace(r.AutomationRuleKey) == "" {
+			return fmt.Errorf("Integration automation event mapping requires automation_rule_key")
 		}
 	case "agent_task":
 		if strings.TrimSpace(r.AgentID) == "" || strings.TrimSpace(r.ConversationID) == "" {
@@ -80,6 +85,11 @@ func (r EventMappingRequirement) Validate() error {
 	}
 	for key, path := range r.WorkflowInput {
 		if err := requireDeclared("workflow_input."+key, path); err != nil {
+			return err
+		}
+	}
+	for key, path := range r.AutomationInput {
+		if err := requireDeclared("automation_input."+key, path); err != nil {
 			return err
 		}
 	}

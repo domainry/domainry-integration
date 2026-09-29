@@ -29,10 +29,21 @@ type ManagementStore struct {
 	cipher           modulehost.SecretMaterialCipher
 	delivery         *DeliveryStore
 	subjectLifecycle *SubjectLifecyclePersistence
+	providerQuota    ProviderQuotaObserver
+}
+
+// ProviderQuotaObserver supplies installation-owned official provider quota
+// evidence. It must not use a user's Connection credentials.
+type ProviderQuotaObserver interface {
+	ObserveProviderQuota(context.Context, time.Time) (integrationsdk.ProviderQuotaSnapshot, error)
 }
 
 func NewManagementStore(database modulehost.Database, dialect modulehost.Dialect, cipher modulehost.SecretMaterialCipher, delivery *DeliveryStore, subjectLifecycle ...*SubjectLifecyclePersistence) *ManagementStore {
 	return &ManagementStore{database: database, transactions: database, dialect: dialect, cipher: cipher, delivery: delivery, subjectLifecycle: subjectLifecyclePersistence(subjectLifecycle)}
+}
+
+func (s *ManagementStore) ConfigureProviderQuotaObserver(observer ProviderQuotaObserver) {
+	s.providerQuota = observer
 }
 
 func (s *ManagementStore) withTransaction(ctx context.Context, operation func(*ManagementStore) error) error {
@@ -304,6 +315,9 @@ func (s *ManagementStore) DeleteConnection(ctx context.Context, workspaceID, key
 	if err := s.deleteProviderAccountRoutes(ctx, workspaceID, key); err != nil {
 		return err
 	}
+	if err := deleteProviderWakeReceipts(ctx, s.database, s.dialect, strings.TrimSpace(workspaceID), strings.TrimSpace(key)); err != nil {
+		return err
+	}
 	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("connection_key", strings.TrimSpace(key)))
 	if err != nil {
 		return err
@@ -446,6 +460,24 @@ func (s *ManagementStore) TestConnection(ctx context.Context, workspaceID, key s
 	}
 	receipt := integrationsdk.DeliveryReceipt{MessageID: ownerID("connection_test_", workspaceID, key+"\x00"+ownerNow()), Status: status}
 	value := integrationsdk.ConnectionTestResult{Connection: connection, Operation: "test_connection", Response: append(json.RawMessage(nil), result.Details...), Receipt: receipt}
+	completedAt := time.Now().UTC()
+	if code, ok := connector.ProviderErrorCodeOf(err); ok {
+		if code == "google.http_429" {
+			if metricErr := recordGoogleHTTP429Foreground(ctx, s.database, s.dialect, receipt.MessageID, completedAt); metricErr != nil {
+				return value, fmt.Errorf("record Integration connection-test Google HTTP 429 event: %w", metricErr)
+			}
+		}
+		if isGoogleGmailRateLimitCode(code) {
+			if metricErr := recordGoogleGmailRateLimit(ctx, s.database, s.dialect, code, receipt.MessageID, true, completedAt); metricErr != nil {
+				return value, fmt.Errorf("record Integration connection-test Google Gmail rate-limit event: %w", metricErr)
+			}
+		}
+		if isFeishuRateLimitCode(code) {
+			if metricErr := recordFeishuRateLimit(ctx, s.database, s.dialect, receipt.MessageID, true, completedAt); metricErr != nil {
+				return value, fmt.Errorf("record Integration connection-test Feishu rate-limit event: %w", metricErr)
+			}
+		}
+	}
 	return value, err
 }
 

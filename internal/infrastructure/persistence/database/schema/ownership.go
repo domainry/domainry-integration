@@ -15,6 +15,7 @@ const (
 	IntegrationProviderConnectionLeasesTable = "_integration_provider_connection_leases"
 	IntegrationProviderInboxTable            = "_integration_provider_inbox"
 	IntegrationProviderMetricWindowsTable    = "_integration_provider_metric_windows"
+	IntegrationProviderWakeReceiptsTable     = "_integration_provider_wake_receipts"
 	IntegrationProviderRateLimitsTable       = "_integration_provider_rate_limits"
 	IntegrationProviderRunsTable             = "_integration_provider_runs"
 	IntegrationSecretMaterialsTable          = "_integration_secret_materials"
@@ -90,6 +91,12 @@ var tableOwnership = []schemaownership.Table{
 		RetentionClass: schemaownership.RetentionTechnicalTTL, PrimaryKey: []string{"workspace_id", "id"},
 		BoundedQueryPath: "platform metric key and five-minute window range with fixed write shards",
 		DeletionPolicy:   "aggregate counters contain no account or provider payload and windows older than seven days are purged by the provider worker",
+	},
+	{
+		Name: IntegrationProviderWakeReceiptsTable, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+		RetentionClass: schemaownership.RetentionTechnicalTTL, PrimaryKey: []string{"workspace_id", "id"},
+		BoundedQueryPath: "workspace/connection/task wake sequence identity and provider/status/time completion indexes",
+		DeletionPolicy:   "receipts retain only task routing identity and timestamps; connection deletion and subject erasure remove matching receipts, and the provider worker purges completed or abandoned receipts after seven days",
 	},
 	{
 		Name: IntegrationProviderRateLimitsTable, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,

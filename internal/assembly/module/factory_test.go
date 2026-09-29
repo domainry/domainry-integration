@@ -210,3 +210,18 @@ func TestFactoryRejectsIncompleteHost(t *testing.T) {
 		t.Fatal("incomplete host accepted")
 	}
 }
+
+func TestOptionsFromEnvironmentLoadsGoogleQuotaConfiguration(t *testing.T) {
+	t.Setenv("INTEGRATION_GOOGLE_QUOTA_PROJECT_ID", " project-a ")
+	t.Setenv("INTEGRATION_GOOGLE_QUOTA_SERVICES", " gmail.googleapis.com, drive.googleapis.com, ")
+	t.Setenv("INTEGRATION_GOOGLE_QUOTA_CREDENTIALS_FILE", " /run/secrets/google-quota.json ")
+	t.Setenv("INTEGRATION_GOOGLE_QUOTA_TIMEOUT", "15s")
+
+	options := OptionsFromEnvironment()
+	if options.GoogleQuotaProjectID != "project-a" || options.GoogleQuotaCredentialsFile != "/run/secrets/google-quota.json" || options.GoogleQuotaTimeout != 15*time.Second {
+		t.Fatalf("Google quota options=%+v", options)
+	}
+	if len(options.GoogleQuotaServices) != 2 || options.GoogleQuotaServices[0] != "gmail.googleapis.com" || options.GoogleQuotaServices[1] != "drive.googleapis.com" {
+		t.Fatalf("Google quota services=%v", options.GoogleQuotaServices)
+	}
+}

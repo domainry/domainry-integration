@@ -16,8 +16,12 @@ const (
 	providerRateLimitTable       = "_integration_provider_rate_limits"
 	providerTaskLeaseDuration    = 6 * time.Minute
 
-	providerGlobalRatePerMinute     = int64(20000)
-	providerKindRatePerMinute       = int64(10000)
+	providerGlobalRatePerMinute = int64(20000)
+	// The provider ceiling is an Integration scheduler admission limit, not a
+	// claim about a vendor's official quota. Matching the global ceiling keeps
+	// the 100k-account baseline from being rejected locally; provider-specific
+	// quota telemetry and adaptive admission remain separate operational work.
+	providerKindRatePerMinute       = int64(20000)
 	providerWorkspaceRatePerMinute  = int64(1000)
 	providerConnectionRatePerMinute = int64(120)
 )

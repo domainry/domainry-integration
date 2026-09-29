@@ -342,6 +342,28 @@ func TestConnectionAccountTestRejectsBusinessInputsAndHidesProviderDetails(t *te
 	}
 }
 
+func TestConnectionAccountTestPersistsOfficialFeishuRateLimitEvidence(t *testing.T) {
+	store, _ := setupConnectionAccountStore(t)
+	account := createAccountConnection(t, store, "personal-a", "token-a", "user-a", integrationsdk.ConnectionAccountScopePersonal)
+	provider, found := store.delivery.providers.Provider("crm", "probe")
+	if !found {
+		t.Fatal("test Provider is unavailable")
+	}
+	provider.(*refreshResultProvider).succeed = false
+	provider.(*refreshResultProvider).providerErrorCode = "feishu_calendar.rate_limit_exceeded"
+	subject := integrationsdk.ConnectionAccountSubject{WorkspaceID: "workspace-a", UserID: "user-a", Access: integrationsdk.ConnectionAccountAccess{Personal: true}}
+	if _, err := store.TestConnectionAccount(accountScope(t.Context(), "user-a", false), subject, account.Key, integrationsdk.ConnectionTestRequest{}); err == nil {
+		t.Fatal("rate-limited connection test unexpectedly succeeded")
+	}
+	snapshot, err := store.providerRunSnapshot(t.Context(), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.FeishuRateLimitForegroundEventsHour != 1 || snapshot.FeishuRateLimitEventsHour != 0 || snapshot.FeishuRateLimitFailures != 0 {
+		t.Fatalf("connection-test Feishu rate-limit snapshot=%+v", snapshot)
+	}
+}
+
 func TestConnectionAccountRejectsCredentialsAlreadyAliasedByLegacyConnections(t *testing.T) {
 	store, _ := setupConnectionAccountStore(t)
 	admin := accountScope(t.Context(), "admin", true)

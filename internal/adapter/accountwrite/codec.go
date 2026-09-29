@@ -9,6 +9,7 @@ import (
 	"io"
 
 	"github.com/domainry/domainry-connector-sdk/calendarwrite"
+	"github.com/domainry/domainry-connector-sdk/collaborationwrite"
 	"github.com/domainry/domainry-connector-sdk/mailwrite"
 	"github.com/domainry/domainry-connector-sdk/mcptool"
 	model "github.com/domainry/domainry-integration/internal/domain/integration/model"
@@ -23,6 +24,8 @@ func (Codec) ValidateOperation(op model.ConnectionAccountWriteOperation) error {
 		hash = calendarwrite.OperationSHA256(op.Operation)
 	case mailwrite.SendOperationKey, mailwrite.ReplyOperationKey:
 		hash = mailwrite.OperationSHA256(op.Operation)
+	case collaborationwrite.SendOperationKey:
+		hash = collaborationwrite.OperationSHA256(op.Operation)
 	case mcptool.CallToolOperationKey:
 		hash = mcptool.OperationSHA256(op.Operation)
 	}
@@ -46,6 +49,8 @@ func (c Codec) CanonicalPayload(op model.ConnectionAccountWriteOperation, raw js
 		value = &mailwrite.SendRequest{}
 	case mailwrite.ReplyOperationKey:
 		value = &mailwrite.ReplyRequest{}
+	case collaborationwrite.SendOperationKey:
+		value = &collaborationwrite.SendRequest{}
 	case mcptool.CallToolOperationKey:
 		var request mcptool.CallToolRequest
 		if err := strictReceipt(raw, &request); err != nil || request.Validate() != nil || !request.Approved {
@@ -102,6 +107,15 @@ func (Codec) Receipt(claim model.AccountWriteClaim, raw json.RawMessage) (json.R
 			original = request.MessageID
 		}
 		if err := result.Validate(source.Operation, claim.InvocationID, original); err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	case collaborationwrite.SendOperationKey:
+		var result collaborationwrite.Result
+		if err := strictReceipt(raw, &result); err != nil {
+			return nil, err
+		}
+		if err := result.Validate(claim.InvocationID); err != nil {
 			return nil, err
 		}
 		return json.Marshal(result)

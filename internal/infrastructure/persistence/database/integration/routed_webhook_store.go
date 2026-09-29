@@ -236,11 +236,14 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 				return integrationsdk.RoutedWebhookReceipt{}, eventErr
 			}
 		}
-		count, wakeErr := wakeProviderTasks(ctx, tx, s.dialect, s.subjectLifecycle, target.workspaceID, target.connectionKey, envelope.WakeTasks, now)
+		sequences, wakeErr := wakeProviderTasksWithSequences(ctx, tx, s.dialect, s.subjectLifecycle, target.workspaceID, target.connectionKey, envelope.WakeTasks, now)
 		if wakeErr != nil {
 			return integrationsdk.RoutedWebhookReceipt{}, wakeErr
 		}
-		if count > 0 {
+		if err := recordProviderWakeReceipts(ctx, tx, s.dialect, target.workspaceID, target.connectionKey, connection.ConnectorKey, connection.ProviderKey, inboxID, publishedAt, now, sequences); err != nil {
+			return integrationsdk.RoutedWebhookReceipt{}, err
+		}
+		if len(sequences) > 0 {
 			routed++
 		}
 	}

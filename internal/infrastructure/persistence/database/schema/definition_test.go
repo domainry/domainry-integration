@@ -25,6 +25,8 @@ func TestMySQLCompositeIndexesUseBoundedColumns(t *testing.T) {
 		"idx_integration_provider_run_workspace_due",
 		"`published_at` BIGINT NOT NULL DEFAULT 0",
 		"idx_integration_provider_inbox_status",
+		"idx_integration_provider_wake_completion",
+		"idx_integration_provider_wake_target",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("MySQL connection-account migration is missing %q: %s", want, joined)
@@ -47,7 +49,7 @@ func TestSchemaOwnershipMatchesCanonicalFinalDDL(t *testing.T) {
 	if err := schemaownership.ValidateAll(ownership); err != nil {
 		t.Fatal(err)
 	}
-	if len(ownership) != 18 || !slices.Equal(OwnedTables(), schemaownership.Names(ownership)) {
+	if len(ownership) != 19 || !slices.Equal(OwnedTables(), schemaownership.Names(ownership)) {
 		t.Fatalf("Integration schema ownership=%+v", ownership)
 	}
 	migrations, err := SchemaMigrations("sqlite", "")

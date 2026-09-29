@@ -107,11 +107,43 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 		metadataValue["source"] = request.Source
 	}
 	metadata, _ := json.Marshal(metadataValue)
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", time.Now().UTC().UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, request.WorkspaceID, "_integration_invocations", invocationID), query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID)))).Build()
+	completedAt := time.Now().UTC()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", completedAt.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, request.WorkspaceID, "_integration_invocations", invocationID), query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID)))).Build()
 	if err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
-	if _, err := s.database.ExecContext(ctx, statement, args...); err != nil {
+	tx, err := s.transactions.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return integrationmodel.ProviderCallResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	updated, err := tx.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return integrationmodel.ProviderCallResult{}, err
+	}
+	if affected, affectedErr := updated.RowsAffected(); affectedErr != nil {
+		return integrationmodel.ProviderCallResult{}, affectedErr
+	} else if affected != 1 {
+		return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration invocation completion changed")
+	}
+	if code, ok := connector.ProviderErrorCodeOf(callErr); ok {
+		if code == "google.http_429" {
+			if err := recordGoogleHTTP429Foreground(ctx, tx, s.dialect, invocationID, completedAt); err != nil {
+				return integrationmodel.ProviderCallResult{}, fmt.Errorf("record Integration foreground Google HTTP 429 event: %w", err)
+			}
+		}
+		if isGoogleGmailRateLimitCode(code) {
+			if err := recordGoogleGmailRateLimit(ctx, tx, s.dialect, code, invocationID, true, completedAt); err != nil {
+				return integrationmodel.ProviderCallResult{}, fmt.Errorf("record Integration foreground Google Gmail rate-limit event: %w", err)
+			}
+		}
+		if isFeishuRateLimitCode(code) {
+			if err := recordFeishuRateLimit(ctx, tx, s.dialect, invocationID, true, completedAt); err != nil {
+				return integrationmodel.ProviderCallResult{}, fmt.Errorf("record Integration foreground Feishu rate-limit event: %w", err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
 	invocation, readErr := s.GetInvocation(ctx, request.WorkspaceID, invocationID)

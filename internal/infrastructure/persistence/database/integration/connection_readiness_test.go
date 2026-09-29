@@ -59,6 +59,24 @@ func TestConnectionReadinessUsesGrantedScopesAndCurrentCredentialMetadata(t *tes
 		if err != nil || value.Readiness == nil || value.Readiness.State != test.state || value.Readiness.Available != (test.state == "configured") {
 			t.Fatalf("state=%s got=%+v error=%v", test.state, value.Readiness, err)
 		}
+		if test.expiry != "" && value.Readiness.CredentialExpiresAt != test.expiry {
+			t.Fatalf("state=%s expiry=%q want=%q", test.state, value.Readiness.CredentialExpiresAt, test.expiry)
+		}
+	}
+	accessKey := strings.TrimPrefix(connection.SecretRefs["access_token"], "secret:")
+	earliest := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)
+	later := time.Now().Add(4 * time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)
+	for key, expiry := range map[string]string{accessKey: earliest, secretKey: later} {
+		if _, err = store.UpsertSecret(t.Context(), subject.WorkspaceID, key, subject.UserID, sdk.SecretInput{Kind: "oauth_token", ExpiresAt: expiry}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = store.TransitionSecret(t.Context(), subject.WorkspaceID, key, "rotate", subject.UserID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value, err := store.GetConnectionAccount(t.Context(), subject, key)
+	if err != nil || value.Readiness == nil || value.Readiness.CredentialExpiresAt != earliest {
+		t.Fatalf("earliest credential expiry=%+v error=%v", value.Readiness, err)
 	}
 	other := subject
 	other.UserID = "other"

@@ -22,7 +22,8 @@ var refreshStorageFailure = errors.New("synthetic credential storage unavailable
 
 type refreshResultProvider struct {
 	operationsTestProvider
-	succeed bool
+	succeed           bool
+	providerErrorCode string
 }
 
 func (p *refreshResultProvider) Descriptor() connector.ProviderDescriptor {
@@ -41,6 +42,9 @@ func (p *refreshResultProvider) Call(_ context.Context, request connector.CallRe
 	result := connector.CallResult{SecretUpdates: map[string]string{"token": "rotated-token"}}
 	if p.succeed {
 		return result, nil
+	}
+	if p.providerErrorCode != "" {
+		return result, connector.RetryableError(p.providerErrorCode, refreshFollowupFailure)
 	}
 	return result, refreshFollowupFailure
 }

@@ -5,13 +5,15 @@ go 1.26.0
 require (
 	github.com/domainry/domainry-foundation v0.1.41
 	github.com/domainry/domainry-identity-sdk v0.1.18
-	github.com/domainry/domainry-integration-sdk v0.1.13
+	github.com/domainry/domainry-integration-sdk v0.1.14
 	github.com/domainry/domainry-metadata-sdk v0.1.8
 	github.com/domainry/domainry-orm v0.1.32
+	golang.org/x/oauth2 v0.36.0
 	modernc.org/sqlite v1.57.0
 )
 
 require (
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
@@ -20,7 +22,7 @@ require (
 )
 
 require (
-	github.com/domainry/domainry-connector-sdk v0.1.3
+	github.com/domainry/domainry-connector-sdk v0.1.5
 	github.com/domainry/domainry-connectors v0.1.5
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect

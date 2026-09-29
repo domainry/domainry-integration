@@ -150,6 +150,7 @@ type EventMappingRequirement struct {
 	CommandPrefix     string                             `json:"command_prefix,omitempty"`
 	TargetType        string                             `json:"target_type"`
 	WorkflowKey       string                             `json:"workflow_key,omitempty"`
+	AutomationRuleKey string                             `json:"automation_rule_key,omitempty"`
 	ObjectKey         string                             `json:"object_key,omitempty"`
 	ObjectKeyPath     string                             `json:"object_key_path,omitempty"`
 	RecordID          string                             `json:"record_id,omitempty"`
@@ -158,6 +159,7 @@ type EventMappingRequirement struct {
 	ActionKeyPath     string                             `json:"action_key_path,omitempty"`
 	ActionInput       map[string]string                  `json:"action_input,omitempty"`
 	WorkflowInput     map[string]string                  `json:"workflow_input,omitempty"`
+	AutomationInput   map[string]string                  `json:"automation_input,omitempty"`
 	AgentID           string                             `json:"agent_id,omitempty"`
 	ConversationID    string                             `json:"conversation_id,omitempty"`
 	AgentTaskMode     string                             `json:"agent_task_mode,omitempty"`

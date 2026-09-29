@@ -265,6 +265,8 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 	inputPaths := mapping.ActionInput
 	if mapping.TargetType == "workflow" {
 		inputPaths = mapping.WorkflowInput
+	} else if mapping.TargetType == "automation" {
+		inputPaths = mapping.AutomationInput
 	} else if mapping.TargetType == "agent_task" {
 		inputPaths = mapping.AgentInput
 	}
@@ -345,7 +347,7 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 		EventID: event.ID, WorkspaceID: event.WorkspaceID, MappingKey: mapping.Key, MappingRevision: integrationEventMappingRevision(mapping), IdempotencyKey: event.ID + ":" + mapping.Key,
 		Source: integrationsdk.TriggerSource{Provider: event.Provider, EventType: event.EventType, ExternalID: event.ExternalID, ReceivedAt: event.ReceivedAt},
 		Target: integrationsdk.TriggerTarget{
-			Type: mapping.TargetType, WorkflowKey: mapping.WorkflowKey, ObjectKey: objectKey, RecordID: recordID, ActionKey: actionKey,
+			Type: mapping.TargetType, WorkflowKey: mapping.WorkflowKey, AutomationRuleKey: mapping.AutomationRuleKey, ObjectKey: objectKey, RecordID: recordID, ActionKey: actionKey,
 			AgentID: mapping.AgentID, ConversationID: mapping.ConversationID, AgentTaskMode: mapping.AgentTaskMode, RelatedTaskID: relatedTaskID, Input: input,
 		}, Principal: principal,
 	})

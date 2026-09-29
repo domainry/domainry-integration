@@ -285,13 +285,16 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 		return record.Session, err
 	}
 	// Resolve the stable upstream subject and routing keys while the freshly
-	// issued access token is available. A probe failure must not discard a
-	// successfully exchanged refresh token; users can retry the probe later.
+	// issued access token is available. Identity-aware providers must finish this
+	// probe before credentials are persisted: without it, repeated OAuth grants
+	// cannot be distinguished from different upstream accounts.
 	var providerAccountDetails json.RawMessage
+	key := "account_" + record.Session.ID
+	credentialKey := record.Session.ID
 	accountProbe, accountProbeEnabled := provider.(interface{ ProviderAccountProbeEnabled() bool })
 	if tester, ok := provider.(connector.ConnectionTester); ok && accountProbeEnabled && accountProbe.ProviderAccountProbeEnabled() {
 		probeConnection := connector.Connection{
-			Key: "account_" + record.Session.ID, WorkspaceID: subject.WorkspaceID,
+			Key: key, WorkspaceID: subject.WorkspaceID,
 			ConnectorKey: app.ConnectorKey, ProviderKey: app.ProviderKey, Name: record.Name, Status: "active", Config: app.ConnectionConfig,
 		}
 		probe, probeErr := tester.TestConnection(completion, connector.TestConnectionRequest{
@@ -305,9 +308,34 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 		if updated := strings.TrimSpace(probe.SecretUpdates["refresh_token"]); updated != "" {
 			tokens.RefreshToken = updated
 		}
-		if probeErr == nil && probe.Connected {
-			providerAccountDetails = append(json.RawMessage(nil), probe.Details...)
+		if probeErr != nil || !probe.Connected {
+			record.Session.Status = "needs_reauthorization"
+			if classification, _ := connector.ErrorClassificationOf(probeErr); classification == connector.ErrorPermanent {
+				record.Session.Status = "rejected"
+			}
+			if err = s.updateOAuthSession(completion, subject, record, "exchanging"); err != nil {
+				return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth identity result could not be persisted")
+			}
+			return record.Session, nil
 		}
+		providerAccountDetails = append(json.RawMessage(nil), probe.Details...)
+		identity, identityErr := decodeProviderAccountProbe(providerAccountDetails)
+		if identityErr != nil || identity == nil {
+			record.Session.Status = "rejected"
+			if err = s.updateOAuthSession(completion, subject, record, "exchanging"); err != nil {
+				return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth identity result could not be persisted")
+			}
+			return record.Session, nil
+		}
+		key, err = s.providerAccountConnectionKey(completion, subject.WorkspaceID, app.ConnectorKey, app.ProviderKey, identity)
+		if err != nil {
+			record.Session.Status = "rejected"
+			if updateErr := s.updateOAuthSession(completion, subject, record, "exchanging"); updateErr != nil {
+				return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth identity result could not be persisted")
+			}
+			return record.Session, nil
+		}
+		credentialKey = key
 	}
 	// Access and refresh tokens belong to this account. OAuth application client
 	// credentials are referenced once per workspace so rotations take effect for
@@ -327,13 +355,12 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 			"client_secret": oauthApplicationCredentialReference(app.Key, "client_secret"),
 		}
 		for field, value := range map[string]string{"access_token": tokens.AccessToken, "refresh_token": tokens.RefreshToken} {
-			key := record.Session.ID + "_" + field
-			if _, e = tx.UpsertSecret(trusted, subject.WorkspaceID, key, subject.UserID, integrationsdk.SecretInput{Kind: field, Value: value}); e != nil {
+			secretKey := credentialKey + "_" + field
+			if _, e = tx.UpsertSecret(trusted, subject.WorkspaceID, secretKey, subject.UserID, integrationsdk.SecretInput{Kind: field, Value: value}); e != nil {
 				return e
 			}
-			refs[field] = "secret:" + key
+			refs[field] = "secret:" + secretKey
 		}
-		key := "account_" + record.Session.ID
 		config := map[string]any{}
 		for k, v := range app.ConnectionConfig {
 			config[k] = v

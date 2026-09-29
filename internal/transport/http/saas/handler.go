@@ -3,6 +3,7 @@ package saas
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -21,6 +22,10 @@ func NewHandler(binding integrationsdk.Binding, serviceToken string) (http.Handl
 	management, ok := binding.(integrationsdk.ManagementBinding)
 	if !ok || management.Management() == nil {
 		return nil, fmt.Errorf("Integration SaaS Management binding is required")
+	}
+	apiKeys, ok := binding.(integrationsdk.APIKeyAuthenticationBinding)
+	if !ok || apiKeys.APIKeyAuthentication() == nil {
+		return nil, fmt.Errorf("Integration SaaS API key authentication binding is required")
 	}
 	accounts, ok := binding.(integrationsdk.ConnectionAccountsBinding)
 	if !ok || accounts.ConnectionAccounts() == nil {
@@ -42,7 +47,7 @@ func NewHandler(binding integrationsdk.Binding, serviceToken string) (http.Handl
 	if token == "" {
 		return nil, fmt.Errorf("Integration SaaS service token is required")
 	}
-	h := &handler{binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(), accounts: accounts.ConnectionAccounts(), accountAdmin: accountAdmin.ConnectionAccountAdministration(), operations: operations.Operations(), routedWebhooks: routed.RoutedWebhooks(), token: token, mux: http.NewServeMux()}
+	h := &handler{binding: binding, webPush: webPush.WebPushSubscriptions(), management: management.Management(), apiKeys: apiKeys.APIKeyAuthentication(), accounts: accounts.ConnectionAccounts(), accountAdmin: accountAdmin.ConnectionAccountAdministration(), operations: operations.Operations(), routedWebhooks: routed.RoutedWebhooks(), token: token, mux: http.NewServeMux()}
 	if port, ok := binding.(integrationsdk.ConnectionAccountReadsBinding); ok {
 		h.accountReads = port.ConnectionAccountReads()
 	}
@@ -68,6 +73,7 @@ type handler struct {
 	binding             integrationsdk.Binding
 	webPush             integrationsdk.WebPushSubscriptions
 	management          integrationsdk.Management
+	apiKeys             integrationsdk.APIKeyAuthentication
 	accounts            integrationsdk.ConnectionAccounts
 	accountReads        integrationsdk.ConnectionAccountReads
 	accountWrites       integrationsdk.ConnectionAccountWrites
@@ -98,12 +104,34 @@ func (h *handler) register() {
 	h.mux.HandleFunc("POST /integration/v1/deliveries", h.accept)
 	h.mux.HandleFunc("GET /integration/v1/deliveries/{messageID}", h.query)
 	h.mux.HandleFunc("GET /integration/v1/web-push/readiness", h.readiness)
+	h.mux.HandleFunc("POST /integration/v1/api-key-authentication", h.authenticateAPIKey)
 	h.mux.HandleFunc("GET /integration/v1/web-push-subscriptions", h.listWebPush)
 	h.mux.HandleFunc("PUT /integration/v1/web-push-subscriptions/{subscriptionID}", h.upsertWebPush)
 	h.mux.HandleFunc("POST /integration/v1/web-push-subscriptions/{subscriptionID}/revoke", h.revokeWebPush)
 	h.mux.HandleFunc("POST /integration/v1/web-push-subscriptions/cleanup-expired", h.cleanupWebPush)
 	h.registerManagement()
 	h.registerOperations()
+}
+func (h *handler) authenticateAPIKey(w http.ResponseWriter, r *http.Request) {
+	var value struct {
+		Token       string `json:"token"`
+		WorkspaceID string `json:"workspace_id"`
+	}
+	if !decode(w, r, &value) {
+		return
+	}
+	key, err := h.apiKeys.AuthenticateAPIKey(r.Context(), value.Token, value.WorkspaceID)
+	if err != nil {
+		// Credential failures are deliberately indistinguishable to a remote
+		// Runtime and never echo token material or owner-side diagnostics.
+		if errors.Is(err, integrationsdk.ErrAPIKeyInvalid) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "integration.api_key_invalid"})
+			return
+		}
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "integration.api_key_authentication_unavailable"})
+		return
+	}
+	respond(w, key, nil)
 }
 func (h *handler) descriptor(w http.ResponseWriter, r *http.Request) {
 	descriptor := h.binding.Descriptor()

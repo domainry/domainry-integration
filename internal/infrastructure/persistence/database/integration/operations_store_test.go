@@ -235,6 +235,62 @@ func TestOperationsStoreMapsVerifiedEventToFiniteAgentTargetAndCurrentIdentity(t
 	}
 }
 
+func TestOperationsStoreMapsVerifiedEventToFiniteAutomationAndCurrentOwner(t *testing.T) {
+	database, err := sql.Open("sqlite", "file:integration-automation-event?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	rawDialect, _ := ormdialect.New(ormdialect.SQLite)
+	dialect := rawDialect.WithSchema("")
+	migrations, err := SchemaMigrations("sqlite", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations {
+		for _, statement := range migration.Statements {
+			if _, err = database.ExecContext(t.Context(), statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").
+		Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
+		Values("connection-automation", "primary", "workspace-a", "crm", "probe", "Primary", "active", `{}`, `{"token":"secret:token"}`, "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z")).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = database.ExecContext(t.Context(), insert, args...); err != nil {
+		t.Fatal(err)
+	}
+	provider := &operationsTestProvider{}
+	providers := deliveryTestProviders{provider: provider}
+	delivery := NewDeliveryStore(database, dialect, providers, deliveryTestSecrets{})
+	trigger := &operationsTriggerProbe{}
+	definitions := newTestDefinitionStore()
+	store := NewOperationsStore(database, dialect, delivery, trigger, definitions)
+	requirements := NewRequirementsStore(database, dialect, providers, definitions)
+	if err = requirements.SynchronizeEventMappings(t.Context(), []integrationmodel.EventMappingRequirement{{
+		Key: "contact-automation", WorkspaceID: "workspace-a", Provider: "probe", ConnectionKey: "primary", EventType: "contact.changed", TargetType: "automation",
+		AutomationRuleKey: "contact.webhook", AutomationInput: map[string]string{"contact_name": "contact.name"},
+		EventFields: []integrationmodel.EventFieldRequirement{{Path: "contact.name", Type: "text"}}, Payload: map[string]any{"source": "webhook"}, Enabled: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	webhook := integrationmodel.WebhookRequest{WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "primary", Body: []byte(`{}`), ReceivedAt: time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)}
+	receipt, err := store.AcceptWebhook(t.Context(), webhook)
+	if err != nil || receipt.Event.Status != "processed" || trigger.calls != 1 {
+		t.Fatalf("receipt=%+v trigger=%+v err=%v", receipt, trigger, err)
+	}
+	request := trigger.request
+	if request.Target.Type != "automation" || request.Target.AutomationRuleKey != "contact.webhook" || request.Target.Input["contact_name"] != "Ada" || request.Target.Input["source"] != "webhook" {
+		t.Fatalf("Automation trigger target=%#v", request.Target)
+	}
+	if request.Principal.OwnerUserID != "admin" || request.Principal.ActorID != "" || len(request.MappingRevision) != 64 || request.Source.ExternalID != "external-event-1" || request.Source.ReceivedAt != webhook.ReceivedAt.Format(time.RFC3339Nano) {
+		t.Fatalf("Automation trigger provenance=%#v principal=%#v", request, request.Principal)
+	}
+}
+
 func TestOperationsStoreSensitiveCallNeverPersistsPlaintext(t *testing.T) {
 	database, err := sql.Open("sqlite", "file:integration-sensitive-operations?mode=memory&cache=shared")
 	if err != nil {

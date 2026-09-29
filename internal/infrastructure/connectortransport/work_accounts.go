@@ -14,7 +14,12 @@ import (
 	connector "github.com/domainry/domainry-connector-sdk"
 )
 
-const maximumBytes int64 = 4 << 20
+const (
+	maximumRequestBytes  int64 = 4 << 20
+	maximumResponseBytes int64 = 40 << 20
+	// maximumBytes remains the separate public-web request/response ceiling.
+	maximumBytes = maximumRequestBytes
+)
 
 type WorkAccounts struct{ client *http.Client }
 
@@ -51,7 +56,7 @@ func (t *WorkAccounts) RoundTripHTTP(ctx context.Context, input connector.HTTPRe
 		return connector.HTTPResponse{}, err
 	}
 	invalid := errors.New("Integration work-account request is invalid")
-	if int64(len(input.Body)) > maximumBytes || len(input.SecretForm) > 0 && len(input.SecretJSON) > 0 {
+	if int64(len(input.Body)) > maximumRequestBytes || len(input.SecretForm) > 0 && len(input.SecretJSON) > 0 {
 		return connector.HTTPResponse{}, invalid
 	}
 	query, err := url.ParseQuery(u.RawQuery)
@@ -115,7 +120,7 @@ func (t *WorkAccounts) RoundTripHTTP(ctx context.Context, input connector.HTTPRe
 			return connector.HTTPResponse{}, invalid
 		}
 	}
-	if int64(len(body)) > maximumBytes {
+	if int64(len(body)) > maximumRequestBytes {
 		return connector.HTTPResponse{}, invalid
 	}
 	request, err := http.NewRequestWithContext(ctx, input.Method, u.String(), bytes.NewReader(body))
@@ -131,8 +136,8 @@ func (t *WorkAccounts) RoundTripHTTP(ctx context.Context, input connector.HTTPRe
 	}
 	defer response.Body.Close()
 	limit := input.MaxResponseBytes
-	if limit <= 0 || limit > maximumBytes {
-		limit = maximumBytes
+	if limit <= 0 || limit > maximumResponseBytes {
+		limit = maximumResponseBytes
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil || int64(len(data)) > limit {
