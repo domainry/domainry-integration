@@ -28,6 +28,12 @@ func TestObserverReadsOfficialProjectQuotaWithoutTreatingPerUserLimitAsAggregate
 				timeSeriesFixture("gmail.googleapis.com/default", "requestsPerMinutePerUser", "global", "20", "2026-09-29T01:00:00Z"),
 			}})
 		case strings.Contains(filter, "quota/rate/net_usage"):
+			if got := request.URL.Query().Get("interval.endTime"); got != "2026-09-29T02:05:00Z" {
+				t.Fatalf("usage interval end=%q want latency-safe minute", got)
+			}
+			if got := request.URL.Query().Get("interval.startTime"); got != "2026-09-28T01:05:00Z" {
+				t.Fatalf("usage interval start=%q want cutoff-relative bound", got)
+			}
 			_ = json.NewEncoder(response).Encode(map[string]any{"timeSeries": []any{
 				usageSeriesFixture("gmail.googleapis.com/default", "global", []map[string]string{
 					{"value": "40", "end": "2026-09-29T02:05:00Z"},

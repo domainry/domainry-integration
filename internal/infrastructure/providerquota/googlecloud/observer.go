@@ -173,7 +173,13 @@ func (o *Observer) ObserveProviderQuota(ctx context.Context, now time.Time) (int
 		if err != nil {
 			return integrationsdk.ProviderQuotaSnapshot{}, err
 		}
-		usageSeries, err := o.listTimeSeries(ctx, service, "serviceruntime.googleapis.com/quota/rate/net_usage", now.Add(-25*time.Hour), now)
+		// Anchor Google's ALIGN_SUM buckets to the same latency-safe minute used
+		// below. Cloud Monitoring aligns rate buckets to the request interval end;
+		// using wall-clock seconds here produces points such as 16:00:42-16:01:42,
+		// which are then (correctly) rejected by a 16:01:00 safe cutoff even though
+		// the underlying 16:00 minute is complete. Querying through the cutoff keeps
+		// the official 60-second bucket and the evaluation window identical.
+		usageSeries, err := o.listTimeSeries(ctx, service, "serviceruntime.googleapis.com/quota/rate/net_usage", usageDataThrough.Add(-25*time.Hour), usageDataThrough)
 		if err != nil {
 			return integrationsdk.ProviderQuotaSnapshot{}, err
 		}
