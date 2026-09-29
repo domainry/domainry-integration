@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	connector "github.com/domainry/domainry-connector-sdk"
 	model "github.com/domainry/domainry-integration/internal/domain/integration/model"
 )
 
@@ -64,6 +65,14 @@ func (s *AccountReadService) ReadConnectionAccount(ctx context.Context, subject 
 		ReadExpectation: &model.ProviderReadExpectation{ConnectionUpdatedAt: access.Source.AccountUpdatedAt, ProviderKey: access.Source.ProviderKey, ContractSHA256: access.Source.ContractSHA256},
 	})
 	if err != nil {
+		if classification, classified := connector.ErrorClassificationOf(err); classified {
+			if code, coded := connector.ProviderErrorCodeOf(err); coded {
+				// ProviderError exposes only the Connector-validated machine code.
+				// Rebuild it without the wrapped cause so provider response bodies,
+				// credentials and customer data never cross the account-read boundary.
+				return model.ConnectionAccountReadResult{}, connector.NewProviderError(classification, code, nil)
+			}
+		}
 		return model.ConnectionAccountReadResult{}, fmt.Errorf("Integration account read failed")
 	}
 	current, err := s.AuthorizeConnectionAccountRead(ctx, subject, key, request.OperationContract())

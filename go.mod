@@ -22,7 +22,7 @@ require (
 )
 
 require (
-	github.com/domainry/domainry-connector-sdk v0.1.5
+	github.com/domainry/domainry-connector-sdk v0.1.6
 	github.com/domainry/domainry-connectors v0.1.5
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
