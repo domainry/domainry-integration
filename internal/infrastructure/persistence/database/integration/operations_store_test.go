@@ -39,8 +39,9 @@ func (p *operationsTestProvider) Call(_ context.Context, request connector.CallR
 func (*operationsTestProvider) VerifyWebhook(_ context.Context, request connector.VerifyWebhookRequest) (connector.VerifiedWebhook, error) {
 	return connector.VerifiedWebhook{
 		EventType: "contact.changed", ExternalID: "external-event-1",
-		Payload:  json.RawMessage(`{"contact":{"id":"contact-1","name":"Ada"},"command":"contact.sync"}`),
-		Security: &connector.WebhookSecurityEvidence{SignatureVerified: request.Secrets["token"] == "plain-token"},
+		Payload:          json.RawMessage(`{"contact":{"id":"contact-1","name":"Ada"},"command":"contact.sync"}`),
+		Security:         &connector.WebhookSecurityEvidence{SignatureVerified: request.Secrets["token"] == "plain-token", Nonce: "provider-nonce-1"},
+		ExternalIdentity: &connector.WebhookExternalIdentity{Subject: "contact-1", Name: "Ada"},
 	}, nil
 }
 
@@ -153,12 +154,23 @@ func TestOperationsStoreOwnsCallWebhookMappingAndRuntimeReceipt(t *testing.T) {
 	webhook := integrationmodel.WebhookRequest{WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "primary", Body: []byte(`{}`), ReceivedAt: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)}
 	for attempt := 0; attempt < 2; attempt++ {
 		receipt, err := store.AcceptWebhook(t.Context(), webhook)
-		if err != nil || receipt.Event.Status != "processed" || receipt.Event.Execution == nil || receipt.Event.Execution.ExecutionID != "action-1" {
+		if err != nil || receipt.Event.Status != "received" || receipt.Event.Execution != nil {
 			t.Fatalf("attempt=%d receipt=%#v err=%v", attempt, receipt, err)
 		}
 	}
+	if trigger.calls != 0 {
+		t.Fatalf("webhook acceptance must not synchronously trigger Runtime: calls=%d", trigger.calls)
+	}
+	processed, err := store.ProcessDueEvents(t.Context(), "worker-1", 10)
+	if err != nil || processed != 1 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
 	if trigger.calls != 1 {
 		t.Fatalf("trigger calls=%d, want 1", trigger.calls)
+	}
+	event, err := store.GetEvent(t.Context(), "workspace-a", "event:"+oauthHash("workspace-a\x00probe\x00external-event-1"))
+	if err != nil || event.Status != "processed" || event.Execution == nil || event.Execution.ExecutionID != "action-1" {
+		t.Fatalf("event=%#v err=%v", event, err)
 	}
 	var executionJSON string
 	if err := database.QueryRowContext(t.Context(), `SELECT execution_json FROM _integration_events WHERE workspace_id=? LIMIT 1`, "workspace-a").Scan(&executionJSON); err != nil || !strings.Contains(executionJSON, `"completed_at":1788134400000`) {
@@ -225,8 +237,12 @@ func TestOperationsStoreMapsVerifiedEventToFiniteAgentTargetAndCurrentIdentity(t
 	}
 	webhook := integrationmodel.WebhookRequest{WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "primary", Body: []byte(`{}`), ReceivedAt: time.Date(2026, 9, 16, 9, 30, 0, 0, time.UTC)}
 	receipt, err := store.AcceptWebhook(t.Context(), webhook)
-	if err != nil || receipt.Event.Status != "processed" || trigger.calls != 1 {
+	if err != nil || receipt.Event.Status != "received" || trigger.calls != 0 {
 		t.Fatalf("receipt=%+v trigger=%+v err=%v", receipt, trigger, err)
+	}
+	processed, err := store.ProcessDueEvents(t.Context(), "worker-agent", 10)
+	if err != nil || processed != 1 || trigger.calls != 1 {
+		t.Fatalf("processed=%d trigger=%+v err=%v", processed, trigger, err)
 	}
 	request := trigger.request
 	if request.Target.Type != "agent_task" || request.Target.AgentID != "support-agent" || request.Target.ConversationID != "conversation-support" || request.Target.AgentTaskMode != "start" || request.Target.RelatedTaskID != "" ||
@@ -279,8 +295,12 @@ func TestOperationsStoreMapsVerifiedEventToFiniteAutomationAndCurrentOwner(t *te
 	}
 	webhook := integrationmodel.WebhookRequest{WorkspaceID: "workspace-a", ConnectorKey: "crm", ConnectionKey: "primary", Body: []byte(`{}`), ReceivedAt: time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)}
 	receipt, err := store.AcceptWebhook(t.Context(), webhook)
-	if err != nil || receipt.Event.Status != "processed" || trigger.calls != 1 {
+	if err != nil || receipt.Event.Status != "received" || trigger.calls != 0 {
 		t.Fatalf("receipt=%+v trigger=%+v err=%v", receipt, trigger, err)
+	}
+	processed, err := store.ProcessDueEvents(t.Context(), "worker-automation", 10)
+	if err != nil || processed != 1 || trigger.calls != 1 {
+		t.Fatalf("processed=%d trigger=%+v err=%v", processed, trigger, err)
 	}
 	request := trigger.request
 	if request.Target.Type != "automation" || request.Target.AutomationRuleKey != "contact.webhook" || request.Target.Input["contact_name"] != "Ada" || request.Target.Input["source"] != "webhook" {

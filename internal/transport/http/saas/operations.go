@@ -88,7 +88,7 @@ func (h *handler) acceptPublicWebhook(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(value.Challenge))
 		return
 	}
-	writeJSON(w, http.StatusAccepted, value)
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (h *handler) acceptPublicRoutedWebhook(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +115,7 @@ func (h *handler) acceptPublicRoutedWebhook(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusOK, map[string]string{"challenge": value.Challenge})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, value)
+	writeJSON(w, http.StatusOK, value)
 }
 
 func (h *handler) listEvents(w http.ResponseWriter, r *http.Request) {

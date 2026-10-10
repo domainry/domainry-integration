@@ -271,7 +271,7 @@ func (h *handler) webhook(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(receipt.Challenge))
 		return
 	}
-	writeJSON(w, http.StatusAccepted, receipt)
+	writeJSON(w, http.StatusOK, receipt)
 }
 
 func (h *handler) routedWebhook(w http.ResponseWriter, r *http.Request) {
@@ -298,7 +298,7 @@ func (h *handler) routedWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"challenge": receipt.Challenge})
 		return
 	}
-	writeJSON(w, http.StatusAccepted, receipt)
+	writeJSON(w, http.StatusOK, receipt)
 }
 
 func requestPrincipal(r *http.Request) (identitysdk.Principal, bool) {

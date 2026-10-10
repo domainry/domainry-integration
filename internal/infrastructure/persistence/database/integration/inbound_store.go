@@ -70,15 +70,9 @@ func (s *OperationsStore) AcceptWebhook(ctx context.Context, request integration
 			return integrationmodel.WebhookReceipt{}, err
 		}
 	}
-	event, inserted, err := s.acceptEvent(ctx, request, connection.ProviderKey, verified)
+	event, _, err := s.acceptEvent(ctx, request, connection.ProviderKey, verified)
 	if err != nil {
 		return integrationmodel.WebhookReceipt{}, err
-	}
-	if inserted {
-		event, err = s.processEvent(ctx, event, verified.ExternalIdentity)
-		if err != nil {
-			return integrationmodel.WebhookReceipt{Event: event, Challenge: verified.Challenge, Format: verified.ChallengeFormat}, err
-		}
 	}
 	return integrationmodel.WebhookReceipt{Event: event, Challenge: verified.Challenge, Format: verified.ChallengeFormat}, nil
 }
@@ -91,6 +85,14 @@ func (s *OperationsStore) acceptWebhookNonce(ctx context.Context, request integr
 		return err
 	}
 	if _, err := s.database.ExecContext(ctx, statement, args...); err != nil {
+		var existing string
+		lookup, lookupArgs, lookupErr := query.NewSelectBuilder(s.dialect, "_integration_webhook_nonces").Columns("id").Where(query.Equal("id", "nonce:"+hex.EncodeToString(digest[:]))).Limit(1).Build()
+		if lookupErr == nil {
+			lookupErr = s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&existing)
+		}
+		if lookupErr == nil && existing != "" {
+			return nil
+		}
 		return fmt.Errorf("Integration webhook nonce was already used: %w", err)
 	}
 	return nil
@@ -318,6 +320,16 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 	}
 	if external != nil {
 		identitySubject, identityName = strings.TrimSpace(external.Subject), strings.TrimSpace(external.Name)
+	}
+	if identitySubject == "" {
+		if value, ok := integrationPayloadPath(payload, "_integration_context.verified_external_subject"); ok {
+			identitySubject = strings.TrimSpace(fmt.Sprint(value))
+		}
+	}
+	if identityName == "" {
+		if value, ok := integrationPayloadPath(payload, "_integration_context.verified_external_name"); ok {
+			identityName = strings.TrimSpace(fmt.Sprint(value))
+		}
 	}
 	if identitySubject == "" && strings.TrimSpace(mapping.ExternalIdentity.SubjectPath) != "" {
 		if value, ok := integrationPayloadPath(payload, mapping.ExternalIdentity.SubjectPath); ok {

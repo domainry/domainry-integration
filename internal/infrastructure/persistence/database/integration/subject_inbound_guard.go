@@ -40,6 +40,9 @@ func verifiedInboundPayload(raw json.RawMessage, external *connector.WebhookExte
 		contextValue = map[string]any{}
 	}
 	contextValue["verified_external_subject"] = strings.TrimSpace(external.Subject)
+	if name := strings.TrimSpace(external.Name); name != "" {
+		contextValue["verified_external_name"] = name
+	}
 	payload["_integration_context"] = contextValue
 	return json.Marshal(payload)
 }
