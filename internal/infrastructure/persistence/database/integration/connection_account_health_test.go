@@ -39,6 +39,21 @@ func TestProviderTaskHealthSeparatesFirstRunDelayAndFailure(t *testing.T) {
 	}
 }
 
+func TestProviderTaskHealthDoesNotTreatOneSuccessfulPageAsCompletedInitialization(t *testing.T) {
+	now := time.Date(2026, 9, 27, 7, 0, 0, 0, time.UTC)
+	task := integrationsdk.ConnectionAccountBackgroundTask{
+		Status: "ready", DueAt: timestampString(now.Add(time.Minute).UnixMilli()), LastSuccessAt: timestampString(now.UnixMilli()),
+		Progress: &integrationsdk.ConnectionAccountBackgroundProgress{Phase: "bootstrap.inbox", CompletedUnits: 20},
+	}
+	if got := providerTaskHealth(task, now); got != integrationsdk.ConnectionAccountHealthInitializing {
+		t.Fatalf("health=%q", got)
+	}
+	task.Progress.InitializationComplete = true
+	if got := providerTaskHealth(task, now); got != integrationsdk.ConnectionAccountHealthHealthy {
+		t.Fatalf("completed health=%q", got)
+	}
+}
+
 func TestConnectionHealthUsesWorstVisibleTaskWithoutCallingReadyHealthy(t *testing.T) {
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 	account := integrationsdk.ConnectionAccount{Status: "active", Background: []integrationsdk.ConnectionAccountBackgroundTask{

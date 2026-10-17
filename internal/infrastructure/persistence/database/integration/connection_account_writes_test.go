@@ -19,20 +19,34 @@ import (
 )
 
 type accountWriteProvider struct {
-	calls    atomic.Int64
-	during   func(connector.CallRequest)
-	callErr  error
-	response json.RawMessage
-	effect   connector.OperationEffect
-	mode     connector.OperationMode
-	declared bool
-	updates  map[string]string
+	calls                atomic.Int64
+	reconcileCalls       atomic.Int64
+	during               func(connector.CallRequest)
+	callErr              error
+	response             json.RawMessage
+	reconciliation       connector.ReconciliationMode
+	reconciliationResult connector.ReconcileResult
+	reconciliationErr    error
+	effect               connector.OperationEffect
+	mode                 connector.OperationMode
+	declared             bool
+	updates              map[string]string
 }
 
 func (p *accountWriteProvider) Descriptor() connector.ProviderDescriptor {
 	return connector.ProviderDescriptor{ConnectorKey: "crm", ProviderKey: "probe", SecretFields: []connector.SecretField{{Key: "token", Required: true}}, Operations: []connector.OperationDescriptor{
-		{ConnectorKey: "crm", ProviderKey: "probe", Key: mailwrite.SendOperationKey, ContractSHA256: mailwrite.OperationSHA256(mailwrite.SendOperationKey), Mode: p.mode, Reliability: connector.ReliabilityContract{Effect: p.effect}},
+		{ConnectorKey: "crm", ProviderKey: "probe", Key: mailwrite.SendOperationKey, ContractSHA256: mailwrite.OperationSHA256(mailwrite.SendOperationKey), Mode: p.mode, Reliability: connector.ReliabilityContract{Effect: p.effect, Idempotency: connector.IdempotencyContract{Strategy: connector.IdempotencyNatural}, Reconciliation: p.reconciliation, Compensation: connector.CompensationContract{Mode: connector.CompensationNone}}},
 	}}
+}
+
+func (p *accountWriteProvider) Reconcile(_ context.Context, request connector.ReconcileRequest) (connector.ReconcileResult, error) {
+	p.reconcileCalls.Add(1)
+	result := p.reconciliationResult
+	if result.Outcome == connector.ReconciliationSucceeded && result.Result == nil {
+		raw, _ := json.Marshal(mailwrite.Result{RequestRef: request.RequestRef, Status: "accepted", MessageID: "sent-1", ThreadID: "thread-1", Delivery: "unknown", AcceptedAt: "2026-09-12T00:00:01Z"})
+		result.Result = &connector.CallResult{Payload: raw}
+	}
+	return result, p.reconciliationErr
 }
 func (p *accountWriteProvider) OAuthOperationScopes(key string) ([][]string, bool) {
 	return [][]string{{"mail.send"}}, p.declared && key == mailwrite.SendOperationKey
@@ -262,6 +276,28 @@ func TestAccountWriteFailureAndInvalidReceiptsAreNeverReplayed(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAccountWriteUncertainResultUsesReadOnlyProviderReconciliation(t *testing.T) {
+	_, _, p, service, subject, request := accountWriteFixture(t)
+	p.callErr = connector.UncertainError("test.lost", errors.New("private transport failure"))
+	p.reconciliation = connector.ReconciliationProviderLookup
+	p.reconciliationResult = connector.ReconcileResult{Outcome: connector.ReconciliationNotFound}
+	out, err := service.WriteConnectionAccount(t.Context(), subject, "shared", request)
+	if err != nil || out.Status != model.AccountWriteUncertain || p.calls.Load() != 1 || p.reconcileCalls.Load() != 1 {
+		t.Fatalf("initial result=%+v err=%v calls=%d reconcile=%d", out, err, p.calls.Load(), p.reconcileCalls.Load())
+	}
+	// The provider's sent index becomes visible later. Reading the same frozen
+	// request reconciles it without a second mutation call.
+	p.reconciliationResult = connector.ReconcileResult{Outcome: connector.ReconciliationSucceeded}
+	out, err = service.ReadConnectionAccountWriteReceipt(t.Context(), subject, "shared", request)
+	if err != nil || out.Status != model.AccountWriteSucceeded || len(out.Receipt) == 0 || p.calls.Load() != 1 || p.reconcileCalls.Load() != 2 {
+		t.Fatalf("reconciled result=%+v err=%v calls=%d reconcile=%d", out, err, p.calls.Load(), p.reconcileCalls.Load())
+	}
+	again, err := service.ReadConnectionAccountWriteReceipt(t.Context(), subject, "shared", request)
+	if err != nil || again.Status != model.AccountWriteSucceeded || p.calls.Load() != 1 || p.reconcileCalls.Load() != 2 {
+		t.Fatalf("stable receipt=%+v err=%v calls=%d reconcile=%d", again, err, p.calls.Load(), p.reconcileCalls.Load())
 	}
 }
 

@@ -94,7 +94,7 @@ type providerTaskCandidate struct {
 	id, workspaceID, connectorKey, providerKey, connectionKey, taskKey string
 	dueAt, leaseExpiresAt                                              int64
 	stateVersion, attemptCount                                         int
-	payload, status                                                    string
+	payload, progress, status                                          string
 	fencingToken, wakeSequence                                         int64
 }
 
@@ -229,7 +229,7 @@ func (s *WorkerStore) listFairProviderTaskCandidates(ctx context.Context, now ti
 	groups := make([][]providerTaskCandidate, len(workspaces))
 	for index, workspaceID := range workspaces {
 		statement, values, buildErr := query.NewSelectBuilder(s.dialect, providerRunTable).
-			Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "payload_json", "status", "attempt_count", "fencing_token", "wake_sequence", "due_at", "lease_expires_at").
+			Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "payload_json", "progress_json", "status", "attempt_count", "fencing_token", "wake_sequence", "due_at", "lease_expires_at").
 			Where(query.And(dueProviderTaskPredicate(now), query.Equal("workspace_id", workspaceID))).
 			OrderBy(query.Ascending("due_at"), query.Ascending("connection_key"), query.Ascending("task_key")).Limit(perWorkspace).Build()
 		if buildErr != nil {
@@ -241,9 +241,13 @@ func (s *WorkerStore) listFairProviderTaskCandidates(ctx context.Context, now ti
 		}
 		for workspaceRows.Next() {
 			var value providerTaskCandidate
-			if scanErr := workspaceRows.Scan(&value.id, &value.workspaceID, &value.connectorKey, &value.providerKey, &value.connectionKey, &value.taskKey, &value.stateVersion, &value.payload, &value.status, &value.attemptCount, &value.fencingToken, &value.wakeSequence, &value.dueAt, &value.leaseExpiresAt); scanErr != nil {
+			var progress sql.NullString
+			if scanErr := workspaceRows.Scan(&value.id, &value.workspaceID, &value.connectorKey, &value.providerKey, &value.connectionKey, &value.taskKey, &value.stateVersion, &value.payload, &progress, &value.status, &value.attemptCount, &value.fencingToken, &value.wakeSequence, &value.dueAt, &value.leaseExpiresAt); scanErr != nil {
 				_ = workspaceRows.Close()
 				return nil, scanErr
+			}
+			if progress.Valid {
+				value.progress = progress.String
 			}
 			groups[index] = append(groups[index], value)
 		}
@@ -373,7 +377,11 @@ func (s *WorkerStore) commitProviderTaskResult(ctx context.Context, candidate pr
 		dueAt = now.Add(5 * time.Minute)
 	}
 	newWake := query.GreaterThan("wake_sequence", candidate.wakeSequence)
-	update, args, err := query.NewUpdateBuilder(s.dialect, providerRunTable).Set("payload_json", string(result.State)).Set("status", "ready").
+	progressJSON, err := providerTaskProgressJSON(candidate.progress, result.Progress)
+	if err != nil {
+		return err
+	}
+	update, args, err := query.NewUpdateBuilder(s.dialect, providerRunTable).Set("payload_json", string(result.State)).Set("progress_json", progressJSON).Set("status", "ready").
 		SetExpression("due_at", query.CaseWhen(newWake, now.UnixMilli()).Else(dueAt.UTC().UnixMilli())).
 		Set("last_error_code", "").Set("attempt_count", 0).Set("last_success_at", now.UnixMilli()).Set("lease_owner", "").Set("lease_expires_at", int64(0)).Set("updated_at", now.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, providerRunTable, candidate.id), query.And(query.Equal("run_kind", providerRunKindState), query.Equal("id", candidate.id), query.Equal("lease_owner", s.workerID), query.Equal("fencing_token", candidate.fencingToken+1)))).Build()
 	if err != nil {
@@ -424,6 +432,36 @@ func (s *WorkerStore) commitProviderTaskResult(ctx context.Context, candidate pr
 		}
 	}
 	return tx.Commit()
+}
+
+func providerTaskProgressJSON(previousJSON string, next *connector.BackgroundProgress) (string, error) {
+	previousJSON = strings.TrimSpace(previousJSON)
+	if previousJSON == "" {
+		previousJSON = `{}`
+	}
+	if next == nil {
+		return previousJSON, nil
+	}
+	if err := next.Validate(); err != nil {
+		return "", err
+	}
+	if previousJSON != `{}` {
+		var previous connector.BackgroundProgress
+		if err := json.Unmarshal([]byte(previousJSON), &previous); err != nil || previous.Validate() != nil {
+			return "", fmt.Errorf("Integration Provider task stored progress is invalid")
+		}
+		if previous.InitializationComplete && !next.InitializationComplete {
+			return "", fmt.Errorf("Integration Provider task initialization progress cannot regress")
+		}
+		if next.CompletedUnits < previous.CompletedUnits {
+			return "", fmt.Errorf("Integration Provider task completed units cannot decrease")
+		}
+	}
+	encoded, err := json.Marshal(next)
+	if err != nil {
+		return "", fmt.Errorf("encode Integration Provider task progress: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func providerOperationForWorker(registry modulehost.ProviderRegistry, connectorKey, providerKey, operationKey string) (connector.OperationDescriptor, bool) {

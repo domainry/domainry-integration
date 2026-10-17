@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,24 @@ import (
 )
 
 type providerCapacityTestProvider struct{}
+
+func TestProviderTaskProgressIsMonotonicAndOptionalSnapshotsArePreserved(t *testing.T) {
+	previous := `{"phase":"bootstrap.inbox","unit":"message","completed_units":20,"initialization_complete":false}`
+	if got, err := providerTaskProgressJSON(previous, nil); err != nil || got != previous {
+		t.Fatalf("preserved progress=%s err=%v", got, err)
+	}
+	if _, err := providerTaskProgressJSON(previous, &connector.BackgroundProgress{Phase: "bootstrap.inbox", Unit: "message", CompletedUnits: 19}); err == nil {
+		t.Fatal("decreasing progress was accepted")
+	}
+	completed := &connector.BackgroundProgress{Phase: "ready", Unit: "message", CompletedUnits: 20, InitializationComplete: true}
+	encoded, err := providerTaskProgressJSON(previous, completed)
+	if err != nil || !strings.Contains(encoded, `"initialization_complete":true`) {
+		t.Fatalf("completed progress=%s err=%v", encoded, err)
+	}
+	if _, err = providerTaskProgressJSON(encoded, &connector.BackgroundProgress{Phase: "bootstrap.inbox", Unit: "message", CompletedUnits: 21}); err == nil {
+		t.Fatal("completed initialization regressed")
+	}
+}
 
 func (*providerCapacityTestProvider) Descriptor() connector.ProviderDescriptor {
 	return connector.ProviderDescriptor{ConnectorKey: "crm", ProviderKey: "capacity", ProviderRevision: "1.0.0"}
@@ -24,7 +43,7 @@ func (*providerCapacityTestProvider) BackgroundTasks(connector.Connection) []con
 	return []connector.BackgroundTaskDescriptor{{Key: "sync", StateVersion: 1}, {Key: "watch", StateVersion: 1}}
 }
 func (*providerCapacityTestProvider) ProcessBackground(context.Context, connector.BackgroundRequest) (connector.BackgroundResult, error) {
-	return connector.BackgroundResult{State: json.RawMessage(`{}`), NextDueAt: time.Now().UTC().Add(time.Hour)}, nil
+	return connector.BackgroundResult{State: json.RawMessage(`{}`), NextDueAt: time.Now().UTC().Add(time.Hour), Progress: &connector.BackgroundProgress{Phase: "bootstrap.records", Unit: "record", CompletedUnits: 3}}, nil
 }
 
 type concurrentProviderCapacityTestProvider struct {
@@ -190,13 +209,13 @@ func TestOwnedFailedProviderRunRetryIsClaimedByWorker(t *testing.T) {
 	if processed, err := worker.ProcessDueProviderTasks(t.Context(), 10); err != nil || processed < 1 {
 		t.Fatalf("retried run not processed: processed=%d err=%v", processed, err)
 	}
-	var status string
+	var status, progressJSON string
 	var lastSuccessAt int64
-	if err := database.QueryRowContext(t.Context(), "SELECT status,last_success_at FROM _integration_provider_runs WHERE workspace_id=? AND run_kind=? AND connection_key=? AND run_key=?", "workspace-a", providerRunKindState, "personal-a", "sync").Scan(&status, &lastSuccessAt); err != nil {
+	if err := database.QueryRowContext(t.Context(), "SELECT status,last_success_at,progress_json FROM _integration_provider_runs WHERE workspace_id=? AND run_kind=? AND connection_key=? AND run_key=?", "workspace-a", providerRunKindState, "personal-a", "sync").Scan(&status, &lastSuccessAt, &progressJSON); err != nil {
 		t.Fatal(err)
 	}
-	if status != "ready" || lastSuccessAt == 0 {
-		t.Fatalf("worker did not commit retried run: status=%q last_success_at=%d", status, lastSuccessAt)
+	if status != "ready" || lastSuccessAt == 0 || !strings.Contains(progressJSON, `"phase":"bootstrap.records"`) || !strings.Contains(progressJSON, `"completed_units":3`) {
+		t.Fatalf("worker did not commit retried run: status=%q last_success_at=%d progress=%s", status, lastSuccessAt, progressJSON)
 	}
 }
 

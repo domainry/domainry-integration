@@ -98,7 +98,7 @@ var subjectSpecs = []subjectSpec{
 	{table: "_integration_provider_account_routes", status: "status", erase: true},
 	{table: "_integration_provider_connection_leases", erase: true},
 	{table: "_integration_provider_wake_receipts", erase: true},
-	{table: "_integration_provider_runs", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "status": "cancelled", "lease_owner": "", "lease_expires_at": int64(0), "due_at": int64(0), "last_error_code": "integration.subject_erased"}},
+	{table: "_integration_provider_runs", status: "status", busy: []string{"processing", "running"}, token: true, values: map[string]any{"payload_json": "{}", "progress_json": "{}", "status": "cancelled", "lease_owner": "", "lease_expires_at": int64(0), "due_at": int64(0), "last_error_code": "integration.subject_erased"}},
 	{table: "_integration_webhook_subscriptions", status: "status", values: map[string]any{"name": "", "description": "", "event_types_json": "[]", "created_by": "anonymous", "status": "disabled"}},
 	{table: "_integration_oauth_sessions", status: "status", busy: []string{"exchanging"}, erase: true},
 	{table: "_integration_web_push_subscriptions", status: "status", erase: true},

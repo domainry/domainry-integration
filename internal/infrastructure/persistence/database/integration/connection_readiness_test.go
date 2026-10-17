@@ -25,6 +25,9 @@ func TestConnectionReadinessUsesGrantedScopesAndCurrentCredentialMetadata(t *tes
 	if len(ready.GrantedScopes) != 1 || ready.GrantedScopes[0] != "read" {
 		t.Fatalf("requested write scope mistaken for grant: %+v", ready)
 	}
+	if len(ready.AvailableOperations) != 1 || ready.AvailableOperations[0] != "lookup" {
+		t.Fatalf("available operations do not reflect the provider contract and actual grant: %+v", ready)
+	}
 	// Never exchange, refresh or probe as a side effect of catalog queries.
 	if provider.calls != 1 {
 		t.Fatal("readiness caused network I/O")

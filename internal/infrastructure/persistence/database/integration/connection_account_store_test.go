@@ -41,7 +41,7 @@ func TestConnectionAccountBackgroundProjectionIsOwnerScopedAndSecretFree(t *test
 		"obsolete-run", "workspace-a", providerRunKindState, "old_sync", "crm", "probe", "personal-a", "old_sync", 1, "", "", `{}`, "cancelled", "", 0, int64(0), "", int64(0), 0, now, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.database.ExecContext(t.Context(), "UPDATE _integration_provider_runs SET last_success_at=? WHERE workspace_id=? AND run_kind=? AND connection_key=?", now-60_000, "workspace-a", providerRunKindState, "personal-a"); err != nil {
+	if _, err := store.database.ExecContext(t.Context(), "UPDATE _integration_provider_runs SET last_success_at=?,progress_json=? WHERE workspace_id=? AND run_kind=? AND connection_key=?", now-60_000, `{"phase":"bootstrap.inbox","unit":"message","completed_units":40,"initialization_complete":false}`, "workspace-a", providerRunKindState, "personal-a"); err != nil {
 		t.Fatal(err)
 	}
 	subject := integrationsdk.ConnectionAccountSubject{WorkspaceID: "workspace-a", UserID: "user-a", Access: integrationsdk.ConnectionAccountAccess{Personal: true}}
@@ -53,6 +53,9 @@ func TestConnectionAccountBackgroundProjectionIsOwnerScopedAndSecretFree(t *test
 	if task.TaskKey != "gmail_sync" || task.Status != "failed" || task.HealthState != integrationsdk.ConnectionAccountHealthFailing || values[0].HealthState != integrationsdk.ConnectionAccountHealthFailing || task.AttemptCount != 2 || task.LastErrorCode != "provider.retryable" || task.DueAt == "" || task.LastSuccessAt != timestampString(now-60_000) {
 		t.Fatalf("task=%#v", task)
 	}
+	if task.Progress == nil || task.Progress.Phase != "bootstrap.inbox" || task.Progress.Unit != "message" || task.Progress.CompletedUnits != 40 || task.Progress.InitializationComplete {
+		t.Fatalf("task progress=%#v", task.Progress)
+	}
 	value, err := store.GetConnectionAccount(accountScope(t.Context(), "user-a", false), subject, "personal-a")
 	if err != nil || !reflect.DeepEqual(value.Background, values[0].Background) {
 		t.Fatalf("get background=%#v err=%v", value.Background, err)
@@ -61,7 +64,7 @@ func TestConnectionAccountBackgroundProjectionIsOwnerScopedAndSecretFree(t *test
 		t.Fatalf("foreign account was visible: %v", err)
 	}
 	raw, _ := json.Marshal(values)
-	for _, forbidden := range []string{"never expose", "worker-secret", "payload_json", "lease_owner", "personal-b"} {
+	for _, forbidden := range []string{"never expose", "worker-secret", "payload_json", "progress_json", "lease_owner", "personal-b"} {
 		if strings.Contains(string(raw), forbidden) {
 			t.Fatalf("background projection leaked %q: %s", forbidden, raw)
 		}

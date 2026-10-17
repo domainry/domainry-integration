@@ -70,33 +70,44 @@ type oauthFlowTransport struct {
 }
 
 func (t oauthFlowTransport) RoundTripHTTP(ctx context.Context, input connector.HTTPRequest) (connector.HTTPResponse, error) {
-	if input.URL != t.endpoint {
+	identityEndpoint := strings.TrimSuffix(t.endpoint, "/token") + "/oauth2/v2/userinfo"
+	if input.URL != t.endpoint && input.URL != identityEndpoint {
 		return connector.HTTPResponse{}, errors.New("unapproved test endpoint")
 	}
-	form, err := url.ParseQuery(string(input.Body))
-	if err != nil {
-		return connector.HTTPResponse{}, err
-	}
-	for key, value := range input.SecretForm {
-		if form.Has(key) {
-			return connector.HTTPResponse{}, errors.New("duplicate private form field")
+	body := input.Body
+	if input.URL == t.endpoint {
+		form, err := url.ParseQuery(string(input.Body))
+		if err != nil {
+			return connector.HTTPResponse{}, err
 		}
-		form.Set(key, value)
+		for key, value := range input.SecretForm {
+			if form.Has(key) {
+				return connector.HTTPResponse{}, errors.New("duplicate private form field")
+			}
+			form.Set(key, value)
+		}
+		body = []byte(form.Encode())
 	}
-	request, err := http.NewRequestWithContext(ctx, input.Method, input.URL, strings.NewReader(form.Encode()))
+	request, err := http.NewRequestWithContext(ctx, input.Method, input.URL, bytes.NewReader(body))
 	if err != nil {
 		return connector.HTTPResponse{}, err
 	}
 	for key, values := range input.Headers {
 		request.Header[key] = values
 	}
+	for key, value := range input.SecretHeaders {
+		if request.Header.Get(key) != "" {
+			return connector.HTTPResponse{}, errors.New("duplicate private header")
+		}
+		request.Header[key] = value
+	}
 	response, err := t.client.Do(request)
 	if err != nil {
 		return connector.HTTPResponse{}, err
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, input.MaxResponseBytes+1))
-	return connector.HTTPResponse{StatusCode: response.StatusCode, Headers: response.Header, Body: body}, err
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, input.MaxResponseBytes+1))
+	return connector.HTTPResponse{StatusCode: response.StatusCode, Headers: response.Header, Body: responseBody}, err
 }
 func (oauthFlowTransport) ExecuteSQL(context.Context, connector.SQLRequest) (connector.SQLResult, error) {
 	return connector.SQLResult{}, errors.New("unexpected SQL")
@@ -111,6 +122,16 @@ func TestOAuthModuleAndSaaSHTTPUseGoogleProviderAndDurableOneTimeSessions(t *tes
 			issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				issuerMu.Lock()
 				defer issuerMu.Unlock()
+				if r.Method == "GET" && r.URL.Path == "/oauth2/v2/userinfo" {
+					if r.Header.Get("Authorization") != "Bearer private-access" {
+						t.Error("identity probe did not use the exchanged credential")
+						w.WriteHeader(http.StatusUnauthorized)
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					io.WriteString(w, `{"id":"stable-google-id","email":"account@example.test","verified_email":true}`)
+					return
+				}
 				calls++
 				if r.Method != "POST" || r.URL.Path != "/token" || r.ParseForm() != nil || r.PostForm.Get("client_id") != "test-client" || r.PostForm.Get("client_secret") != "private-client-secret" {
 					t.Error("invalid host-transported token request")
@@ -233,7 +254,7 @@ func TestOAuthModuleAndSaaSHTTPUseGoogleProviderAndDurableOneTimeSessions(t *tes
 				}
 				return data
 			}
-			appInput := integrationsdk.OAuthApplicationInput{ConnectorKey: google.ConnectorKey, ProviderKey: google.ProviderKey, Name: "Google calendar", ClientID: "test-client", ClientSecret: "private-client-secret", RedirectURI: "https://product.example.test/oauth/callback", Scopes: []string{"https://www.googleapis.com/auth/calendar.readonly"}, ConnectionConfig: map[string]any{"token_url": issuer.URL + "/token"}, Enabled: true}
+			appInput := integrationsdk.OAuthApplicationInput{ConnectorKey: google.ConnectorKey, ProviderKey: google.ProviderKey, Name: "Google calendar", ClientID: "test-client", ClientSecret: "private-client-secret", RedirectURI: "https://product.example.test/oauth/callback", Scopes: []string{"https://www.googleapis.com/auth/calendar.readonly"}, ConnectionConfig: map[string]any{"token_url": issuer.URL + "/token", "api_base_url": issuer.URL}, Enabled: true}
 			request("user-a", "PUT", "/integration/oauth-applications/google", appInput, 403)
 			request("admin", "PUT", "/integration/oauth-applications/google", appInput, 200)
 			options := request("user-a", "GET", "/integration/oauth-authorizations/options", nil, 200)

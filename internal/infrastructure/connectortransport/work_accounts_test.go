@@ -2,6 +2,7 @@ package connectortransport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -52,6 +53,41 @@ func TestWorkAccountsInjectsOnlyAtDispatch(t *testing.T) {
 	}
 }
 
+func TestWorkAccountsInjectsSecretJSONWithContentTypeParameters(t *testing.T) {
+	transport := NewWorkAccounts()
+	var count int
+	transport.client.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		count++
+		body, _ := io.ReadAll(request.Body)
+		var payload map[string]string
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["grant_type"] != "authorization_code" || payload["code"] != "private-code" {
+			t.Fatalf("secret JSON not injected: %#v", payload)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil
+	})
+	input := connector.HTTPRequest{
+		Method:     http.MethodPost,
+		URL:        "https://open.feishu.cn/open-apis/authen/v2/oauth/token",
+		Headers:    map[string][]string{"Content-Type": {"application/json; charset=utf-8"}},
+		Body:       []byte(`{"grant_type":"authorization_code"}`),
+		SecretJSON: map[string]string{"code": "private-code"},
+	}
+	response, err := transport.RoundTripHTTP(context.Background(), input)
+	if err != nil || response.StatusCode != 200 || count != 1 {
+		t.Fatalf("dispatch: status=%d count=%d error=%v", response.StatusCode, count, err)
+	}
+	if string(input.Body) != `{"grant_type":"authorization_code"}` {
+		t.Fatal("public request mutated")
+	}
+	input.Headers["Content-Type"] = []string{"text/json; charset=utf-8"}
+	if _, err = transport.RoundTripHTTP(context.Background(), input); err == nil || count != 1 {
+		t.Fatal("non-JSON media type accepted")
+	}
+}
+
 func TestWorkAccountsRejectsUnknownEndpointsAndBoundsResponses(t *testing.T) {
 	transport := NewWorkAccounts()
 	var count int
@@ -76,12 +112,12 @@ func TestWorkAccountsRejectsUnknownEndpointsAndBoundsResponses(t *testing.T) {
 }
 
 func TestWorkAccountsAllowsOnlyOfficialFeishuHosts(t *testing.T) {
-	for _, target := range []string{"https://open.feishu.cn/open-apis/calendar/v4/calendars", "https://accounts.feishu.cn/open-apis/authen/v1/authorize"} {
+	for _, target := range []string{"https://open.feishu.cn/open-apis/calendar/v4/calendars", "https://accounts.feishu.cn/open-apis/authen/v1/authorize", "https://api-drive-stream.feishu.cn/file?code=private"} {
 		if _, err := allowedURL(target); err != nil {
 			t.Fatalf("official Feishu endpoint rejected: %s: %v", target, err)
 		}
 	}
-	for _, target := range []string{"https://feishu.cn/open-apis", "https://open.feishu.cn.evil.test/open-apis", "https://open.feishu.cn:444/open-apis", "http://open.feishu.cn/open-apis"} {
+	for _, target := range []string{"https://feishu.cn/open-apis", "https://open.feishu.cn.evil.test/open-apis", "https://api-drive-stream.feishu.cn.evil.test/file", "https://open.feishu.cn:444/open-apis", "http://open.feishu.cn/open-apis"} {
 		if _, err := allowedURL(target); err == nil {
 			t.Fatalf("non-official Feishu endpoint accepted: %s", target)
 		}

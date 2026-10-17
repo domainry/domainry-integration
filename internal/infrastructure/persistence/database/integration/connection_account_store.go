@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -193,7 +194,7 @@ func (s *ManagementStore) GetConnectionAccount(ctx context.Context, subject inte
 // state kind; the provider-runs unique index has this exact left prefix.
 func (s *ManagementStore) enrichAccountBackground(ctx context.Context, account *integrationsdk.ConnectionAccount) error {
 	statement, args, err := query.NewSelectBuilder(s.dialect, providerRunTable).
-		Columns("task_key", "status", "attempt_count", "due_at", "last_success_at", "last_error_code", "updated_at").
+		Columns("task_key", "status", "progress_json", "attempt_count", "due_at", "last_success_at", "last_error_code", "updated_at").
 		Where(query.And(
 			query.Equal("workspace_id", account.WorkspaceID),
 			query.Equal("run_kind", providerRunKindState),
@@ -210,9 +211,19 @@ func (s *ManagementStore) enrichAccountBackground(ctx context.Context, account *
 	defer rows.Close()
 	for rows.Next() {
 		var task integrationsdk.ConnectionAccountBackgroundTask
+		var progressJSON sql.NullString
 		var dueAt, lastSuccessAt, updatedAt int64
-		if err = rows.Scan(&task.TaskKey, &task.Status, &task.AttemptCount, &dueAt, &lastSuccessAt, &task.LastErrorCode, &updatedAt); err != nil {
+		if err = rows.Scan(&task.TaskKey, &task.Status, &progressJSON, &task.AttemptCount, &dueAt, &lastSuccessAt, &task.LastErrorCode, &updatedAt); err != nil {
 			return err
+		}
+		if progressJSON.Valid && strings.TrimSpace(progressJSON.String) != "" && strings.TrimSpace(progressJSON.String) != "{}" {
+			decoder := json.NewDecoder(strings.NewReader(progressJSON.String))
+			decoder.DisallowUnknownFields()
+			var progress integrationsdk.ConnectionAccountBackgroundProgress
+			if err = decoder.Decode(&progress); err != nil || decoder.Decode(&struct{}{}) != io.EOF || strings.TrimSpace(progress.Phase) == "" || progress.CompletedUnits < 0 || progress.TotalUnits != nil && (progress.CompletedUnits > *progress.TotalUnits || *progress.TotalUnits < 0) {
+				return fmt.Errorf("Integration account background progress is invalid")
+			}
+			task.Progress = &progress
 		}
 		task.DueAt, task.LastSuccessAt, task.UpdatedAt = timestampString(dueAt), timestampString(lastSuccessAt), timestampString(updatedAt)
 		account.Background = append(account.Background, task)

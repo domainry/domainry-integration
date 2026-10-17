@@ -109,7 +109,7 @@ func upsertMaterializedProviderTask(ctx context.Context, database sqlhost.DBTX, 
 	}
 	statement, args, err := query.NewUpdateBuilder(dialect, providerRunTable).
 		Set("connector_key", connection.ConnectorKey).Set("provider_key", connection.ProviderKey).
-		Set("state_version", task.StateVersion).Set("payload_json", `{}`).Set("status", "ready").Set("due_at", nowMillis).
+		Set("state_version", task.StateVersion).Set("payload_json", `{}`).Set("progress_json", `{}`).Set("status", "ready").Set("due_at", nowMillis).
 		Set("last_error_code", "").Set("attempt_count", 0).Set("last_success_at", int64(0)).Set("lease_owner", "").Set("lease_expires_at", int64(0)).
 		SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).Set("updated_at", nowMillis).
 		Where(query.And(subjectRowsWriteAllowed(subjectLifecycle, dialect, connection.WorkspaceID, providerRunTable, current.id), query.Equal("run_kind", providerRunKindState), query.Equal("id", current.id))).Build()

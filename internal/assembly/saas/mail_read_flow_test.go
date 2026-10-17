@@ -77,6 +77,14 @@ func TestMailReadOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 						w.WriteHeader(401)
 						return
 					}
+					if vendor == "google" && r.URL.Path == "/oauth2/v2/userinfo" {
+						_ = json.NewEncoder(w).Encode(map[string]any{"id": "stable-google-id", "email": "account@example.test", "verified_email": true})
+						return
+					}
+					if vendor == "microsoft" && r.URL.Path == "/v1.0/me" {
+						_ = json.NewEncoder(w).Encode(map[string]any{"id": "stable-ms-id", "mail": "account@example.test"})
+						return
+					}
 					q := r.URL.Query()
 					id := "mail-1"
 					if vendor == "google" {
@@ -143,7 +151,7 @@ func TestMailReadOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 				f.allowRead.Store(true)
 				t.Cleanup(f.close)
 				f.open()
-				config := map[string]any{"token_url": upstream.URL + "/token", "gmail_base_url": upstream.URL}
+				config := map[string]any{"token_url": upstream.URL + "/token", "api_base_url": upstream.URL, "gmail_base_url": upstream.URL}
 				if vendor == "microsoft" {
 					config = map[string]any{"token_url": upstream.URL + "/token", "graph_base_url": upstream.URL + "/v1.0", "tenant_id": "tenant"}
 				}
@@ -169,6 +177,10 @@ func TestMailReadOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 					return completed.Account.Key
 				}
 				account := connect(scope)
+				providerProbeCalls := readCalls.Load()
+				if providerProbeCalls != 2 || tokenCalls.Load() != 2 {
+					t.Fatal("OAuth account identity probe did not refresh and verify the provider account", providerProbeCalls, tokenCalls.Load())
+				}
 				makeRead := func(id, key string, payload any) sdk.ConnectionAccountReadRequest {
 					b, _ := json.Marshal(payload)
 					return sdk.ConnectionAccountReadRequest{RequestID: id, Operation: key, ContractSHA256: mail.OperationSHA256(key), Payload: b}
@@ -185,7 +197,7 @@ func TestMailReadOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 				f.request("user-b", account, "/read", lookup, 400)
 				f.request("user-b", account, "/read?user_id=user-a&allow_personal=true", lookup, 400)
 				f.request("user-a", account, "/read", map[string]any{"request_id": "forged", "operation": lookup.Operation, "contract_sha256": lookup.ContractSHA256, "payload": map[string]any{}, "scopes": []string{scope}}, 400)
-				if readCalls.Load() != 0 {
+				if readCalls.Load() != providerProbeCalls {
 					t.Fatal("denied mailbox request dispatched")
 				}
 				f.request("user-a", account, "/read-access", lookup.OperationContract(), 200)

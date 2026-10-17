@@ -170,7 +170,7 @@ func providerRunsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 		key("id"), scope("workspace_id"), req("run_kind", ormschema.TextKey(32)), scope("run_key"),
 		scope("connector_key"), scope("provider_key"), scope("connection_key"), scope("task_key"),
 		integer("state_version"), key("operation_key"), key("contract_sha256"), text("payload_json"),
-		req("status", ormschema.TextKey(32)), key("last_error_code"), integer("attempt_count"), timestamp("due_at"), optionalTimestamp("last_success_at"), integerWithDefault("wake_sequence", 0),
+		opt("progress_json", ormschema.Text()), req("status", ormschema.TextKey(32)), key("last_error_code"), integer("attempt_count"), timestamp("due_at"), optionalTimestamp("last_success_at"), integerWithDefault("wake_sequence", 0),
 		key("lease_owner"), optionalTimestamp("lease_expires_at"), integer("fencing_token"), timestamp("created_at"), timestamp("updated_at"),
 	).Unique("workspace_id", "run_kind", "connection_key", "run_key")
 }

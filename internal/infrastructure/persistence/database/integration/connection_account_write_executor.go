@@ -11,37 +11,23 @@ import (
 	"github.com/domainry/domainry-orm/query"
 )
 
+type accountWriteExecutionContext struct {
+	provider   connector.Adapter
+	operation  connector.OperationDescriptor
+	connection deliveryConnection
+	resolved   resolvedProviderSecrets
+}
+
 // The account owner makes ownership immutable; configuration, reauthorization
 // and revocation change the connection revision. After resolving secrets,
 // recheck that revision and the current recorded grant immediately before I/O.
 func (s *OperationsStore) ExecuteAccountWrite(ctx context.Context, claim model.AccountWriteClaim) model.AccountWriteExecution {
 	failed := model.AccountWriteExecution{Status: model.AccountWriteFailed}
-	source := claim.Request.ExpectedSource
-	request := model.DeliveryRequest{WorkspaceID: source.WorkspaceID, ConnectorKey: source.ConnectorKey, ConnectionKey: source.ConnectionKey}
-	connection, err := s.delivery.connection(ctx, request)
-	if err != nil || connection.UpdatedAt != source.AccountUpdatedAt || connection.ProviderKey != source.ProviderKey {
+	prepared, ok := s.prepareAccountWrite(ctx, claim)
+	if !ok {
 		return failed
 	}
-	p, found := s.delivery.providers.Provider(source.ConnectorKey, source.ProviderKey)
-	if !found {
-		return failed
-	}
-	op, found := providerOperation(p.Descriptor(), source.Operation)
-	if !found || op.Mode != connector.ModeCall || op.Reliability.Effect != connector.EffectWrite || op.ContractSHA256 != source.ContractSHA256 {
-		return failed
-	}
-	resolved, err := s.delivery.resolveProviderSecrets(ctx, source.WorkspaceID, connection.SecretRefs)
-	if err != nil {
-		return failed
-	}
-	current, err := s.delivery.connection(ctx, request)
-	if err != nil || current.UpdatedAt != source.AccountUpdatedAt || current.ProviderKey != source.ProviderKey {
-		return failed
-	}
-	alternatives, declared := connector.ResolveOAuthOperationScopes(p, source.Operation)
-	if !declared || !s.accountWriteScopesGranted(ctx, source, alternatives) || ctx.Err() != nil {
-		return failed
-	}
+	source, connection, p, resolved := claim.Request.ExpectedSource, prepared.connection, prepared.provider, prepared.resolved
 	result, callErr := p.Call(ctx, connector.CallRequest{
 		ConnectorKey: source.ConnectorKey, ProviderKey: source.ProviderKey, OperationKey: source.Operation,
 		ContractSHA256: source.ContractSHA256, Mode: connector.ModeCall,
@@ -60,6 +46,78 @@ func (s *OperationsStore) ExecuteAccountWrite(ctx context.Context, claim model.A
 		}
 	}
 	return out
+}
+
+func (s *OperationsStore) ReconcileAccountWrite(ctx context.Context, claim model.AccountWriteClaim) (model.AccountWriteExecution, bool) {
+	prepared, ok := s.prepareAccountWrite(ctx, claim)
+	if !ok || prepared.operation.Reliability.Reconciliation != connector.ReconciliationProviderLookup {
+		return model.AccountWriteExecution{Status: model.AccountWriteUncertain}, false
+	}
+	reconciler, ok := prepared.provider.(connector.Reconciler)
+	if !ok {
+		return model.AccountWriteExecution{Status: model.AccountWriteUncertain}, false
+	}
+	source := claim.Request.ExpectedSource
+	result, reconcileErr := reconciler.Reconcile(ctx, connector.ReconcileRequest{
+		ConnectorKey: source.ConnectorKey, ProviderKey: source.ProviderKey, OperationKey: source.Operation,
+		ContractSHA256: source.ContractSHA256,
+		Connection:     connector.Connection{Key: prepared.connection.Key, WorkspaceID: prepared.connection.WorkspaceID, ConnectorKey: prepared.connection.ConnectorKey, ProviderKey: prepared.connection.ProviderKey, Status: prepared.connection.Status, Config: prepared.connection.Config, SecretRefs: prepared.connection.SecretRefs},
+		RequestRef:     claim.InvocationID, Payload: append(json.RawMessage(nil), claim.Request.Payload...), Secrets: prepared.resolved.Values,
+		Principal: connector.Principal{UserID: claim.Subject.UserID, WorkspaceID: source.WorkspaceID, RequestID: claim.InvocationID, IsAuthenticated: true},
+	})
+	if reconcileErr == nil {
+		reconcileErr = result.Validate()
+	}
+	updates := map[string]string(nil)
+	if result.Result != nil {
+		updates = result.Result.SecretUpdates
+	}
+	secretErr := s.delivery.persistProviderSecretUpdates(ctx, source.WorkspaceID, prepared.connection.SecretRefs, prepared.resolved.Versions, updates, reconcileErr)
+	if reconcileErr != nil {
+		return model.AccountWriteExecution{Status: model.AccountWriteUncertain, CredentialUpdateFailed: secretErr != nil}, false
+	}
+	switch result.Outcome {
+	case connector.ReconciliationSucceeded:
+		if result.Result == nil || len(result.Result.Payload) == 0 {
+			return model.AccountWriteExecution{Status: model.AccountWriteUncertain, CredentialUpdateFailed: secretErr != nil}, false
+		}
+		return model.AccountWriteExecution{Status: model.AccountWriteSucceeded, Payload: append(json.RawMessage(nil), result.Result.Payload...), CredentialUpdateFailed: secretErr != nil}, true
+	case connector.ReconciliationFailed:
+		return model.AccountWriteExecution{Status: model.AccountWriteFailed, CredentialUpdateFailed: secretErr != nil}, true
+	default:
+		// not_found is not permission to replay: provider indexing may lag.
+		return model.AccountWriteExecution{Status: model.AccountWriteUncertain, CredentialUpdateFailed: secretErr != nil}, false
+	}
+}
+
+func (s *OperationsStore) prepareAccountWrite(ctx context.Context, claim model.AccountWriteClaim) (accountWriteExecutionContext, bool) {
+	source := claim.Request.ExpectedSource
+	request := model.DeliveryRequest{WorkspaceID: source.WorkspaceID, ConnectorKey: source.ConnectorKey, ConnectionKey: source.ConnectionKey}
+	connection, err := s.delivery.connection(ctx, request)
+	if err != nil || connection.UpdatedAt != source.AccountUpdatedAt || connection.ProviderKey != source.ProviderKey {
+		return accountWriteExecutionContext{}, false
+	}
+	p, found := s.delivery.providers.Provider(source.ConnectorKey, source.ProviderKey)
+	if !found {
+		return accountWriteExecutionContext{}, false
+	}
+	op, found := providerOperation(p.Descriptor(), source.Operation)
+	if !found || op.Mode != connector.ModeCall || op.Reliability.Effect != connector.EffectWrite || op.ContractSHA256 != source.ContractSHA256 {
+		return accountWriteExecutionContext{}, false
+	}
+	resolved, err := s.delivery.resolveProviderSecrets(ctx, source.WorkspaceID, connection.SecretRefs)
+	if err != nil {
+		return accountWriteExecutionContext{}, false
+	}
+	current, err := s.delivery.connection(ctx, request)
+	if err != nil || current.UpdatedAt != source.AccountUpdatedAt || current.ProviderKey != source.ProviderKey {
+		return accountWriteExecutionContext{}, false
+	}
+	alternatives, declared := connector.ResolveOAuthOperationScopes(p, source.Operation)
+	if !declared || !s.accountWriteScopesGranted(ctx, source, alternatives) || ctx.Err() != nil {
+		return accountWriteExecutionContext{}, false
+	}
+	return accountWriteExecutionContext{provider: p, operation: op, connection: connection, resolved: resolved}, true
 }
 
 func (s *OperationsStore) accountWriteScopesGranted(ctx context.Context, source model.ConnectionAccountWriteSource, alternatives [][]string) bool {

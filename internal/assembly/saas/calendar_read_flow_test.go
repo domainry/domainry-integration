@@ -85,6 +85,14 @@ func TestCalendarReadOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 						w.WriteHeader(401)
 						return
 					}
+					if vendor == "google" && r.URL.Path == "/oauth2/v2/userinfo" {
+						io.WriteString(w, `{"id":"stable-google-id","email":"account@example.test","verified_email":true}`)
+						return
+					}
+					if vendor == "microsoft" && r.URL.Path == "/v1.0/me" {
+						io.WriteString(w, `{"id":"stable-ms-id","mail":"account@example.test"}`)
+						return
+					}
 					var body string
 					if vendor == "google" {
 						switch {
@@ -211,6 +219,10 @@ func TestCalendarReadOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 				if err != nil || completed.Account == nil {
 					t.Fatal(completed, err)
 				}
+				providerProbeCalls := readCalls.Load()
+				if providerProbeCalls != 2 || tokenCalls.Load() != 2 {
+					t.Fatal("OAuth account identity probe did not refresh and verify the provider account", providerProbeCalls, tokenCalls.Load())
+				}
 				account := completed.Account.Key
 				request := func(user, path string, input any, status int) []byte {
 					t.Helper()
@@ -238,7 +250,7 @@ func TestCalendarReadOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 				lookup := sdk.ConnectionAccountReadRequest{RequestID: "list-1", Operation: calendar.ListOperationKey, ContractSHA256: calendar.OperationSHA256(calendar.ListOperationKey), Payload: json.RawMessage(`{}`)}
 				request("user-b", "/read?user_id=user-a&allow_personal=true", lookup, 400)
 				request("user-a", "/read", map[string]any{"request_id": "forged", "operation": lookup.Operation, "contract_sha256": lookup.ContractSHA256, "payload": map[string]any{}, "scopes": []string{scope}}, 400)
-				if readCalls.Load() != 0 {
+				if readCalls.Load() != providerProbeCalls {
 					t.Fatal("unauthorized read reached upstream")
 				}
 				request("user-a", "/read-access", lookup.OperationContract(), 200)
@@ -246,7 +258,7 @@ func TestCalendarReadOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 				_ = json.Unmarshal(request("user-a", "/read", lookup, 200), &listed)
 				var calendars calendar.CalendarsPage
 				_ = json.Unmarshal(listed.Payload, &calendars)
-				if !listed.PayloadAvailable || len(calendars.Items) != 1 || calendars.Items[0].ID != "team" || tokenCalls.Load() != 2 || readCalls.Load() != 2 {
+				if !listed.PayloadAvailable || len(calendars.Items) != 1 || calendars.Items[0].ID != "team" || tokenCalls.Load() != 2 || readCalls.Load() != providerProbeCalls+1 {
 					t.Fatal(listed, calendars, tokenCalls.Load(), readCalls.Load())
 				}
 				window := calendar.Window{Start: "2026-09-11T09:00:00Z", End: "2026-09-11T18:00:00Z"}

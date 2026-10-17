@@ -32,6 +32,12 @@ type oauthStoreProvider struct {
 func (p *oauthStoreProvider) OAuthConnectionTestScopes() ([][]string, bool) {
 	return p.testScopes, p.testScopesDeclared
 }
+func (*oauthStoreProvider) OAuthOperationScopes(operationKey string) ([][]string, bool) {
+	if operationKey == "lookup" {
+		return [][]string{{"read"}}, true
+	}
+	return nil, false
+}
 func (p *oauthStoreProvider) ProviderAccountProbeEnabled() bool { return p.probeEnabled }
 func (p *oauthStoreProvider) TestConnection(context.Context, connector.TestConnectionRequest) (connector.TestConnectionResult, error) {
 	p.probes++
@@ -177,7 +183,7 @@ func TestOAuthProviderIdentityFailureDoesNotCreateUnresolvedAccount(t *testing.T
 	provider.probeErr = connector.RetryableError("test.identity_rate_limited", errors.New("rate limited"))
 	_, state := startOAuthStore(t, store, subject)
 	value, err := store.CompleteOAuthAuthorization(t.Context(), subject, integrationsdk.OAuthAuthorizationCallback{State: state, Code: "accepted"})
-	if err != nil || value.Status != "needs_reauthorization" || value.Account != nil {
+	if err != nil || value.Status != "needs_reauthorization" || value.FailureCode != "test.identity_rate_limited" || value.Account != nil {
 		t.Fatalf("identity failure result=%+v error=%v", value, err)
 	}
 	accounts, listErr := store.ListConnectionAccounts(t.Context(), subject)
@@ -300,7 +306,7 @@ func TestOAuthSessionRejectsCrossUserWorkspaceScopeAndState(t *testing.T) {
 	}
 }
 func TestOAuthSessionHandlesRejectionUnknownAndExpiredWithoutReplay(t *testing.T) {
-	for _, test := range []struct{ code, status string }{{"deny", "rejected"}, {"unknown", "needs_reauthorization"}, {"cancel", "rejected"}} {
+	for _, test := range []struct{ code, status, failureCode string }{{"deny", "rejected", "test.oauth.denied"}, {"unknown", "needs_reauthorization", "test.oauth.unknown"}, {"cancel", "rejected", "integration.oauth.provider_rejected"}} {
 		t.Run(test.code, func(t *testing.T) {
 			store, provider, subject, _ := setupOAuthStore(t)
 			_, state := startOAuthStore(t, store, subject)
@@ -310,7 +316,7 @@ func TestOAuthSessionHandlesRejectionUnknownAndExpiredWithoutReplay(t *testing.T
 				callback.Error = "access_denied"
 			}
 			value, err := store.CompleteOAuthAuthorization(t.Context(), subject, callback)
-			if err != nil || value.Status != test.status {
+			if err != nil || value.Status != test.status || value.FailureCode != test.failureCode {
 				t.Fatalf("result=%v err=%v", value, err)
 			}
 			count := provider.calls
@@ -329,7 +335,7 @@ func TestOAuthSessionHandlesRejectionUnknownAndExpiredWithoutReplay(t *testing.T
 		t.Fatal(err)
 	}
 	value, err := store.CompleteOAuthAuthorization(t.Context(), subject, integrationsdk.OAuthAuthorizationCallback{State: state, Code: "accepted"})
-	if err != nil || value.Status != "expired" || provider.calls != 0 {
+	if err != nil || value.Status != "expired" || value.FailureCode != "integration.oauth.session_expired" || provider.calls != 0 {
 		t.Fatal("expired callback exchanged code", err)
 	}
 }
@@ -354,7 +360,7 @@ func TestOAuthApplicationChangeDuringExchangeRollsBackCredentialsAndNeedsNewAuth
 		t.Fatal(err)
 	}
 	value, err := store.GetOAuthAuthorization(t.Context(), subject, session.ID)
-	if err != nil || value.Status != "needs_reauthorization" {
+	if err != nil || value.Status != "needs_reauthorization" || value.FailureCode != "integration.oauth.exchange_timeout" {
 		t.Fatal("interrupted exchange not marked unknown", err)
 	}
 	if _, err = store.CompleteOAuthAuthorization(t.Context(), subject, integrationsdk.OAuthAuthorizationCallback{State: state, Code: "accepted"}); err != nil || provider.calls != 1 {

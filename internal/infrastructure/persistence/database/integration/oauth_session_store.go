@@ -52,6 +52,14 @@ func oauthHash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
+
+func oauthFailureCode(err error, fallback string) string {
+	if code, ok := connector.ProviderErrorCodeOf(err); ok {
+		return code
+	}
+	return fallback
+}
+
 func oauthScopeAllowed(subject integrationsdk.ConnectionAccountSubject, scope integrationsdk.ConnectionAccountScope) bool {
 	return scope == integrationsdk.ConnectionAccountScopePersonal && subject.Access.Personal || scope == integrationsdk.ConnectionAccountScopeWorkspace && subject.Access.Workspace
 }
@@ -188,6 +196,7 @@ func (s *ManagementStore) GetOAuthAuthorization(ctx context.Context, subject int
 	}
 	if previous == "pending" && !expires.After(time.Now().UTC()) {
 		record.Session.Status = "expired"
+		record.Session.FailureCode = "integration.oauth.session_expired"
 	}
 	if previous == "exchanging" {
 		deadline, e := time.Parse(time.RFC3339Nano, record.ExchangeDeadline)
@@ -196,6 +205,7 @@ func (s *ManagementStore) GetOAuthAuthorization(ctx context.Context, subject int
 		}
 		if !deadline.After(time.Now().UTC()) {
 			record.Session.Status = "needs_reauthorization"
+			record.Session.FailureCode = "integration.oauth.exchange_timeout"
 		}
 	}
 	if previous != record.Session.Status {
@@ -240,6 +250,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 	}
 	if input.Error != "" {
 		record.Session.Status = "rejected"
+		record.Session.FailureCode = "integration.oauth.provider_rejected"
 		err = s.updateOAuthSession(ctx, subject, record, "pending")
 		return record.Session, err
 	}
@@ -271,6 +282,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 	tokens, exchangeErr := authorizer.ExchangeAuthorizationCode(completion, connector.OAuthCodeExchangeRequest{Connection: connector.Connection{ConnectorKey: app.ConnectorKey, ProviderKey: app.ProviderKey, WorkspaceID: subject.WorkspaceID, Config: app.ConnectionConfig}, ClientID: app.ClientID, ClientSecret: secret, RedirectURI: app.RedirectURI, RequestedScopes: record.Session.RequestedScopes, Code: input.Code, CodeVerifier: verifier})
 	if exchangeErr != nil {
 		record.Session.Status = "needs_reauthorization"
+		record.Session.FailureCode = oauthFailureCode(exchangeErr, "integration.oauth.exchange_failed")
 		if classification, _ := connector.ErrorClassificationOf(exchangeErr); classification == connector.ErrorPermanent {
 			record.Session.Status = "rejected"
 		}
@@ -281,6 +293,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 	}
 	if tokens.AccessToken == "" || tokens.RefreshToken == "" || tokens.TokenType != "Bearer" {
 		record.Session.Status = "needs_reauthorization"
+		record.Session.FailureCode = "integration.oauth.token_response_invalid"
 		err = s.updateOAuthSession(completion, subject, record, "exchanging")
 		return record.Session, err
 	}
@@ -310,6 +323,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 		}
 		if probeErr != nil || !probe.Connected {
 			record.Session.Status = "needs_reauthorization"
+			record.Session.FailureCode = oauthFailureCode(probeErr, "integration.oauth.account_probe_failed")
 			if classification, _ := connector.ErrorClassificationOf(probeErr); classification == connector.ErrorPermanent {
 				record.Session.Status = "rejected"
 			}
@@ -322,6 +336,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 		identity, identityErr := decodeProviderAccountProbe(providerAccountDetails)
 		if identityErr != nil || identity == nil {
 			record.Session.Status = "rejected"
+			record.Session.FailureCode = "integration.oauth.account_identity_invalid"
 			if err = s.updateOAuthSession(completion, subject, record, "exchanging"); err != nil {
 				return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth identity result could not be persisted")
 			}
@@ -330,6 +345,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 		key, err = s.providerAccountConnectionKey(completion, subject.WorkspaceID, app.ConnectorKey, app.ProviderKey, identity)
 		if err != nil {
 			record.Session.Status = "rejected"
+			record.Session.FailureCode = "integration.oauth.account_identity_unavailable"
 			if updateErr := s.updateOAuthSession(completion, subject, record, "exchanging"); updateErr != nil {
 				return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth identity result could not be persisted")
 			}
@@ -395,6 +411,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 			return e
 		}
 		record.Session.Status = "connected"
+		record.Session.FailureCode = ""
 		record.Session.GrantedScopes = append([]string(nil), tokens.GrantedScopes...)
 		record.Session.Account = &account
 		return tx.updateOAuthSession(completion, subject, record, "exchanging")

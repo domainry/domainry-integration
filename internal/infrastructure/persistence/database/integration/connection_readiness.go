@@ -117,6 +117,12 @@ func (s *ManagementStore) enrichAccountReadiness(ctx context.Context, a *sdk.Con
 		return fmt.Errorf("Integration connection grant is invalid")
 	}
 	out.Available, out.State = true, "configured"
+	for _, operation := range provider.Descriptor().Operations {
+		alternatives, declared := connector.ResolveOAuthOperationScopes(provider, operation.Key)
+		if declared && integrationservice.OAuthScopeState(out.GrantedScopes, scopes.Valid, alternatives) == "ready" {
+			out.AvailableOperations = append(out.AvailableOperations, operation.Key)
+		}
+	}
 	if alternatives, declared := connector.ResolveOAuthConnectionTestScopes(provider); declared {
 		state := integrationservice.ConnectionTestScopeState(out.GrantedScopes, scopes.Valid, alternatives)
 		out.Test = &sdk.ConnectionAccountTestEligibility{Allowed: state == "ready", State: state}

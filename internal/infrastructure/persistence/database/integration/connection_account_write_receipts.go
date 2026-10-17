@@ -45,6 +45,51 @@ func (s *OperationsStore) FinishAccountWrite(ctx context.Context, claim model.Ac
 	return s.ReadAccountWrite(ctx, claim)
 }
 
+// ResolveAccountWrite records only a definitive, read-only provider
+// reconciliation result. It never reclaims or replays the original effect.
+func (s *OperationsStore) ResolveAccountWrite(ctx context.Context, claim model.AccountWriteClaim, outcome model.AccountWriteExecution) (model.ConnectionAccountWriteResult, error) {
+	if outcome.Status != model.AccountWriteSucceeded && outcome.Status != model.AccountWriteFailed {
+		return model.ConnectionAccountWriteResult{}, fmt.Errorf("Integration account write reconciliation outcome is not terminal")
+	}
+	current, err := s.ReadAccountWrite(ctx, claim)
+	if err != nil {
+		return model.ConnectionAccountWriteResult{}, err
+	}
+	if current.Status != model.AccountWriteUncertain {
+		return current, nil
+	}
+	metadata := accountWriteEvidence(claim)
+	if outcome.Status == model.AccountWriteSucceeded {
+		if len(outcome.Payload) == 0 || len(outcome.Payload) > 32<<10 || !json.Valid(outcome.Payload) {
+			return model.ConnectionAccountWriteResult{}, fmt.Errorf("Integration account write receipt is invalid")
+		}
+		metadata.Receipt = outcome.Payload
+	}
+	metadata.CredentialUpdateFailed = outcome.CredentialUpdateFailed
+	raw, err := json.Marshal(metadata)
+	if err != nil {
+		return model.ConnectionAccountWriteResult{}, err
+	}
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", outcome.Status).Set("metadata_json", string(raw)).Set("updated_at", time.Now().UTC().UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, claim.Subject.WorkspaceID, "_integration_invocations", claim.InvocationID), query.And(
+		query.Equal("workspace_id", claim.Subject.WorkspaceID), query.Equal("id", claim.InvocationID), query.Or(query.Equal("status", "running"), query.Equal("status", model.AccountWriteUncertain)),
+	))).Build()
+	if err != nil {
+		return model.ConnectionAccountWriteResult{}, err
+	}
+	result, err := s.database.ExecContext(ctx, statement, args...)
+	if err != nil {
+		return model.ConnectionAccountWriteResult{}, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		latest, readErr := s.ReadAccountWrite(ctx, claim)
+		if readErr == nil && (latest.Status == model.AccountWriteSucceeded || latest.Status == model.AccountWriteFailed) {
+			return latest, nil
+		}
+		return model.ConnectionAccountWriteResult{}, fmt.Errorf("Integration account write reconciliation changed")
+	}
+	return s.ReadAccountWrite(ctx, claim)
+}
+
 type accountWriteMetadata struct {
 	Kind                   string                             `json:"kind"`
 	ActorID                string                             `json:"actor_id"`

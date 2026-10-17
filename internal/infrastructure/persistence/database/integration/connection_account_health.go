@@ -32,6 +32,9 @@ func providerTaskHealth(task integrationsdk.ConnectionAccountBackgroundTask, now
 		if now.Sub(due) > providerTaskHealthGrace {
 			return integrationsdk.ConnectionAccountHealthDelayed
 		}
+		if task.Progress != nil && !task.Progress.InitializationComplete {
+			return integrationsdk.ConnectionAccountHealthInitializing
+		}
 		if task.LastSuccessAt == "" {
 			return integrationsdk.ConnectionAccountHealthInitializing
 		}

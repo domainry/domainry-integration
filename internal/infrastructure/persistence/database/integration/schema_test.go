@@ -187,7 +187,7 @@ func TestFreshSchemaOwnsOneTypedProviderRunTable(t *testing.T) {
 	if err := rows.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"run_kind", "run_key", "state_version", "operation_key", "contract_sha256", "status", "due_at", "lease_owner", "lease_expires_at", "fencing_token"} {
+	for _, required := range []string{"run_kind", "run_key", "state_version", "operation_key", "contract_sha256", "progress_json", "status", "due_at", "lease_owner", "lease_expires_at", "fencing_token"} {
 		if !columns[required] {
 			t.Errorf("typed provider run column %s is missing", required)
 		}

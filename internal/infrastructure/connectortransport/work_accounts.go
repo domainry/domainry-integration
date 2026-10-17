@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"time"
@@ -36,7 +37,7 @@ func allowedURL(raw string) (*url.URL, error) {
 		return nil, errors.New("Integration work-account endpoint is not allowed")
 	}
 	switch u.Hostname() {
-	case "www.googleapis.com", "gmail.googleapis.com", "pubsub.googleapis.com", "oauth2.googleapis.com", "login.microsoftonline.com", "graph.microsoft.com", "open.feishu.cn", "accounts.feishu.cn":
+	case "www.googleapis.com", "gmail.googleapis.com", "pubsub.googleapis.com", "oauth2.googleapis.com", "login.microsoftonline.com", "graph.microsoft.com", "open.feishu.cn", "accounts.feishu.cn", "api-drive-stream.feishu.cn":
 		return u, nil
 	default:
 		return nil, errors.New("Integration work-account endpoint is not allowed")
@@ -102,7 +103,8 @@ func (t *WorkAccounts) RoundTripHTTP(ctx context.Context, input connector.HTTPRe
 		body = []byte(form.Encode())
 	}
 	if len(input.SecretJSON) > 0 {
-		if headers.Get("Content-Type") != "application/json" {
+		mediaType, _, parseErr := mime.ParseMediaType(headers.Get("Content-Type"))
+		if parseErr != nil || mediaType != "application/json" {
 			return connector.HTTPResponse{}, invalid
 		}
 		var object map[string]json.RawMessage

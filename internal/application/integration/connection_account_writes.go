@@ -28,10 +28,12 @@ type AccountWriteLedger interface {
 	ClaimAccountWrite(context.Context, model.AccountWriteClaim) (model.ConnectionAccountWriteResult, bool, error)
 	ReadAccountWrite(context.Context, model.AccountWriteClaim) (model.ConnectionAccountWriteResult, error)
 	FinishAccountWrite(context.Context, model.AccountWriteClaim, model.AccountWriteExecution) (model.ConnectionAccountWriteResult, error)
+	ResolveAccountWrite(context.Context, model.AccountWriteClaim, model.AccountWriteExecution) (model.ConnectionAccountWriteResult, error)
 }
 
 type AccountWriteExecutor interface {
 	ExecuteAccountWrite(context.Context, model.AccountWriteClaim) model.AccountWriteExecution
+	ReconcileAccountWrite(context.Context, model.AccountWriteClaim) (model.AccountWriteExecution, bool)
 }
 
 type AccountWriteService struct {
@@ -110,6 +112,11 @@ func (s *AccountWriteService) WriteConnectionAccount(ctx context.Context, subjec
 		outcome := model.AccountWriteExecution{Status: model.AccountWriteFailed}
 		if ctx.Err() == nil && s.current(ctx, claim, key) == nil {
 			outcome = s.executor.ExecuteAccountWrite(ctx, claim)
+			if outcome.Status == model.AccountWriteUncertain {
+				if reconciled, resolved := s.executor.ReconcileAccountWrite(ctx, claim); resolved {
+					outcome = reconciled
+				}
+			}
 		}
 		if outcome.Status == model.AccountWriteSucceeded {
 			receipt, receiptErr := s.codec.Receipt(claim, outcome.Payload)
@@ -150,6 +157,25 @@ func (s *AccountWriteService) ReadConnectionAccountWriteReceipt(ctx context.Cont
 	}
 	if err := s.current(ctx, claim, key); err != nil {
 		return model.ConnectionAccountWriteResult{}, err
+	}
+	if result.Status == model.AccountWriteUncertain && ctx.Err() == nil {
+		if outcome, resolved := s.executor.ReconcileAccountWrite(ctx, claim); resolved {
+			if outcome.Status == model.AccountWriteSucceeded {
+				receipt, receiptErr := s.codec.Receipt(claim, outcome.Payload)
+				if receiptErr != nil {
+					return result, nil
+				}
+				outcome.Payload = receipt
+			} else {
+				outcome.Payload = nil
+			}
+			write, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			result, err = s.ledger.ResolveAccountWrite(write, claim, outcome)
+			cancel()
+			if err != nil {
+				return model.ConnectionAccountWriteResult{}, err
+			}
+		}
 	}
 	return result, nil
 }

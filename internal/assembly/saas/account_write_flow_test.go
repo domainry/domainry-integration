@@ -58,6 +58,10 @@ func TestAccountWriteOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 				if err != nil || completed.Account == nil {
 					t.Fatal(completed, err)
 				}
+				providerProbeCalls := up.calls.Load()
+				if providerProbeCalls != 2 || up.tokens.Load() != 2 {
+					t.Fatal("OAuth account identity probe did not refresh and verify the provider account", providerProbeCalls, up.tokens.Load())
+				}
 				key := completed.Account.Key
 				port := func() sdk.ConnectionAccountWrites {
 					return f.binding.(sdk.ConnectionAccountWritesBinding).ConnectionAccountWrites()
@@ -86,7 +90,7 @@ func TestAccountWriteOAuthHTTPModuleSaaSAndRestart(t *testing.T) {
 				create := request("create-1", calendarwrite.CreateOperationKey, calendarwrite.CreateRequest{CalendarID: "team", Notifications: calendarwrite.NotifyAttendees, Event: calendarwrite.Draft{Title: "PRIVATE-EVENT-TITLE", Description: "PRIVATE-EVENT-BODY", Location: "Room", Start: calendar.Moment{DateTime: "2026-09-12T09:00:00Z", TimeZone: "UTC"}, End: calendar.Moment{DateTime: "2026-09-12T10:00:00Z", TimeZone: "UTC"}, Attendees: []calendarwrite.Attendee{{Address: "guest@example.test", Kind: "required"}}}})
 				foreign := subject
 				foreign.UserID = "user-b"
-				if _, err := port().WriteConnectionAccount(t.Context(), foreign, key, create); err == nil || up.calls.Load() != 0 {
+				if _, err := port().WriteConnectionAccount(t.Context(), foreign, key, create); err == nil || up.calls.Load() != providerProbeCalls {
 					t.Fatal("foreign subject reached vendor")
 				}
 				f.request("user-a", key, "/write", create, http.StatusNotFound)
@@ -245,6 +249,14 @@ func (s *writeFlowUpstream) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Authorization") != "Bearer private-fresh" {
 		s.t.Error("fresh credential missing")
 		w.WriteHeader(403)
+		return
+	}
+	if s.vendor == "google" && r.URL.Path == "/oauth2/v2/userinfo" {
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "stable-google-id", "email": "account@example.test", "verified_email": true})
+		return
+	}
+	if s.vendor == "microsoft" && r.URL.Path == "/v1.0/me" {
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "stable-ms-id", "mail": "account@example.test"})
 		return
 	}
 	if strings.Contains(r.URL.Path, "supportedTimeZones") {
