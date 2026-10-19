@@ -32,21 +32,27 @@ const (
 )
 
 type WorkerStore struct {
-	database         modulehost.Database
-	dialect          modulehost.Dialect
-	delivery         *DeliveryStore
-	operations       *OperationsStore
-	workerID         string
-	clock            func() time.Time
-	subjectLifecycle *SubjectLifecyclePersistence
-	schedulerMu      sync.Mutex
-	schedulerCursor  string
-	metricCleanupMu  sync.Mutex
-	metricCleanupAt  time.Time
+	database          modulehost.Database
+	dialect           modulehost.Dialect
+	delivery          *DeliveryStore
+	operations        *OperationsStore
+	workerID          string
+	clock             func() time.Time
+	eventWorkNotifier modulehost.EventWorkNotifier
+	subjectLifecycle  *SubjectLifecyclePersistence
+	schedulerMu       sync.Mutex
+	schedulerCursor   string
+	metricCleanupMu   sync.Mutex
+	metricCleanupAt   time.Time
 }
 
 func NewWorkerStore(database modulehost.Database, dialect modulehost.Dialect, delivery *DeliveryStore, operations *OperationsStore, workerID string, subjectLifecycle ...*SubjectLifecyclePersistence) *WorkerStore {
 	return &WorkerStore{database: database, dialect: dialect, delivery: delivery, operations: operations, workerID: strings.TrimSpace(workerID) + ":integration", subjectLifecycle: subjectLifecyclePersistence(subjectLifecycle)}
+}
+
+// SetEventWorkNotifier is assembly-time wiring, before workers are started.
+func (s *WorkerStore) SetEventWorkNotifier(notifier modulehost.EventWorkNotifier) {
+	s.eventWorkNotifier = notifier
 }
 
 func (s *WorkerStore) ProcessDueEvents(ctx context.Context, limit int) (int, error) {
@@ -431,7 +437,15 @@ func (s *WorkerStore) commitProviderTaskResult(ctx context.Context, candidate pr
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Wake on this transaction, not after every other connection in the batch.
+	// Never signal uncommitted/rolled-back events or run business handlers here.
+	if len(result.Events) > 0 && s.eventWorkNotifier != nil {
+		s.eventWorkNotifier.EventsCommitted()
+	}
+	return nil
 }
 
 func providerTaskProgressJSON(previousJSON string, next *connector.BackgroundProgress) (string, error) {

@@ -122,8 +122,8 @@ func connectionAccountsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 
 func providerAccountRoutesTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationProviderAccountRoutesTable,
-		key("id"), scope("workspace_id"), scope("connection_key"), scope("connector_key"), key("provider_key"),
-		key("subject_hash"), key("route_kind"), key("route_hash"), integer("route_bucket"), key("status"),
+		key("id"), scope("workspace_id"), scope("connection_key"), req("connector_key", ormschema.TextKey(64)), req("provider_key", ormschema.TextKey(64)),
+		req("subject_hash", ormschema.TextKey(64)), req("route_kind", ormschema.TextKey(32)), req("route_hash", ormschema.TextKey(64)), integer("route_bucket"), req("status", ormschema.TextKey(32)),
 		timestamp("created_at"), timestamp("updated_at"),
 	).Unique("workspace_id", "connection_key", "route_kind", "route_hash")
 }

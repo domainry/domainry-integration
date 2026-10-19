@@ -109,6 +109,9 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 	delivery := integrationpersistence.NewDeliveryStoreWithSubjectLifecycle(host.Database(), host.Dialect(), host.Providers(), resolver, webPush, subjectLifecyclePersistence)
 	operations := integrationpersistence.NewOperationsStore(host.Database(), host.Dialect(), delivery, host.RuntimeTriggers(), definitions, subjectLifecyclePersistence)
 	workers := integrationpersistence.NewWorkerStore(host.Database(), host.Dialect(), delivery, operations, application.RuntimeID, subjectLifecyclePersistence)
+	if notifying, ok := host.(modulehost.EventWorkNotifierHost); ok {
+		workers.SetEventWorkNotifier(notifying.EventWorkNotifier())
+	}
 	routedWebhooks := integrationpersistence.NewRoutedWebhookStore(host.Database(), host.Dialect(), delivery, subjectLifecyclePersistence)
 	domain := integrationservice.New(
 		integrationpersistence.NewCatalogStore(definitions),
