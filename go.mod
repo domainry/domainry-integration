@@ -3,11 +3,12 @@ module github.com/domainry/domainry-integration
 go 1.26.0
 
 require (
-	github.com/domainry/domainry-foundation v0.2.5
+	github.com/domainry/domainry-foundation v0.2.6
 	github.com/domainry/domainry-identity-sdk v0.1.22
 	github.com/domainry/domainry-integration-sdk v0.1.18
 	github.com/domainry/domainry-metadata-sdk v0.1.9
 	github.com/domainry/domainry-orm v0.1.33
+	go.uber.org/zap v1.27.1
 	golang.org/x/oauth2 v0.36.0
 	modernc.org/sqlite v1.57.0
 )
@@ -28,7 +29,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.27.1 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect

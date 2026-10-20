@@ -227,8 +227,7 @@ func respond(w http.ResponseWriter, value any, err error) {
 	writeJSON(w, 200, value)
 }
 func writeError(w http.ResponseWriter, err error) {
-	_ = err
-	telemetry.RecordHTTPStatusError(w, http.StatusInternalServerError, "integration.internal")
+	telemetry.RecordHTTPStatusError(w, http.StatusInternalServerError, "integration.internal", err)
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "integration.internal"})
 }
 func writeJSON(w http.ResponseWriter, status int, value any) {
