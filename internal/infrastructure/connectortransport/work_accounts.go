@@ -115,7 +115,11 @@ func (t *WorkAccounts) RoundTripHTTP(ctx context.Context, input connector.HTTPRe
 			if _, exists := object[key]; exists {
 				return connector.HTTPResponse{}, invalid
 			}
-			object[key], _ = json.Marshal(value)
+			encodedValue, marshalErr := json.Marshal(value)
+			if marshalErr != nil {
+				return connector.HTTPResponse{}, invalid
+			}
+			object[key] = encodedValue
 		}
 		body, err = json.Marshal(object)
 		if err != nil {
