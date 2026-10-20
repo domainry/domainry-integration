@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/domainry/domainry-foundation/httpresponse"
 	"github.com/domainry/domainry-foundation/modulehttp"
-	"github.com/domainry/domainry-foundation/telemetry"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	integrationapplication "github.com/domainry/domainry-integration/internal/application/integration"
@@ -308,21 +308,22 @@ func requestPrincipal(r *http.Request) (identitysdk.Principal, bool) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	httpresponse.WriteJSON(w, status, value)
 }
 
-func writeError(w http.ResponseWriter, status int, code string) {
-	telemetry.RecordHTTPStatusError(w, status, code)
-	writeJSON(w, status, map[string]string{"code": code})
+func writeError(w http.ResponseWriter, status int, code string, causes ...error) {
+	var cause error
+	if len(causes) > 0 {
+		cause = causes[0]
+	}
+	httpresponse.WriteError(w, nil, httpresponse.Failure{Status: status, Code: code, Cause: cause})
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, value any) bool {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
-		writeError(w, http.StatusBadRequest, "backend.request.invalid_json")
+		httpresponse.WriteError(w, r, httpresponse.Failure{Status: http.StatusBadRequest, Code: "backend.request.invalid_json", Cause: err})
 		return false
 	}
 	return true

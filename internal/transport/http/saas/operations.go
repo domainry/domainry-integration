@@ -26,7 +26,7 @@ func (h *handler) registerOperations() {
 func (h *handler) providerRunSnapshot(w http.ResponseWriter, r *http.Request) {
 	monitor, ok := h.management.(integrationsdk.ProviderRunMonitoring)
 	if !ok {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "integration.provider_run_monitoring_unavailable"})
+		writeStatus(w, http.StatusServiceUnavailable, "integration.provider_run_monitoring_unavailable")
 		return
 	}
 	value, err := monitor.ProviderRunSnapshot(r.Context())
@@ -74,12 +74,12 @@ func (h *handler) acceptRoutedWebhook(w http.ResponseWriter, r *http.Request) {
 func (h *handler) acceptPublicWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "integration.invalid_body"})
+		writeStatus(w, http.StatusBadRequest, "integration.invalid_body", err)
 		return
 	}
 	value, err := h.operations.AcceptWebhook(r.Context(), integrationsdk.WebhookRequest{WorkspaceID: r.PathValue("workspaceID"), ConnectorKey: r.PathValue("connectorKey"), ConnectionKey: r.PathValue("connectionKey"), Headers: r.Header.Clone(), Query: r.URL.Query(), Body: body, ReceivedAt: time.Now().UTC()})
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "integration.webhook_rejected"})
+		writeStatus(w, http.StatusUnauthorized, "integration.webhook_rejected", err)
 		return
 	}
 	if value.Challenge != "" && value.Format == "plain" {
@@ -94,7 +94,7 @@ func (h *handler) acceptPublicWebhook(w http.ResponseWriter, r *http.Request) {
 func (h *handler) acceptPublicRoutedWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "integration.invalid_body"})
+		writeStatus(w, http.StatusBadRequest, "integration.invalid_body", err)
 		return
 	}
 	value, err := h.routedWebhooks.AcceptRoutedWebhook(r.Context(), integrationsdk.WebhookRequest{
@@ -102,7 +102,7 @@ func (h *handler) acceptPublicRoutedWebhook(w http.ResponseWriter, r *http.Reque
 		Headers: r.Header.Clone(), Query: r.URL.Query(), Body: body, ReceivedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "integration.routed_webhook_rejected"})
+		writeStatus(w, http.StatusUnauthorized, "integration.routed_webhook_rejected", err)
 		return
 	}
 	if value.Challenge != "" {

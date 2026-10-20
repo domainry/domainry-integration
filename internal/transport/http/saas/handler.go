@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/httpresponse"
 	"github.com/domainry/domainry-foundation/telemetry"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 )
@@ -97,7 +98,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	provided := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 	if subtle.ConstantTimeCompare([]byte(provided), []byte(h.token)) != 1 || strings.TrimSpace(r.Header.Get("X-Domainry-Runtime-ID")) == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "integration.unauthorized"})
+		writeStatus(w, http.StatusUnauthorized, "integration.unauthorized")
 		return
 	}
 	h.mux.ServeHTTP(w, r)
@@ -131,10 +132,10 @@ func (h *handler) authenticateAPIKey(w http.ResponseWriter, r *http.Request) {
 		// Credential failures are deliberately indistinguishable to a remote
 		// Runtime and never echo token material or owner-side diagnostics.
 		if errors.Is(err, integrationsdk.ErrAPIKeyInvalid) {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"code": "integration.api_key_invalid"})
+			writeStatus(w, http.StatusUnauthorized, "integration.api_key_invalid", err)
 			return
 		}
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "integration.api_key_authentication_unavailable"})
+		writeStatus(w, http.StatusServiceUnavailable, "integration.api_key_authentication_unavailable", err)
 		return
 	}
 	respond(w, key, nil)
@@ -214,7 +215,7 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	d.DisallowUnknownFields()
 	if err := d.Decode(target); err != nil {
-		writeJSON(w, 400, map[string]string{"code": "integration.invalid_json"})
+		httpresponse.WriteError(w, nil, httpresponse.Failure{Status: http.StatusBadRequest, Code: "integration.invalid_json", Cause: err})
 		return false
 	}
 	return true
@@ -227,11 +228,15 @@ func respond(w http.ResponseWriter, value any, err error) {
 	writeJSON(w, 200, value)
 }
 func writeError(w http.ResponseWriter, err error) {
-	telemetry.RecordHTTPStatusError(w, http.StatusInternalServerError, "integration.internal", err)
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "integration.internal"})
+	httpresponse.WriteError(w, nil, httpresponse.Failure{Status: http.StatusInternalServerError, Code: "integration.internal", Cause: err})
+}
+func writeStatus(w http.ResponseWriter, status int, code string, causes ...error) {
+	var cause error
+	if len(causes) > 0 {
+		cause = causes[0]
+	}
+	httpresponse.WriteError(w, nil, httpresponse.Failure{Status: status, Code: code, Cause: cause})
 }
 func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
+	httpresponse.WriteJSON(w, status, value)
 }

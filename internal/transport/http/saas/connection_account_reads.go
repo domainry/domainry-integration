@@ -7,7 +7,7 @@ import (
 
 func (h *handler) authorizeConnectionAccountRead(w http.ResponseWriter, r *http.Request) {
 	if h.accountReads == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "integration.account_reads_unavailable"})
+		writeStatus(w, http.StatusServiceUnavailable, "integration.account_reads_unavailable")
 		return
 	}
 	var input sdk.ConnectionAccountReadOperation
@@ -16,7 +16,7 @@ func (h *handler) authorizeConnectionAccountRead(w http.ResponseWriter, r *http.
 	}
 	value, err := h.accountReads.AuthorizeConnectionAccountRead(r.Context(), accountSubject(r), r.PathValue("key"), input)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "integration.account_read_failed"})
+		writeStatus(w, http.StatusBadRequest, "integration.account_read_failed", err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -25,7 +25,7 @@ func (h *handler) authorizeConnectionAccountRead(w http.ResponseWriter, r *http.
 
 func (h *handler) readConnectionAccount(w http.ResponseWriter, r *http.Request) {
 	if h.accountReads == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "integration.account_reads_unavailable"})
+		writeStatus(w, http.StatusServiceUnavailable, "integration.account_reads_unavailable")
 		return
 	}
 	var input sdk.ConnectionAccountReadRequest
@@ -34,7 +34,7 @@ func (h *handler) readConnectionAccount(w http.ResponseWriter, r *http.Request) 
 	}
 	value, err := h.accountReads.ReadConnectionAccount(r.Context(), accountSubject(r), r.PathValue("key"), input)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "integration.account_read_failed"})
+		writeStatus(w, http.StatusBadRequest, "integration.account_read_failed", err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")

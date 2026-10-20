@@ -21,8 +21,12 @@ func decodeAccountWrite(w http.ResponseWriter, r *http.Request, value any) bool 
 	w.Header().Set("Cache-Control", "no-store")
 	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20))
 	d.DisallowUnknownFields()
-	if d.Decode(value) != nil || d.Decode(new(any)) != io.EOF {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "integration.invalid_json"})
+	if err := d.Decode(value); err != nil {
+		writeStatus(w, http.StatusBadRequest, "integration.invalid_json", err)
+		return false
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		writeStatus(w, http.StatusBadRequest, "integration.invalid_json", err)
 		return false
 	}
 	return true
@@ -30,7 +34,7 @@ func decodeAccountWrite(w http.ResponseWriter, r *http.Request, value any) bool 
 
 func (h *handler) authorizeConnectionAccountWrite(w http.ResponseWriter, r *http.Request) {
 	if h.accountWrites == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "integration.account_writes_unavailable"})
+		writeStatus(w, http.StatusServiceUnavailable, "integration.account_writes_unavailable")
 		return
 	}
 	var input sdk.ConnectionAccountWriteOperation
@@ -39,7 +43,7 @@ func (h *handler) authorizeConnectionAccountWrite(w http.ResponseWriter, r *http
 	}
 	value, err := h.accountWrites.AuthorizeConnectionAccountWrite(r.Context(), accountSubject(r), r.PathValue("key"), input)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "integration.account_write_denied"})
+		writeStatus(w, http.StatusBadRequest, "integration.account_write_denied", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
@@ -54,7 +58,7 @@ func (h *handler) readConnectionAccountWriteReceipt(w http.ResponseWriter, r *ht
 
 func (h *handler) accountWrite(w http.ResponseWriter, r *http.Request, receiptOnly bool) {
 	if h.accountWrites == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"code": "integration.account_writes_unavailable"})
+		writeStatus(w, http.StatusServiceUnavailable, "integration.account_writes_unavailable")
 		return
 	}
 	var input sdk.ConnectionAccountWriteRequest
@@ -69,7 +73,7 @@ func (h *handler) accountWrite(w http.ResponseWriter, r *http.Request, receiptOn
 		value, err = h.accountWrites.WriteConnectionAccount(r.Context(), accountSubject(r), r.PathValue("key"), input)
 	}
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"code": "integration.account_write_failed"})
+		writeStatus(w, http.StatusBadRequest, "integration.account_write_failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, value)

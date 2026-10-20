@@ -183,7 +183,7 @@ func writeManagementError(w http.ResponseWriter, err error) {
 	if err == nil {
 		return
 	}
-	writeJSON(w, http.StatusBadRequest, map[string]string{"code": "backend.integration.management_failed", "message": err.Error()})
+	writeError(w, http.StatusBadRequest, "backend.integration.management_failed", err)
 }
 
 func (h *handler) integrationCatalog(w http.ResponseWriter, r *http.Request) {

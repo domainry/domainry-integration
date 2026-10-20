@@ -65,7 +65,7 @@ func (h *handler) oauthReady(w http.ResponseWriter) bool {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	if h.oauthApplications == nil || h.oauthAuthorizations == nil {
-		writeJSON(w, 503, map[string]string{"code": "integration.oauth_unavailable"})
+		writeStatus(w, http.StatusServiceUnavailable, "integration.oauth_unavailable")
 		return false
 	}
 	return true
