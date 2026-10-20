@@ -4,9 +4,9 @@ go 1.26.0
 
 require (
 	github.com/domainry/domainry-foundation v0.2.9
-	github.com/domainry/domainry-identity-sdk v0.1.22
-	github.com/domainry/domainry-integration-sdk v0.1.18
-	github.com/domainry/domainry-metadata-sdk v0.1.9
+	github.com/domainry/domainry-identity-sdk v0.1.27
+	github.com/domainry/domainry-integration-sdk v0.1.19
+	github.com/domainry/domainry-metadata-sdk v0.1.11
 	github.com/domainry/domainry-orm v0.1.33
 	go.uber.org/zap v1.27.1
 	golang.org/x/oauth2 v0.36.0
@@ -38,8 +38,8 @@ require (
 )
 
 require (
-	github.com/domainry/domainry-connector-sdk v0.1.8
-	github.com/domainry/domainry-connectors v0.1.12
+	github.com/domainry/domainry-connector-sdk v0.1.11
+	github.com/domainry/domainry-connectors v0.1.16
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
