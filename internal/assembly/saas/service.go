@@ -3,10 +3,10 @@ package saas
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
+	workerplatform "github.com/domainry/domainry-foundation/worker"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	moduleassembly "github.com/domainry/domainry-integration/internal/assembly/module"
@@ -45,35 +45,25 @@ func Open(ctx context.Context, application integrationsdk.ApplicationRef, host m
 }
 
 func (s *Service) StartWorkers(ctx context.Context, interval time.Duration, limit int) <-chan struct{} {
-	done := make(chan struct{})
 	if interval <= 0 {
 		interval = time.Second
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 25
 	}
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		processes := []struct {
-			name    string
-			process func(context.Context, int) (int, error)
-		}{{"events", s.Workers.ProcessDueEvents}, {"provider_tasks", s.Workers.ProcessDueProviderTasks}, {"reconciliations", s.Workers.ProcessDueReconciliations}, {"credential_expirations", s.Workers.ProcessDueCredentialExpirations}}
-		for {
-			for _, item := range processes {
-				if _, err := item.process(ctx, limit); err != nil && ctx.Err() == nil {
-					log.Printf("Integration SaaS %s worker failed: %v", item.name, err)
-				}
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	return done
+	processes := []struct {
+		name    string
+		process func(context.Context, int) (int, error)
+	}{{"events", s.Workers.ProcessDueEvents}, {"provider_tasks", s.Workers.ProcessDueProviderTasks}, {"reconciliations", s.Workers.ProcessDueReconciliations}, {"credential_expirations", s.Workers.ProcessDueCredentialExpirations}}
+	done := make([]<-chan struct{}, 0, len(processes))
+	for _, item := range processes {
+		item := item
+		done = append(done, workerplatform.StartNamedLoop(ctx, workerplatform.Identity{Owner: "integration", Name: item.name}, interval, func(tickCtx context.Context) (workerplatform.TickResult, error) {
+			processed, err := item.process(tickCtx, limit)
+			return workerplatform.TickResult{Worked: processed > 0, ProcessedCount: processed}, err
+		}))
+	}
+	return workerplatform.Join(done...)
 }
 
 // BindSubjectLifecyclePersistence enables owner-side subject erasure only after

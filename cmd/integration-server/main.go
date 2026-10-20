@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +18,7 @@ import (
 	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
 	connectormodule "github.com/domainry/domainry-connectors/module"
 	shareddefinition "github.com/domainry/domainry-foundation/definition"
+	"github.com/domainry/domainry-foundation/processhost"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	saasassembly "github.com/domainry/domainry-integration/internal/assembly/saas"
@@ -30,12 +30,19 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	if run() != nil {
+		os.Exit(1)
 	}
 }
 
-func run() error {
+func run() (runErr error) {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	observability, err := processhost.Open(ctx, processhost.Config{ServiceName: "domainry-integration"})
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = observability.Finish(context.Background(), nil, runErr) }()
 	application := integrationsdk.ApplicationRef{RuntimeID: strings.TrimSpace(os.Getenv("INTEGRATION_RUNTIME_ID"))}
 	token := strings.TrimSpace(os.Getenv("INTEGRATION_SERVICE_TOKEN"))
 	if err := application.Validate(); err != nil {
@@ -68,7 +75,7 @@ func run() error {
 	database.SetMaxOpenConns(1)
 	dialect, _ := ormdialect.New(ormdialect.SQLite)
 	host := &standaloneHost{database: database, dialect: dialect.WithSchema(""), providers: registry, cipher: cipher}
-	service, err := saasassembly.Open(context.Background(), application, host, token, saasassembly.Options{ConnectorCatalog: connectorscatalog.Definitions})
+	service, err := saasassembly.Open(ctx, application, host, token, saasassembly.Options{ConnectorCatalog: connectorscatalog.Definitions})
 	if err != nil {
 		return err
 	}
@@ -88,25 +95,27 @@ func run() error {
 	if address == "" {
 		address = ":8080"
 	}
-	server := &http.Server{Addr: address, Handler: service.Handler, ReadHeaderTimeout: 5 * time.Second}
-	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	workerDone := service.StartWorkers(stop, time.Second, 25)
+	server := &http.Server{Addr: address, Handler: observability.Handler("public", service.Handler), ReadHeaderTimeout: 5 * time.Second}
+	workerDone := service.StartWorkers(ctx, time.Second, 25)
 	defer func() {
 		cancel()
 		<-workerDone
 	}()
-	go func() {
-		<-stop.Done()
-		ctx, release := context.WithTimeout(context.Background(), 10*time.Second)
-		defer release()
-		_ = server.Shutdown(ctx)
-	}()
-	log.Printf("Integration SaaS server listening on %s", address)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.ListenAndServe() }()
+	observability.Started(ctx, map[string]any{"listener_group": "public"})
+	select {
+	case err := <-serveErr:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
 		return err
+	case <-ctx.Done():
+		observability.Stopping(context.Background(), map[string]any{"reason": "signal"})
+		shutdownCtx, release := context.WithTimeout(context.Background(), 10*time.Second)
+		defer release()
+		return server.Shutdown(shutdownCtx)
 	}
-	return nil
 }
 
 type standaloneHost struct {

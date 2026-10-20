@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -111,12 +110,6 @@ type routedWebhookTarget struct {
 }
 
 func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request integrationsdk.WebhookRequest) (integrationsdk.RoutedWebhookReceipt, error) {
-	stageStarted := time.Now()
-	stage := func(name string) {
-		// No SQL, identifiers, payloads, addresses, credentials or raw errors.
-		slog.InfoContext(ctx, "Integration routed webhook stage completed", "stage", name, "received_at_ms", request.ReceivedAt.UnixMilli(), "started_at_ms", stageStarted.UnixMilli(), "duration_ms", time.Since(stageStarted).Milliseconds())
-		stageStarted = time.Now()
-	}
 	if err := request.Validate(); err != nil {
 		return integrationsdk.RoutedWebhookReceipt{}, err
 	}
@@ -147,7 +140,6 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 	if verified.Security == nil || !verified.Security.SignatureVerified {
 		return integrationsdk.RoutedWebhookReceipt{}, fmt.Errorf("Integration routed webhook signature is not verified")
 	}
-	stage("load_and_verify")
 	if verified.Challenge != "" {
 		return integrationsdk.RoutedWebhookReceipt{ExternalID: strings.TrimSpace(verified.ExternalID), Challenge: verified.Challenge, Format: verified.ChallengeFormat}, nil
 	}
@@ -170,7 +162,6 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 		return integrationsdk.RoutedWebhookReceipt{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	stage("begin_transaction")
 	insert, args, err := query.NewInsertBuilder(s.dialect, providerInboxTable).
 		Columns("id", "workspace_id", "connector_key", "provider_key", "ingress_connection_key", "external_id", "route_kind", "route_hash", "route_bucket", "payload_json", "status", "routed_count", "received_at", "published_at", "updated_at").
 		Values(inboxID, connection.WorkspaceID, connection.ConnectorKey, connection.ProviderKey, connection.Key, externalID, routeKind, routeHash, routeBucket, string(envelope.Data), "received", 0, now.UnixMilli(), publishedAt, now.UnixMilli()).
@@ -185,7 +176,6 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		return integrationsdk.RoutedWebhookReceipt{ExternalID: externalID, Duplicate: true}, nil
 	}
-	stage("insert_inbox")
 
 	targetsByIdentity := map[string]routedWebhookTarget{}
 	for _, route := range envelope.Routes {
@@ -223,7 +213,6 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 		_ = rows.Close()
 	}
 	targets := make([]routedWebhookTarget, 0, len(targetsByIdentity))
-	stage("resolve_routes")
 	for _, target := range targetsByIdentity {
 		targets = append(targets, target)
 	}
@@ -251,7 +240,6 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 		if wakeErr != nil {
 			return integrationsdk.RoutedWebhookReceipt{}, wakeErr
 		}
-		stage("wake_tasks")
 		if err := recordProviderWakeReceipts(ctx, tx, s.dialect, target.workspaceID, target.connectionKey, connection.ConnectorKey, connection.ProviderKey, inboxID, publishedAt, now, sequences); err != nil {
 			return integrationsdk.RoutedWebhookReceipt{}, err
 		}
@@ -259,7 +247,6 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 			routed++
 		}
 	}
-	stage("record_wake_receipts")
 	status := "routed"
 	if routed == 0 {
 		status = "unmatched"
@@ -273,11 +260,9 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 	if _, err = tx.ExecContext(ctx, update, args...); err != nil {
 		return integrationsdk.RoutedWebhookReceipt{}, err
 	}
-	stage("update_inbox")
 	if err = tx.Commit(); err != nil {
 		return integrationsdk.RoutedWebhookReceipt{}, err
 	}
-	stage("commit")
 	return integrationsdk.RoutedWebhookReceipt{ExternalID: externalID, Routed: routed}, nil
 }
 
