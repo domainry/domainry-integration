@@ -8,7 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/domainry/domainry-foundation/telemetry"
 	sdk "github.com/domainry/domainry-integration-sdk"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 type apiKeyAuthenticationHTTPStub struct{ calls int }
@@ -22,6 +26,21 @@ func (s *apiKeyAuthenticationHTTPStub) AuthenticateAPIKey(_ context.Context, tok
 		return sdk.APIKey{}, sdk.ErrAPIKeyInvalid
 	}
 	return sdk.APIKey{Key: "service", WorkspaceID: workspace, ActorID: "service-a", RoleKey: "sales", Scopes: []string{"account.read"}, Status: "active"}, nil
+}
+
+func TestUnauthorizedSaaSRequestRecordsRegisteredRouteTemplate(t *testing.T) {
+	core, observed := observer.New(zapcore.InfoLevel)
+	previous := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(func() { zap.ReplaceGlobals(previous) })
+	h := &handler{token: "host-service-token", apiKeys: &apiKeyAuthenticationHTTPStub{}, mux: http.NewServeMux()}
+	h.register()
+	request := httptest.NewRequest(http.MethodPost, "/integration/v1/api-key-authentication?token=hidden", strings.NewReader(`{}`))
+	telemetry.HTTPServerMiddleware(telemetry.HTTPServerConfig{ListenerGroup: "public"}, h).ServeHTTP(httptest.NewRecorder(), request)
+	entries := observed.FilterMessage("http_request").All()
+	if len(entries) != 1 || entries[0].ContextMap()["route"] != "/integration/v1/api-key-authentication" {
+		t.Fatalf("entries=%#v", entries)
+	}
 }
 
 func TestAPIKeyAuthenticationSaaSRequiresHostCredentialAndHidesInvalidToken(t *testing.T) {

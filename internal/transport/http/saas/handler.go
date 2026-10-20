@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/telemetry"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 )
 
@@ -85,6 +86,11 @@ type handler struct {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Resolve only against the source-owned ServeMux table so authentication
+	// failures still retain a bounded route template at the outer boundary.
+	if _, pattern := h.mux.Handler(r); pattern != "" {
+		telemetry.RecordHTTPRoute(r, pattern)
+	}
 	if r.Method == http.MethodPost && (strings.HasPrefix(r.URL.Path, "/integration/v1/public/webhooks/") || strings.HasPrefix(r.URL.Path, "/integration/v1/public/routed-webhooks/")) {
 		h.mux.ServeHTTP(w, r)
 		return
