@@ -126,7 +126,11 @@ func (s *ManagementStore) UpsertOAuthApplication(ctx context.Context, workspace,
 	if ciphertext == "" {
 		return integrationsdk.OAuthApplication{}, fmt.Errorf("Integration OAuth client secret is required")
 	}
-	value := integrationsdk.OAuthApplication{Key: key, WorkspaceID: workspace, ConnectorKey: input.ConnectorKey, ProviderKey: input.ProviderKey, Name: strings.TrimSpace(input.Name), ClientID: input.ClientID, RedirectURI: input.RedirectURI, Scopes: append([]string(nil), input.Scopes...), ConnectionConfig: connection.Config, Configured: true, Enabled: input.Enabled, UpdatedAt: ownerNow()}
+	updatedAt := ownerNow()
+	if lookupErr == nil {
+		updatedAt = ownerRevisionAfter(revision)
+	}
+	value := integrationsdk.OAuthApplication{Key: key, WorkspaceID: workspace, ConnectorKey: input.ConnectorKey, ProviderKey: input.ProviderKey, Name: strings.TrimSpace(input.Name), ClientID: input.ClientID, RedirectURI: input.RedirectURI, Scopes: append([]string(nil), input.Scopes...), ConnectionConfig: connection.Config, Configured: true, Enabled: input.Enabled, UpdatedAt: updatedAt}
 	raw, _ := json.Marshal(value)
 	var statement string
 	if lookupErr == sql.ErrNoRows {

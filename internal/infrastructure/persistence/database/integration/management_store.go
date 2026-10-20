@@ -83,6 +83,14 @@ func (s *ManagementStore) requireScopedCandidate(ctx context.Context, table, key
 
 func ownerNow() string { return time.Now().UTC().Truncate(time.Millisecond).Format(time.RFC3339Nano) }
 
+func ownerRevisionAfter(previous string) string {
+	now := time.Now().UTC().UnixMilli()
+	if previousMillis := timestampMillis(previous); now <= previousMillis {
+		now = previousMillis + 1
+	}
+	return timestampString(now)
+}
+
 func ownerID(prefix, workspaceID, key string) string {
 	digest := sha256.Sum256([]byte(strings.TrimSpace(workspaceID) + "\x00" + strings.TrimSpace(key)))
 	return prefix + hex.EncodeToString(digest[:16])

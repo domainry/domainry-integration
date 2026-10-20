@@ -545,7 +545,7 @@ func (s *ManagementStore) RevokeConnectionAccount(ctx context.Context, subject i
 	if account.UpdatedAt != expectedUpdatedAt {
 		return integrationsdk.ConnectionAccount{}, errConnectionAccountChanged
 	}
-	now := ownerNow()
+	now := ownerRevisionAfter(account.UpdatedAt)
 	connectionWhere := query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("connection_key", account.Key), query.Equal("updated_at", timestampMillis(expectedUpdatedAt)))
 	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_connections").Set("status", "revoked").Set("updated_at", timestampMillis(now)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, subject.WorkspaceID, "_integration_connections", ownerID("connection_", subject.WorkspaceID, account.Key)), connectionWhere)).Build()
 	if err != nil {
