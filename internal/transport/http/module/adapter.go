@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/domainry/domainry-foundation/modulehttp"
+	"github.com/domainry/domainry-foundation/telemetry"
 	identitysdk "github.com/domainry/domainry-identity-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	integrationapplication "github.com/domainry/domainry-integration/internal/application/integration"
@@ -313,6 +314,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeError(w http.ResponseWriter, status int, code string) {
+	telemetry.RecordHTTPStatusError(w, status, code)
 	writeJSON(w, status, map[string]string{"code": code})
 }
 

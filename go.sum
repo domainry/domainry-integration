@@ -12,6 +12,8 @@ github.com/domainry/domainry-connectors v0.1.12 h1:RBqA6WaU1Wnw7w5J6Z/7RASYIGF9H
 github.com/domainry/domainry-connectors v0.1.12/go.mod h1:WWRakhA5oMmSVH5iSSZ23fiBhICU45ZKnm8/5kLZZ8I=
 github.com/domainry/domainry-foundation v0.2.2 h1:XWugH7DFB4YU0mI5nBxSdNxg9C4AXaiw9haZIbzB+ss=
 github.com/domainry/domainry-foundation v0.2.2/go.mod h1:nCw272N/NTkHfJNWvAGL8vZybUtOpgw3ZyCIshRSqF4=
+github.com/domainry/domainry-foundation v0.2.5 h1:3FQwbJzuaxXJosZL+r5KXDnmpNyhZyXb/zqBZzQR+GY=
+github.com/domainry/domainry-foundation v0.2.5/go.mod h1:nCw272N/NTkHfJNWvAGL8vZybUtOpgw3ZyCIshRSqF4=
 github.com/domainry/domainry-identity-sdk v0.1.22 h1:wHpUm6YsEMXJj4IthYCEJ/kHpH2y51/QNRhLiWkZjfA=
 github.com/domainry/domainry-identity-sdk v0.1.22/go.mod h1:VK/D3Zq+9iVyVJ50+zyel/9x5/cbMA1imlcwtoCsmj8=
 github.com/domainry/domainry-integration-sdk v0.1.18 h1:092N5MUVwqHgmRMQ2MeilErixYFZOhq2ty3nwGsso7k=
