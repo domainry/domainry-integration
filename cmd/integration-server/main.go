@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	connectorscatalog "github.com/domainry/domainry-connectors/catalog"
 	connectormodule "github.com/domainry/domainry-connectors/module"
 	shareddefinition "github.com/domainry/domainry-foundation/definition"
+	"github.com/domainry/domainry-foundation/logging"
 	"github.com/domainry/domainry-foundation/processhost"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
@@ -42,7 +44,16 @@ func run() (runErr error) {
 	if err != nil {
 		return err
 	}
-	defer func() { runErr = observability.Finish(context.Background(), nil, runErr) }()
+	started := false
+	startupFailure := logging.Failure{Stage: "configuration_validate"}
+	defer func() {
+		if !started && runErr != nil {
+			observability.StartFailed(context.Background(), runErr, startupFailure)
+			runErr = errors.Join(runErr, observability.Close(context.Background(), nil))
+			return
+		}
+		runErr = observability.Finish(context.Background(), nil, runErr)
+	}()
 	application := integrationsdk.ApplicationRef{RuntimeID: strings.TrimSpace(os.Getenv("INTEGRATION_RUNTIME_ID"))}
 	token := strings.TrimSpace(os.Getenv("INTEGRATION_SERVICE_TOKEN"))
 	if err := application.Validate(); err != nil {
@@ -67,6 +78,7 @@ func run() (runErr error) {
 	if path == "" {
 		path = "integration.db"
 	}
+	startupFailure = logging.Failure{Stage: "database_initialize", Dependency: "integration_database"}
 	database, err := sql.Open("sqlite", path)
 	if err != nil {
 		return fmt.Errorf("open Integration database: %w", err)
@@ -75,6 +87,7 @@ func run() (runErr error) {
 	database.SetMaxOpenConns(1)
 	dialect, _ := ormdialect.New(ormdialect.SQLite)
 	host := &standaloneHost{database: database, dialect: dialect.WithSchema(""), providers: registry, cipher: cipher}
+	startupFailure = logging.Failure{Stage: "module_assembly"}
 	service, err := saasassembly.Open(ctx, application, host, token, saasassembly.Options{ConnectorCatalog: connectorscatalog.Definitions})
 	if err != nil {
 		return err
@@ -96,13 +109,19 @@ func run() (runErr error) {
 		address = ":8080"
 	}
 	server := &http.Server{Addr: address, Handler: observability.Handler("public", service.Handler), ReadHeaderTimeout: 5 * time.Second}
+	startupFailure = logging.Failure{Stage: "listener_bind", Dependency: "public_listener"}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return err
+	}
 	workerDone := service.StartWorkers(ctx, time.Second, 25)
 	defer func() {
 		cancel()
 		<-workerDone
 	}()
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- server.ListenAndServe() }()
+	go func() { serveErr <- server.Serve(listener) }()
+	started = true
 	observability.Started(ctx, map[string]any{"listener_group": "public"})
 	select {
 	case err := <-serveErr:
