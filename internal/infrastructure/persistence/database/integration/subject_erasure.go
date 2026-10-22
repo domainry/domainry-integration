@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,7 +57,7 @@ func (s *SubjectLifecycleStore) SubjectLifecyclePersistenceBound() bool {
 
 type subjectRow struct {
 	Table string `json:"table"`
-	ID    string `json:"id"`
+	ID    int64  `json:"id"`
 }
 type subjectPlan struct {
 	Request        model.SubjectErasureRequest `json:"request"`
@@ -236,7 +237,7 @@ func (s *SubjectLifecycleStore) selectIDs(ctx context.Context, tx *sql.Tx, r mod
 	defer rows.Close()
 	result := []subjectRow{}
 	for rows.Next() {
-		var id string
+		var id int64
 		var status sql.NullString
 		dest := []any{&id}
 		if sp.status != "" {
@@ -351,7 +352,7 @@ func (s *SubjectLifecycleStore) collect(ctx context.Context, tx *sql.Tx, r model
 	// Account-write receipts have a documented typed actor. Ordinary operation
 	// evidence uses operation-v1 metadata; no arbitrary payload text matching.
 	actorInvocations := []string{}
-	stmt, args, err = query.NewWorkspaceSelectBuilder(s.dialect, "_integration_invocations", r.WorkspaceID).Columns("id", "metadata_json").Build()
+	stmt, args, err = query.NewWorkspaceSelectBuilder(s.dialect, "_integration_invocations", r.WorkspaceID).Columns("invocation_id", "metadata_json").Build()
 	if err != nil {
 		return p, err
 	}
@@ -399,9 +400,9 @@ func (s *SubjectLifecycleStore) collect(ctx context.Context, tx *sql.Tx, r model
 		case "_integration_secret_materials":
 			predicate = subjectIn("secret_key", p.SecretKeys)
 		case "_integration_invocations":
-			predicate = query.Or(predicate, subjectIn("id", actorInvocations), subjectIn("request_ref", r.PublicationMessageIDs), subjectIn("event_id", eventIDs), subjectResources(r.Resources))
+			predicate = query.Or(predicate, subjectIn("invocation_id", actorInvocations), subjectIn("request_ref", r.PublicationMessageIDs), subjectIn("event_id", eventIDs), subjectResources(r.Resources))
 		case "_integration_events":
-			predicate = subjectIn("id", eventIDs)
+			predicate = subjectIn("event_id", eventIDs)
 		}
 		found, e := s.selectIDs(ctx, tx, r, sp, predicate, prepare)
 		if e != nil {
@@ -445,7 +446,7 @@ func subjectPlanFences(p subjectPlan) []subjectFenceReference {
 		refs = append(refs, subjectFenceReference{Kind: "external", Object: ref.Provider, ID: ref.SubjectSHA256})
 	}
 	for _, row := range p.Rows {
-		refs = append(refs, subjectFenceReference{Kind: "row", Object: row.Table, ID: row.ID})
+		refs = append(refs, subjectFenceReference{Kind: "row", Object: row.Table, ID: strconv.FormatInt(row.ID, 10)})
 	}
 	sort.Slice(refs, func(i, j int) bool {
 		if refs[i].Kind != refs[j].Kind {

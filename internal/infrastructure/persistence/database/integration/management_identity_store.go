@@ -122,20 +122,20 @@ func (s *ManagementStore) UpsertExternalIdentity(ctx context.Context, workspaceI
 	if err != nil {
 		return integrationsdk.ExternalIdentity{}, err
 	}
-	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_external_identities").Columns("id").Where(where).Limit(1).Build()
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_external_identities").Columns("identity_key").Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.ExternalIdentity{}, err
 	}
-	var id string
-	lookupErr := s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&id)
+	var existingKey string
+	lookupErr := s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&existingKey)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return integrationsdk.ExternalIdentity{}, lookupErr
 	}
 	if lookupErr == sql.ErrNoRows {
 		actorID, _ = scopeOwner(ctx, actorID)
 		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_external_identities").Columns(
-			"id", "identity_key", "workspace_id", "provider", "external_subject", "external_subject_type", "external_name", "external_organization", "external_department", "external_group", "external_bot_id", "actor_id", "role_key", "status", "last_resolved_at", "created_by", "created_at", "updated_at", "disabled_at",
-		).Values(ownerID("external_identity_", workspaceID, key), key, workspaceID, input.Provider, input.ExternalSubject, input.ExternalSubjectType, input.ExternalName, input.ExternalOrganization, input.ExternalDepartment, input.ExternalGroup, input.ExternalBotID, input.ActorID, input.RoleKey, input.Status, int64(0), actorID, timestampMillis(now), timestampMillis(now), int64(0)).Build()
+			"identity_key", "workspace_id", "provider", "external_subject", "external_subject_type", "external_name", "external_organization", "external_department", "external_group", "external_bot_id", "actor_id", "role_key", "status", "last_resolved_at", "created_by", "created_at", "updated_at", "disabled_at",
+		).Values(key, workspaceID, input.Provider, input.ExternalSubject, input.ExternalSubjectType, input.ExternalName, input.ExternalOrganization, input.ExternalDepartment, input.ExternalGroup, input.ExternalBotID, input.ActorID, input.RoleKey, input.Status, int64(0), actorID, timestampMillis(now), timestampMillis(now), int64(0)).Build()
 		if buildErr != nil {
 			return integrationsdk.ExternalIdentity{}, buildErr
 		}
@@ -143,7 +143,7 @@ func (s *ManagementStore) UpsertExternalIdentity(ctx context.Context, workspaceI
 			return integrationsdk.ExternalIdentity{}, fmt.Errorf("insert Integration external identity: %w", err)
 		}
 	} else {
-		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_external_identities").Set("provider", input.Provider).Set("external_subject", input.ExternalSubject).Set("external_subject_type", input.ExternalSubjectType).Set("external_name", input.ExternalName).Set("external_organization", input.ExternalOrganization).Set("external_department", input.ExternalDepartment).Set("external_group", input.ExternalGroup).Set("external_bot_id", input.ExternalBotID).Set("actor_id", input.ActorID).Set("role_key", input.RoleKey).Set("status", input.Status).Set("disabled_at", int64(0)).Set("updated_at", timestampMillis(now)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_external_identities", id), where)).Build()
+		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_external_identities").Set("provider", input.Provider).Set("external_subject", input.ExternalSubject).Set("external_subject_type", input.ExternalSubjectType).Set("external_name", input.ExternalName).Set("external_organization", input.ExternalOrganization).Set("external_department", input.ExternalDepartment).Set("external_group", input.ExternalGroup).Set("external_bot_id", input.ExternalBotID).Set("actor_id", input.ActorID).Set("role_key", input.RoleKey).Set("status", input.Status).Set("disabled_at", int64(0)).Set("updated_at", timestampMillis(now)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_external_identities", ownerID("external_identity_", workspaceID, key)), where)).Build()
 		if buildErr != nil {
 			return integrationsdk.ExternalIdentity{}, buildErr
 		}

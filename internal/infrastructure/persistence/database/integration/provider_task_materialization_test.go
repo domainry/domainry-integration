@@ -32,8 +32,8 @@ func TestConnectionLifecycleMaterializesAndCancelsProviderRuns(t *testing.T) {
 
 	now := time.Now().UTC().UnixMilli()
 	insert, args, err := query.NewInsertBuilder(dialect, providerRunTable).
-		Columns("id", "workspace_id", "run_kind", "run_key", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "operation_key", "contract_sha256", "payload_json", "status", "last_error_code", "attempt_count", "due_at", "lease_owner", "lease_expires_at", "fencing_token", "created_at", "updated_at").
-		Values("pending-commit", "workspace-a", providerRunKindCommit, "pending-commit", "crm", "background", "primary", "poll", 0, "ack", "contract", `{}`, "pending", "", 0, now, "", int64(0), 7, now, now).Build()
+		Columns("workspace_id", "run_kind", "run_key", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "operation_key", "contract_sha256", "payload_json", "status", "last_error_code", "attempt_count", "due_at", "lease_owner", "lease_expires_at", "fencing_token", "created_at", "updated_at").
+		Values("workspace-a", providerRunKindCommit, "pending-commit", "crm", "background", "primary", "poll", 0, "ack", "contract", `{}`, "pending", "", 0, now, "", int64(0), 7, now, now).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,8 +77,8 @@ func TestProviderWorkerDoesNotScanConnectionsToCreateTasks(t *testing.T) {
 	delivery := NewDeliveryStore(database, dialect, providers, emptyDeliveryTestSecrets{})
 	now := time.Now().UTC().UnixMilli()
 	insert, args, err := query.NewInsertBuilder(dialect, "_integration_connections").
-		Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
-		Values("direct-connection", "direct", "workspace-a", "crm", "background", "Direct", "active", `{}`, `{}`, "admin", now, now).Build()
+		Columns("connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
+		Values("direct", "workspace-a", "crm", "background", "Direct", "active", `{}`, `{}`, "admin", now, now).Build()
 	if err != nil {
 		t.Fatal(err)
 	}

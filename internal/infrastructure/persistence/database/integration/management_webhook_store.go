@@ -118,20 +118,20 @@ func (s *ManagementStore) UpsertWebhookSubscription(ctx context.Context, workspa
 	if err != nil {
 		return integrationsdk.WebhookSubscription{}, err
 	}
-	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_webhook_subscriptions").Columns("id").Where(where).Limit(1).Build()
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_webhook_subscriptions").Columns("subscription_key").Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.WebhookSubscription{}, err
 	}
-	var id string
-	lookupErr := s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&id)
+	var existingKey string
+	lookupErr := s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&existingKey)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return integrationsdk.WebhookSubscription{}, lookupErr
 	}
 	if lookupErr == sql.ErrNoRows {
 		actorID, _ = scopeOwner(ctx, actorID)
 		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_webhook_subscriptions").Columns(
-			"id", "subscription_key", "workspace_id", "name", "connector_key", "connection_key", "event_types_json", "status", "description", "created_by", "created_at", "updated_at", "disabled_at",
-		).Values(ownerID("webhook_subscription_", workspaceID, key), key, workspaceID, input.Name, input.ConnectorKey, input.ConnectionKey, eventTypesJSON, input.Status, input.Description, actorID, timestampMillis(now), timestampMillis(now), int64(0)).Build()
+			"subscription_key", "workspace_id", "name", "connector_key", "connection_key", "event_types_json", "status", "description", "created_by", "created_at", "updated_at", "disabled_at",
+		).Values(key, workspaceID, input.Name, input.ConnectorKey, input.ConnectionKey, eventTypesJSON, input.Status, input.Description, actorID, timestampMillis(now), timestampMillis(now), int64(0)).Build()
 		if buildErr != nil {
 			return integrationsdk.WebhookSubscription{}, buildErr
 		}
@@ -139,7 +139,7 @@ func (s *ManagementStore) UpsertWebhookSubscription(ctx context.Context, workspa
 			return integrationsdk.WebhookSubscription{}, fmt.Errorf("insert Integration webhook subscription: %w", err)
 		}
 	} else {
-		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_webhook_subscriptions").Set("name", input.Name).Set("connector_key", input.ConnectorKey).Set("connection_key", input.ConnectionKey).Set("event_types_json", eventTypesJSON).Set("status", input.Status).Set("description", input.Description).Set("disabled_at", int64(0)).Set("updated_at", timestampMillis(now)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_webhook_subscriptions", id), where)).Build()
+		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_webhook_subscriptions").Set("name", input.Name).Set("connector_key", input.ConnectorKey).Set("connection_key", input.ConnectionKey).Set("event_types_json", eventTypesJSON).Set("status", input.Status).Set("description", input.Description).Set("disabled_at", int64(0)).Set("updated_at", timestampMillis(now)).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_webhook_subscriptions", ownerID("webhook_subscription_", workspaceID, key)), where)).Build()
 		if buildErr != nil {
 			return integrationsdk.WebhookSubscription{}, buildErr
 		}

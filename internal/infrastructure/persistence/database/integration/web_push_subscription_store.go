@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/domainry/domainry-foundation/entityid"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 	"github.com/domainry/domainry-orm/query"
@@ -114,7 +115,7 @@ func (s *WebPushSubscriptionStore) List(ctx context.Context, workspaceID, userID
 		return nil, err
 	}
 	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_web_push_subscriptions").
-		Columns("id", "workspace_id", "user_id", "endpoint_hash", "status", "expires_at", "created_at", "updated_at", "revoked_at").
+		Columns("subscription_id", "workspace_id", "user_id", "endpoint_hash", "status", "expires_at", "created_at", "updated_at", "revoked_at").
 		Where(where).OrderBy(query.Descending("created_at")).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build Web Push subscription list: %w", err)
@@ -128,7 +129,7 @@ func (s *WebPushSubscriptionStore) List(ctx context.Context, workspaceID, userID
 	for rows.Next() {
 		var value integrationmodel.WebPushSubscription
 		var expiresAt, createdAt, updatedAt, revokedAt int64
-		if err := rows.Scan(&value.ID, &value.WorkspaceID, &value.UserID, &value.EndpointHash, &value.Status, &expiresAt, &createdAt, &updatedAt, &revokedAt); err != nil {
+		if err := rows.Scan(&value.SubscriptionID, &value.WorkspaceID, &value.UserID, &value.EndpointHash, &value.Status, &expiresAt, &createdAt, &updatedAt, &revokedAt); err != nil {
 			return nil, err
 		}
 		value.ExpiresAt, value.CreatedAt, value.UpdatedAt, value.RevokedAt = timestampString(expiresAt), timestampString(createdAt), timestampString(updatedAt), timestampString(revokedAt)
@@ -158,6 +159,10 @@ func (s *WebPushSubscriptionStore) Upsert(ctx context.Context, workspaceID, user
 	if workspaceID == "" || userID == "" || id == "" || len(id) > 200 || !strings.HasPrefix(endpoint, "https://") || strings.TrimSpace(input.P256DH) == "" || strings.TrimSpace(input.Auth) == "" {
 		return integrationmodel.WebPushSubscription{}, fmt.Errorf("Integration Web Push subscription is invalid")
 	}
+	id, err := entityid.Derive("pushsub", "integration.web-push-subscription", workspaceID, userID, id)
+	if err != nil {
+		return integrationmodel.WebPushSubscription{}, err
+	}
 	if input.ExpiresAt != "" {
 		if expires, err := time.Parse(time.RFC3339, input.ExpiresAt); err != nil || !expires.After(time.Now().UTC()) {
 			return integrationmodel.WebPushSubscription{}, fmt.Errorf("Integration Web Push subscription expiry is invalid")
@@ -178,7 +183,7 @@ func (s *WebPushSubscriptionStore) Upsert(ctx context.Context, workspaceID, user
 		return integrationmodel.WebPushSubscription{}, fmt.Errorf("Integration Web Push subscription was not found")
 	}
 	if found {
-		where, whereErr := scopedWhere(ctx, workspaceID, "user_id", "", query.Equal("id", id))
+		where, whereErr := scopedWhere(ctx, workspaceID, "user_id", "", query.Equal("subscription_id", id))
 		if whereErr != nil {
 			return integrationmodel.WebPushSubscription{}, whereErr
 		}
@@ -190,7 +195,7 @@ func (s *WebPushSubscriptionStore) Upsert(ctx context.Context, workspaceID, user
 			return integrationmodel.WebPushSubscription{}, err
 		}
 	} else {
-		statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_web_push_subscriptions").Columns("id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").Values(id, workspaceID, userID, endpointHash, endpoint, strings.TrimSpace(input.P256DH), strings.TrimSpace(input.Auth), "active", timestampMillis(input.ExpiresAt), now, now, int64(0)).Build()
+		statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_web_push_subscriptions").Columns("subscription_id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").Values(id, workspaceID, userID, endpointHash, endpoint, strings.TrimSpace(input.P256DH), strings.TrimSpace(input.Auth), "active", timestampMillis(input.ExpiresAt), now, now, int64(0)).Build()
 		if err != nil {
 			return integrationmodel.WebPushSubscription{}, err
 		}
@@ -224,7 +229,7 @@ func (s *WebPushSubscriptionStore) Revoke(ctx context.Context, workspaceID, user
 		return value.public(), nil
 	}
 	now := time.Now().UTC().UnixMilli()
-	where, err := scopedWhere(ctx, workspaceID, "user_id", "", query.Equal("id", id))
+	where, err := scopedWhere(ctx, workspaceID, "user_id", "", query.Equal("subscription_id", id))
 	if err != nil {
 		return integrationmodel.WebPushSubscription{}, err
 	}
@@ -254,7 +259,7 @@ func (s *WebPushSubscriptionStore) CleanupExpired(ctx context.Context, workspace
 	if err != nil {
 		return 0, err
 	}
-	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_web_push_subscriptions").Columns("id").Where(where).Build()
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_web_push_subscriptions").Columns("subscription_id").Where(where).Build()
 	if err != nil {
 		return 0, err
 	}
@@ -286,7 +291,7 @@ func (s *WebPushSubscriptionStore) CleanupExpired(ctx context.Context, workspace
 		if end > len(ids) {
 			end = len(ids)
 		}
-		chunkWhere, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("status", "active"), query.NotEqual("expires_at", int64(0)), query.LessThan("expires_at", now), query.In("id", stringsToAny(ids[start:end])...))
+		chunkWhere, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("status", "active"), query.NotEqual("expires_at", int64(0)), query.LessThan("expires_at", now), query.In("subscription_id", stringsToAny(ids[start:end])...))
 		if err != nil {
 			return 0, err
 		}
@@ -334,17 +339,17 @@ type webPushMaterial struct {
 
 func (v webPushMaterial) public() integrationmodel.WebPushSubscription { return v.WebPushSubscription }
 func (s *WebPushSubscriptionStore) material(ctx context.Context, workspaceID, id string) (webPushMaterial, bool, error) {
-	where, err := scopedWhere(ctx, workspaceID, "user_id", "", query.Equal("id", id))
+	where, err := scopedWhere(ctx, workspaceID, "user_id", "", query.Equal("subscription_id", id))
 	if err != nil {
 		return webPushMaterial{}, false, err
 	}
-	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_web_push_subscriptions").Columns("id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").Where(where).Limit(1).Build()
+	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_web_push_subscriptions").Columns("subscription_id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").Where(where).Limit(1).Build()
 	if err != nil {
 		return webPushMaterial{}, false, err
 	}
 	var v webPushMaterial
 	var expiresAt, createdAt, updatedAt, revokedAt int64
-	err = s.database.QueryRowContext(ctx, queryValue, args...).Scan(&v.ID, &v.WorkspaceID, &v.UserID, &v.EndpointHash, &v.Endpoint, &v.P256DH, &v.Auth, &v.Status, &expiresAt, &createdAt, &updatedAt, &revokedAt)
+	err = s.database.QueryRowContext(ctx, queryValue, args...).Scan(&v.SubscriptionID, &v.WorkspaceID, &v.UserID, &v.EndpointHash, &v.Endpoint, &v.P256DH, &v.Auth, &v.Status, &expiresAt, &createdAt, &updatedAt, &revokedAt)
 	if err == sql.ErrNoRows {
 		return webPushMaterial{}, false, nil
 	}

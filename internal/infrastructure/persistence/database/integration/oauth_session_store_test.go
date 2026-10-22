@@ -103,7 +103,7 @@ func startOAuthStore(t *testing.T, s *ManagementStore, subject integrationsdk.Co
 func TestOAuthSessionAtomicallyCreatesPrivateAccountAndReplaysReceipt(t *testing.T) {
 	store, provider, subject, _ := setupOAuthStore(t)
 	session, state := startOAuthStore(t, store, subject)
-	pending, err := store.GetOAuthAuthorization(t.Context(), subject, session.ID)
+	pending, err := store.GetOAuthAuthorization(t.Context(), subject, session.SessionID)
 	if err != nil || pending.AuthorizationURL != "" {
 		t.Fatal("session query exposed navigation state", err)
 	}
@@ -131,7 +131,7 @@ func TestOAuthSessionAtomicallyCreatesPrivateAccountAndReplaysReceipt(t *testing
 			t.Fatal("OAuth result exposed secret")
 		}
 	}
-	record, err := store.readOAuthSession(t.Context(), subject, query.Equal("id", session.ID))
+	record, err := store.readOAuthSession(t.Context(), subject, query.Equal("session_id", session.SessionID))
 	if err != nil || record.VerifierCiphertext != "" {
 		t.Fatal("completed verifier was retained", err)
 	}
@@ -288,7 +288,7 @@ func TestOAuthSessionRejectsCrossUserWorkspaceScopeAndState(t *testing.T) {
 		if _, err := store.CompleteOAuthAuthorization(t.Context(), other, integrationsdk.OAuthAuthorizationCallback{State: state, Code: "accepted"}); err == nil {
 			t.Fatal("foreign callback accepted")
 		}
-		if _, err := store.GetOAuthAuthorization(t.Context(), other, session.ID); err == nil {
+		if _, err := store.GetOAuthAuthorization(t.Context(), other, session.SessionID); err == nil {
 			t.Fatal("foreign session visible")
 		}
 	}
@@ -331,7 +331,7 @@ func TestOAuthSessionHandlesRejectionUnknownAndExpiredWithoutReplay(t *testing.T
 	}
 	store, provider, subject, _ := setupOAuthStore(t)
 	session, state := startOAuthStore(t, store, subject)
-	if _, err := store.database.ExecContext(t.Context(), "UPDATE _integration_oauth_sessions SET expires_at=? WHERE id=?", time.Now().UTC().Add(-time.Minute).UnixMilli(), session.ID); err != nil {
+	if _, err := store.database.ExecContext(t.Context(), "UPDATE _integration_oauth_sessions SET expires_at=? WHERE session_id=?", time.Now().UTC().Add(-time.Minute).UnixMilli(), session.SessionID); err != nil {
 		t.Fatal(err)
 	}
 	value, err := store.CompleteOAuthAuthorization(t.Context(), subject, integrationsdk.OAuthAuthorizationCallback{State: state, Code: "accepted"})
@@ -354,12 +354,12 @@ func TestOAuthApplicationChangeDuringExchangeRollsBackCredentialsAndNeedsNewAuth
 	if len(accounts) != 0 {
 		t.Fatal("failed finalization committed account")
 	}
-	record, _ := store.readOAuthSession(t.Context(), subject, query.Equal("id", session.ID))
+	record, _ := store.readOAuthSession(t.Context(), subject, query.Equal("session_id", session.SessionID))
 	record.ExchangeDeadline = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
 	if err := store.updateOAuthSession(t.Context(), subject, record, "exchanging"); err != nil {
 		t.Fatal(err)
 	}
-	value, err := store.GetOAuthAuthorization(t.Context(), subject, session.ID)
+	value, err := store.GetOAuthAuthorization(t.Context(), subject, session.SessionID)
 	if err != nil || value.Status != "needs_reauthorization" || value.FailureCode != "integration.oauth.exchange_timeout" {
 		t.Fatal("interrupted exchange not marked unknown", err)
 	}
@@ -375,7 +375,7 @@ func TestOAuthConcurrentCallbacksAndCancellationPersistOneEncryptedAccount(t *te
 	if err := store.database.QueryRowContext(t.Context(), "SELECT application_json,client_ciphertext FROM _integration_oauth_applications WHERE workspace_id=? AND application_key=?", "workspace-a", "google").Scan(&rawApplication, &ciphertext); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.database.QueryRowContext(t.Context(), "SELECT session_json,verifier_ciphertext FROM _integration_oauth_sessions WHERE id=?", session.ID).Scan(&rawSession, &verifierCiphertext); err != nil {
+	if err := store.database.QueryRowContext(t.Context(), "SELECT session_json,verifier_ciphertext FROM _integration_oauth_sessions WHERE session_id=?", session.SessionID).Scan(&rawSession, &verifierCiphertext); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(rawApplication+ciphertext+rawSession+verifierCiphertext, "private-client") || strings.Contains(rawSession, state) || ciphertext == "" || verifierCiphertext == "" {

@@ -91,7 +91,8 @@ func ownerIndexStatements(renderer modulehost.Dialect) ([]string, error) {
 }
 
 func table(renderer modulehost.Dialect, name string, columns ...ormschema.ColumnDefinition) *ormschema.TableBuilder {
-	return ormschema.NewTable(renderer, name).Columns(columns...).PrimaryKey("workspace_id", "id")
+	physical := req("id", ormschema.BigInt()).AutoIncrement()
+	return ormschema.NewTable(renderer, name).Columns(append([]ormschema.ColumnDefinition{physical}, columns...)...).PrimaryKey("id")
 }
 
 func req(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition {
@@ -113,16 +114,16 @@ func optionalTimestamp(name string) ormschema.ColumnDefinition {
 }
 
 func connectionsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, IntegrationConnectionsTable, key("id"), scope("connection_key"), scope("workspace_id"), scope("connector_key"), key("provider_key"), opt("name", ormschema.Text()), key("status"), text("config_json"), text("secret_refs_json"), opt("granted_scopes_json", ormschema.LongText()), opt("created_by", ormschema.TextKey(255)), timestamp("created_at"), timestamp("updated_at")).Unique("workspace_id", "connection_key")
+	return table(r, IntegrationConnectionsTable, scope("connection_key"), scope("workspace_id"), scope("connector_key"), key("provider_key"), opt("name", ormschema.Text()), key("status"), text("config_json"), text("secret_refs_json"), opt("granted_scopes_json", ormschema.LongText()), opt("created_by", ormschema.TextKey(255)), timestamp("created_at"), timestamp("updated_at")).Unique("workspace_id", "connection_key")
 }
 
 func connectionAccountsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, IntegrationConnectionAccountsTable, key("id"), scope("workspace_id"), scope("connection_key"), req("scope", ormschema.TextKey(32)), req("owner_user_id", ormschema.TextKey(191)), key("created_by"), timestamp("created_at"), timestamp("updated_at")).Unique("workspace_id", "connection_key")
+	return table(r, IntegrationConnectionAccountsTable, scope("workspace_id"), scope("connection_key"), req("scope", ormschema.TextKey(32)), req("owner_user_id", ormschema.TextKey(191)), key("created_by"), timestamp("created_at"), timestamp("updated_at")).Unique("workspace_id", "connection_key")
 }
 
 func providerAccountRoutesTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationProviderAccountRoutesTable,
-		key("id"), scope("workspace_id"), scope("connection_key"), req("connector_key", ormschema.TextKey(64)), req("provider_key", ormschema.TextKey(64)),
+		scope("workspace_id"), scope("connection_key"), req("connector_key", ormschema.TextKey(64)), req("provider_key", ormschema.TextKey(64)),
 		req("subject_hash", ormschema.TextKey(64)), req("route_kind", ormschema.TextKey(32)), req("route_hash", ormschema.TextKey(64)), integer("route_bucket"), req("status", ormschema.TextKey(32)),
 		timestamp("created_at"), timestamp("updated_at"),
 	).Unique("workspace_id", "connection_key", "route_kind", "route_hash")
@@ -130,7 +131,7 @@ func providerAccountRoutesTable(r modulehost.Dialect) *ormschema.TableBuilder {
 
 func providerInboxTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationProviderInboxTable,
-		key("id"), scope("workspace_id"), scope("connector_key"), key("provider_key"), scope("ingress_connection_key"),
+		scope("workspace_id"), scope("connector_key"), key("provider_key"), scope("ingress_connection_key"),
 		key("external_id"), key("route_kind"), key("route_hash"), integer("route_bucket"), text("payload_json"),
 		key("status"), integer("routed_count"), timestamp("received_at"), optionalTimestamp("published_at"), timestamp("updated_at"),
 	).Unique("workspace_id", "provider_key", "ingress_connection_key", "external_id")
@@ -138,14 +139,14 @@ func providerInboxTable(r modulehost.Dialect) *ormschema.TableBuilder {
 
 func providerMetricWindowsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationProviderMetricWindowsTable,
-		key("id"), scope("workspace_id"), req("metric_key", ormschema.TextKey(64)), integer("shard"),
+		scope("workspace_id"), req("metric_key", ormschema.TextKey(64)), integer("shard"),
 		timestamp("window_started_at"), integer("event_count"), timestamp("updated_at"),
 	).Unique("metric_key", "window_started_at", "shard")
 }
 
 func providerWakeReceiptsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationProviderWakeReceiptsTable,
-		key("id"), scope("workspace_id"), key("inbox_id"), scope("connector_key"), key("provider_key"),
+		scope("workspace_id"), integer("inbox_id"), scope("connector_key"), key("provider_key"),
 		scope("connection_key"), scope("task_key"), integer("wake_sequence"), key("status"),
 		optionalTimestamp("published_at"), timestamp("received_at"), optionalTimestamp("completed_at"), timestamp("created_at"), timestamp("updated_at"),
 	).Unique("workspace_id", "inbox_id", "connection_key", "task_key")
@@ -153,21 +154,21 @@ func providerWakeReceiptsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 
 func providerConnectionLeasesTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationProviderConnectionLeasesTable,
-		key("id"), scope("workspace_id"), scope("connection_key"), key("lease_owner"),
+		scope("workspace_id"), scope("connection_key"), key("lease_owner"),
 		optionalTimestamp("lease_expires_at"), integer("fencing_token"), timestamp("updated_at"),
 	).Unique("workspace_id", "connection_key")
 }
 
 func providerRateLimitsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationProviderRateLimitsTable,
-		key("id"), scope("workspace_id"), req("scope_kind", ormschema.TextKey(32)), key("scope_key"),
+		scope("workspace_id"), req("scope_kind", ormschema.TextKey(32)), key("scope_key"),
 		timestamp("window_started_at"), integer("used_count"), timestamp("updated_at"),
 	).Unique("scope_kind", "scope_key")
 }
 
 func providerRunsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationProviderRunsTable,
-		key("id"), scope("workspace_id"), req("run_kind", ormschema.TextKey(32)), scope("run_key"),
+		scope("workspace_id"), req("run_kind", ormschema.TextKey(32)), scope("run_key"),
 		scope("connector_key"), scope("provider_key"), scope("connection_key"), scope("task_key"),
 		integer("state_version"), key("operation_key"), key("contract_sha256"), text("payload_json"),
 		opt("progress_json", ormschema.Text()), req("status", ormschema.TextKey(32)), key("last_error_code"), integer("attempt_count"), timestamp("due_at"), optionalTimestamp("last_success_at"), integerWithDefault("wake_sequence", 0),
@@ -180,12 +181,12 @@ func integerWithDefault(name string, value int64) ormschema.ColumnDefinition {
 }
 
 func secretMaterialsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, IntegrationSecretMaterialsTable, key("id"), scope("workspace_id"), scope("secret_key"), text("ciphertext"), timestamp("created_at"), timestamp("updated_at")).Unique("workspace_id", "secret_key")
+	return table(r, IntegrationSecretMaterialsTable, scope("workspace_id"), scope("secret_key"), text("ciphertext"), timestamp("created_at"), timestamp("updated_at")).Unique("workspace_id", "secret_key")
 }
 
 func secretsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 	return table(r, IntegrationSecretsTable,
-		key("id"), scope("secret_key"), scope("workspace_id"), req("credential_type", ormschema.TextKey(32)), key("kind"), key("status"),
+		scope("secret_key"), scope("workspace_id"), req("credential_type", ormschema.TextKey(32)), key("kind"), key("status"),
 		optionalScope("connection_key"),
 		opt("name", ormschema.Text()), opt("description", ormschema.Text()), opt("value_ref", ormschema.Text()), opt("fingerprint", ormschema.TextKey(255)),
 		opt("display_prefix", ormschema.TextKey(255)), opt("lookup_hash", ormschema.TextKey(255)), opt("actor_id", ormschema.TextKey(255)), opt("role_key", ormschema.TextKey(255)), text("scopes_json"),
@@ -194,25 +195,25 @@ func secretsTable(r modulehost.Dialect) *ormschema.TableBuilder {
 }
 
 func externalIdentitiesTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, IntegrationExternalIdentitiesTable, key("id"), scope("identity_key"), scope("workspace_id"), key("provider"), scope("external_subject"), key("external_subject_type"), opt("external_name", ormschema.Text()), opt("external_organization", ormschema.Text()), opt("external_department", ormschema.Text()), opt("external_group", ormschema.Text()), opt("external_bot_id", ormschema.Text()), key("actor_id"), key("role_key"), key("status"), optionalTimestamp("last_resolved_at"), key("created_by"), timestamp("created_at"), timestamp("updated_at"), optionalTimestamp("disabled_at")).Unique("workspace_id", "identity_key").Unique("workspace_id", "provider", "external_subject")
+	return table(r, IntegrationExternalIdentitiesTable, scope("identity_key"), scope("workspace_id"), key("provider"), scope("external_subject"), key("external_subject_type"), opt("external_name", ormschema.Text()), opt("external_organization", ormschema.Text()), opt("external_department", ormschema.Text()), opt("external_group", ormschema.Text()), opt("external_bot_id", ormschema.Text()), key("actor_id"), key("role_key"), key("status"), optionalTimestamp("last_resolved_at"), key("created_by"), timestamp("created_at"), timestamp("updated_at"), optionalTimestamp("disabled_at")).Unique("workspace_id", "identity_key").Unique("workspace_id", "provider", "external_subject")
 }
 
 func invocationsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, IntegrationInvocationsTable, key("id"), scope("workspace_id"), scope("connector_key"), key("provider_key"), opt("connection_key", ormschema.TextKey(191)), key("operation"), key("status"), integer("duration_ms"), opt("request_ref", ormschema.Text()), opt("response_ref", ormschema.Text()), opt("error", ormschema.Text()), opt("event_id", ormschema.TextKey(255)), opt("object_key", ormschema.TextKey(255)), opt("record_id", ormschema.TextKey(255)), opt("workflow_execution_id", ormschema.TextKey(255)), text("metadata_json"), timestamp("created_at"), timestamp("updated_at"))
+	return table(r, IntegrationInvocationsTable, scope("invocation_id"), scope("workspace_id"), scope("connector_key"), key("provider_key"), opt("connection_key", ormschema.TextKey(191)), key("operation"), key("status"), integer("duration_ms"), opt("request_ref", ormschema.Text()), opt("response_ref", ormschema.Text()), opt("error", ormschema.Text()), opt("event_id", ormschema.TextKey(255)), opt("object_key", ormschema.TextKey(255)), opt("record_id", ormschema.TextKey(255)), opt("workflow_execution_id", ormschema.TextKey(255)), text("metadata_json"), timestamp("created_at"), timestamp("updated_at")).Unique("invocation_id")
 }
 
 func eventsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, IntegrationEventsTable, key("id"), scope("workspace_id"), scope("provider"), scope("event_type"), scope("external_id"), key("status"), text("payload_json"), key("mapping_key"), key("target_type"), text("execution_json"), opt("error", ormschema.Text()), integer("attempt_count"), optionalTimestamp("next_retry_at"), optionalTimestamp("last_attempt_at"), key("lease_owner"), optionalTimestamp("lease_expires_at"), integer("fencing_token"), timestamp("received_at"), timestamp("updated_at")).Unique("workspace_id", "provider", "external_id")
+	return table(r, IntegrationEventsTable, scope("event_id"), scope("workspace_id"), scope("provider"), scope("event_type"), scope("external_id"), key("status"), text("payload_json"), key("mapping_key"), key("target_type"), text("execution_json"), opt("error", ormschema.Text()), integer("attempt_count"), optionalTimestamp("next_retry_at"), optionalTimestamp("last_attempt_at"), key("lease_owner"), optionalTimestamp("lease_expires_at"), integer("fencing_token"), timestamp("received_at"), timestamp("updated_at")).Unique("event_id").Unique("workspace_id", "provider", "external_id")
 }
 
 func webhookNoncesTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, IntegrationWebhookNoncesTable, key("id"), scope("workspace_id"), scope("connector_key"), scope("nonce"), timestamp("request_timestamp"), timestamp("created_at"), timestamp("expires_at")).Unique("workspace_id", "connector_key", "nonce")
+	return table(r, IntegrationWebhookNoncesTable, scope("workspace_id"), scope("connector_key"), scope("nonce"), timestamp("request_timestamp"), timestamp("created_at"), timestamp("expires_at")).Unique("workspace_id", "connector_key", "nonce")
 }
 
 func webhookSubscriptionsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, IntegrationWebhookSubscriptionsTable, key("id"), scope("subscription_key"), scope("workspace_id"), opt("name", ormschema.Text()), scope("connector_key"), scope("connection_key"), text("event_types_json"), key("status"), opt("description", ormschema.Text()), key("created_by"), timestamp("created_at"), timestamp("updated_at"), optionalTimestamp("disabled_at")).Unique("workspace_id", "subscription_key")
+	return table(r, IntegrationWebhookSubscriptionsTable, scope("subscription_key"), scope("workspace_id"), opt("name", ormschema.Text()), scope("connector_key"), scope("connection_key"), text("event_types_json"), key("status"), opt("description", ormschema.Text()), key("created_by"), timestamp("created_at"), timestamp("updated_at"), optionalTimestamp("disabled_at")).Unique("workspace_id", "subscription_key")
 }
 
 func webPushSubscriptionsTable(r modulehost.Dialect) *ormschema.TableBuilder {
-	return table(r, IntegrationWebPushSubscriptionsTable, key("id"), scope("workspace_id"), scope("user_id"), key("endpoint_hash"), text("endpoint"), text("p256dh"), text("auth_secret"), key("status"), timestamp("expires_at"), timestamp("created_at"), timestamp("updated_at"), optionalTimestamp("revoked_at")).Unique("workspace_id", "endpoint_hash")
+	return table(r, IntegrationWebPushSubscriptionsTable, scope("subscription_id"), scope("workspace_id"), scope("user_id"), key("endpoint_hash"), text("endpoint"), text("p256dh"), text("auth_secret"), key("status"), timestamp("expires_at"), timestamp("created_at"), timestamp("updated_at"), optionalTimestamp("revoked_at")).Unique("subscription_id").Unique("workspace_id", "endpoint_hash")
 }

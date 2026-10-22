@@ -241,7 +241,7 @@ func TestGooglePushWakeSequenceCompletesOnlyTheSynchronizationThatObservedIt(t *
 	}
 
 	worker := NewWorkerStore(database, dialect, delivery, nil, "worker")
-	var runID string
+	var runID int64
 	if err := database.QueryRowContext(t.Context(), `SELECT id FROM _integration_provider_runs WHERE workspace_id=? AND connection_key=? AND run_kind=? AND run_key=?`, target.WorkspaceID, target.Key, providerRunKindState, "gmail_sync").Scan(&runID); err != nil {
 		t.Fatal(err)
 	}

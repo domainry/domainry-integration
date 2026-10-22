@@ -2,8 +2,6 @@ package integration
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -18,17 +16,16 @@ func recordProviderWakeReceipts(
 	ctx context.Context,
 	database sqlhost.DBTX,
 	dialect modulehost.Dialect,
-	workspaceID, connectionKey, connectorKey, providerKey, inboxID string,
+	workspaceID, connectionKey, connectorKey, providerKey string,
+	inboxID int64,
 	publishedAt int64,
 	receivedAt time.Time,
 	sequences map[string]int64,
 ) error {
 	for taskKey, sequence := range sequences {
-		digest := sha256.Sum256([]byte(workspaceID + "\x00" + inboxID + "\x00" + connectionKey + "\x00" + taskKey))
-		id := "provider_wake_" + hex.EncodeToString(digest[:16])
 		statement, args, err := query.NewInsertBuilder(dialect, providerWakeReceiptTable).
-			Columns("id", "workspace_id", "inbox_id", "connector_key", "provider_key", "connection_key", "task_key", "wake_sequence", "status", "published_at", "received_at", "completed_at", "created_at", "updated_at").
-			Values(id, workspaceID, inboxID, connectorKey, providerKey, connectionKey, taskKey, sequence, "pending", publishedAt, receivedAt.UTC().UnixMilli(), int64(0), receivedAt.UTC().UnixMilli(), receivedAt.UTC().UnixMilli()).
+			Columns("workspace_id", "inbox_id", "connector_key", "provider_key", "connection_key", "task_key", "wake_sequence", "status", "published_at", "received_at", "completed_at", "created_at", "updated_at").
+			Values(workspaceID, inboxID, connectorKey, providerKey, connectionKey, taskKey, sequence, "pending", publishedAt, receivedAt.UTC().UnixMilli(), int64(0), receivedAt.UTC().UnixMilli(), receivedAt.UTC().UnixMilli()).
 			OnConflictDoNothing("workspace_id", "inbox_id", "connection_key", "task_key").Build()
 		if err != nil {
 			return err

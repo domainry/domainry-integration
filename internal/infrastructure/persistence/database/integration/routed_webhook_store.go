@@ -152,8 +152,6 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 		return integrationsdk.RoutedWebhookReceipt{}, err
 	}
 	routeKind, routeHash, routeBucket := routedWebhookRouteIdentity(connection.ConnectorKey, connection.ProviderKey, envelope.Routes)
-	inboxDigest := sha256.Sum256([]byte(connection.WorkspaceID + "\x00" + connection.ProviderKey + "\x00" + connection.Key + "\x00" + externalID))
-	inboxID := "provider_inbox_" + hex.EncodeToString(inboxDigest[:16])
 	now := request.ReceivedAt.UTC()
 	publishedAt := verifiedGooglePushPublishedAt(connection.ConnectorKey, connection.ProviderKey, verified.Security, now)
 
@@ -163,8 +161,8 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 	}
 	defer func() { _ = tx.Rollback() }()
 	insert, args, err := query.NewInsertBuilder(s.dialect, providerInboxTable).
-		Columns("id", "workspace_id", "connector_key", "provider_key", "ingress_connection_key", "external_id", "route_kind", "route_hash", "route_bucket", "payload_json", "status", "routed_count", "received_at", "published_at", "updated_at").
-		Values(inboxID, connection.WorkspaceID, connection.ConnectorKey, connection.ProviderKey, connection.Key, externalID, routeKind, routeHash, routeBucket, string(envelope.Data), "received", 0, now.UnixMilli(), publishedAt, now.UnixMilli()).
+		Columns("workspace_id", "connector_key", "provider_key", "ingress_connection_key", "external_id", "route_kind", "route_hash", "route_bucket", "payload_json", "status", "routed_count", "received_at", "published_at", "updated_at").
+		Values(connection.WorkspaceID, connection.ConnectorKey, connection.ProviderKey, connection.Key, externalID, routeKind, routeHash, routeBucket, string(envelope.Data), "received", 0, now.UnixMilli(), publishedAt, now.UnixMilli()).
 		OnConflictDoNothing("workspace_id", "provider_key", "ingress_connection_key", "external_id").Build()
 	if err != nil {
 		return integrationsdk.RoutedWebhookReceipt{}, err
@@ -175,6 +173,17 @@ func (s *RoutedWebhookStore) AcceptRoutedWebhook(ctx context.Context, request in
 	}
 	if affected, _ := result.RowsAffected(); affected == 0 {
 		return integrationsdk.RoutedWebhookReceipt{ExternalID: externalID, Duplicate: true}, nil
+	}
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, providerInboxTable).Columns("id").Where(query.And(
+		query.Equal("workspace_id", connection.WorkspaceID), query.Equal("provider_key", connection.ProviderKey),
+		query.Equal("ingress_connection_key", connection.Key), query.Equal("external_id", externalID),
+	)).Limit(1).Build()
+	if err != nil {
+		return integrationsdk.RoutedWebhookReceipt{}, err
+	}
+	var inboxID int64
+	if err = tx.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&inboxID); err != nil {
+		return integrationsdk.RoutedWebhookReceipt{}, err
 	}
 
 	targetsByIdentity := map[string]routedWebhookTarget{}

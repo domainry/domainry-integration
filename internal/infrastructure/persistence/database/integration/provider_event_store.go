@@ -2,14 +2,13 @@ package integration
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	"github.com/domainry/domainry-foundation/entityid"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	"github.com/domainry/domainry-orm/query"
 	"github.com/domainry/domainry-orm/sqlhost"
@@ -31,12 +30,14 @@ func insertProviderEvent(ctx context.Context, database sqlhost.DBTX, dialect mod
 	if err != nil {
 		return false, err
 	}
-	digest := sha256.Sum256([]byte(workspaceID + "\x00" + providerKey + "\x00" + externalID))
-	eventID := "event:" + hex.EncodeToString(digest[:])
+	eventID, err := entityid.Derive("intevt", "integration.provider-event", workspaceID, providerKey, externalID)
+	if err != nil {
+		return false, err
+	}
 	if err = guardSubjectWrite(ctx, database, dialect, subjectLifecycle, workspaceID, subjectFenceReference{"row", "_integration_events", eventID}, subjectFenceReference{"connection", "", connectionKey}); err != nil {
 		return false, err
 	}
-	lookup, values, err := query.NewSelectBuilder(dialect, "_integration_events").Columns("id").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("provider", providerKey), query.Equal("external_id", externalID))).Build()
+	lookup, values, err := query.NewSelectBuilder(dialect, "_integration_events").Columns("event_id").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("provider", providerKey), query.Equal("external_id", externalID))).Build()
 	if err != nil {
 		return false, err
 	}
@@ -48,7 +49,7 @@ func insertProviderEvent(ctx context.Context, database sqlhost.DBTX, dialect mod
 	if lookupErr != sql.ErrNoRows {
 		return false, lookupErr
 	}
-	insert, values, err := query.NewInsertBuilder(dialect, "_integration_events").Columns("id", "workspace_id", "provider", "event_type", "external_id", "status", "payload_json", "mapping_key", "target_type", "execution_json", "error", "attempt_count", "next_retry_at", "last_attempt_at", "lease_owner", "lease_expires_at", "fencing_token", "received_at", "updated_at").Values(eventID, workspaceID, providerKey, event.EventType, externalID, "received", string(payload), "", "", "{}", nil, 0, int64(0), int64(0), "", int64(0), 0, now.UnixMilli(), now.UnixMilli()).Build()
+	insert, values, err := query.NewInsertBuilder(dialect, "_integration_events").Columns("event_id", "workspace_id", "provider", "event_type", "external_id", "status", "payload_json", "mapping_key", "target_type", "execution_json", "error", "attempt_count", "next_retry_at", "last_attempt_at", "lease_owner", "lease_expires_at", "fencing_token", "received_at", "updated_at").Values(eventID, workspaceID, providerKey, event.EventType, externalID, "received", string(payload), "", "", "{}", nil, 0, int64(0), int64(0), "", int64(0), 0, now.UnixMilli(), now.UnixMilli()).Build()
 	if err != nil {
 		return false, err
 	}

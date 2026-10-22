@@ -37,11 +37,11 @@ func ApplyOwnedMigrations(ctx context.Context, database sqlhost.Database, render
 }
 
 func ensureStandaloneLedger(ctx context.Context, database sqlhost.Database, renderer modulehost.Dialect) error {
-	statement, args, err := schema.NewTable(renderer, LedgerTable).IfNotExists().Columns(
+	statement, args, err := schema.NewTableWithRequiredColumns(renderer, LedgerTable, schema.Column("id", schema.BigInt()).NotNull().AutoIncrement()).IfNotExists().Columns(
 		schema.Column("owner", schema.TextKey(191)).NotNull(), schema.Column("version", schema.BigInt()).NotNull(),
 		schema.Column("name", schema.TextKey(191)).NotNull(), schema.Column("checksum", schema.TextKey(64)).NotNull(),
 		schema.Column("dirty", schema.Boolean()).NotNull(), schema.Column("applied_at", schema.BigInt()).NotNull(),
-	).PrimaryKey("owner", "version").Build()
+	).PrimaryKey("id").Unique("owner", "version").Build()
 	if err != nil {
 		return fmt.Errorf("build Integration migration ledger: %w", err)
 	}

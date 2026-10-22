@@ -2,15 +2,14 @@ package integration
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	"github.com/domainry/domainry-foundation/entityid"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 	"github.com/domainry/domainry-orm/query"
@@ -70,7 +69,10 @@ type deliveryConnection struct {
 }
 
 func (s *DeliveryStore) Accept(ctx context.Context, request integrationmodel.DeliveryRequest) (integrationmodel.DeliveryReceipt, error) {
-	id := deliveryInvocationID(request.MessageID)
+	id, err := deliveryInvocationID(request.MessageID)
+	if err != nil {
+		return integrationmodel.DeliveryReceipt{}, err
+	}
 	if receipt, found, err := s.receipt(ctx, request.MessageID, id); err != nil {
 		return integrationmodel.DeliveryReceipt{}, err
 	} else if found && receipt.Status == "succeeded" {
@@ -159,7 +161,11 @@ func (s *DeliveryStore) Query(ctx context.Context, messageID string) (integratio
 	if messageID == "" {
 		return integrationmodel.DeliveryReceipt{}, fmt.Errorf("Integration delivery message ID is required")
 	}
-	receipt, found, err := s.receipt(ctx, messageID, deliveryInvocationID(messageID))
+	id, err := deliveryInvocationID(messageID)
+	if err != nil {
+		return integrationmodel.DeliveryReceipt{}, err
+	}
+	receipt, found, err := s.receipt(ctx, messageID, id)
 	if err != nil {
 		return integrationmodel.DeliveryReceipt{}, err
 	}
@@ -220,14 +226,14 @@ func (s *DeliveryStore) prepareInvocationWithMetadata(ctx context.Context, id st
 	}
 	now := time.Now().UTC().UnixMilli()
 	metadata, _ := json.Marshal(metadataValue)
-	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status").Where(query.Equal("id", id)).Build()
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status").Where(query.Equal("invocation_id", id)).Build()
 	if err != nil {
 		return err
 	}
 	var current string
 	err = s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&current)
 	if err == nil {
-		update, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("metadata_json", string(metadata)).Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, request.WorkspaceID, "_integration_invocations", id), query.Equal("id", id))).Build()
+		update, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", "running").Set("error", nil).Set("metadata_json", string(metadata)).Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, request.WorkspaceID, "_integration_invocations", id), query.Equal("invocation_id", id))).Build()
 		if buildErr != nil {
 			return buildErr
 		}
@@ -257,7 +263,7 @@ func (s *DeliveryStore) insertInvocation(ctx context.Context, id string, request
 		return err
 	}
 	now := time.Now().UTC().UnixMilli()
-	queryValue, args, err := query.NewInsertBuilder(s.dialect, "_integration_invocations").Columns("id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at").Values(id, request.WorkspaceID, request.ConnectorKey, connection.ProviderKey, connection.Key, request.Operation, "running", int64(0), request.MessageID, nil, nil, nil, nil, nil, nil, string(metadata), now, now).Build()
+	queryValue, args, err := query.NewInsertBuilder(s.dialect, "_integration_invocations").Columns("invocation_id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at").Values(id, request.WorkspaceID, request.ConnectorKey, connection.ProviderKey, connection.Key, request.Operation, "running", int64(0), request.MessageID, nil, nil, nil, nil, nil, nil, string(metadata), now, now).Build()
 	if err != nil {
 		return err
 	}
@@ -281,7 +287,7 @@ func (s *DeliveryStore) finishInvocation(ctx context.Context, workspaceID, id, s
 
 func (s *DeliveryStore) finishInvocationWithProviderError(ctx context.Context, workspaceID, id, status, responseRef, errorText string, callErr error) error {
 	completedAt := time.Now().UTC()
-	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", completedAt.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_invocations", id), query.Equal("id", id))).Build()
+	queryValue, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", string(status)).Set("response_ref", responseRef).Set("error", errorText).Set("updated_at", completedAt.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_invocations", id), query.Equal("invocation_id", id))).Build()
 	if err != nil {
 		return err
 	}
@@ -322,7 +328,7 @@ func (s *DeliveryStore) finishInvocationWithProviderError(ctx context.Context, w
 }
 
 func (s *DeliveryStore) receipt(ctx context.Context, messageID, id string) (integrationmodel.DeliveryReceipt, bool, error) {
-	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status", "response_ref", "error").Where(query.Equal("id", id)).Build()
+	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status", "response_ref", "error").Where(query.Equal("invocation_id", id)).Build()
 	if err != nil {
 		return integrationmodel.DeliveryReceipt{}, false, err
 	}
@@ -340,9 +346,8 @@ func (s *DeliveryStore) receipt(ctx context.Context, messageID, id string) (inte
 	return receipt, true, nil
 }
 
-func deliveryInvocationID(messageID string) string {
-	hash := sha256.Sum256([]byte(strings.TrimSpace(messageID)))
-	return "delivery:" + hex.EncodeToString(hash[:])
+func deliveryInvocationID(messageID string) (string, error) {
+	return entityid.Derive("intinv", "integration.delivery", messageID)
 }
 func providerOperation(descriptor connector.ProviderDescriptor, key string) (connector.OperationDescriptor, bool) {
 	for _, operation := range descriptor.Operations {

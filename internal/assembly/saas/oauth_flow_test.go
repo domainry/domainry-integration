@@ -278,7 +278,7 @@ func TestOAuthModuleAndSaaSHTTPUseGoogleProviderAndDurableOneTimeSessions(t *tes
 				return session, integrationsdk.OAuthAuthorizationCallback{State: target.Query().Get("state"), Code: code}
 			}
 			session, callback := start("accepted-code")
-			request("user-b", "GET", "/integration/oauth-authorizations/"+session.ID, nil, 400)
+			request("user-b", "GET", "/integration/oauth-authorizations/"+session.SessionID, nil, 400)
 			request("user-b", "POST", "/integration/oauth-authorizations/callback", callback, 400)
 			closeHost()
 			open()
@@ -306,7 +306,7 @@ func TestOAuthModuleAndSaaSHTTPUseGoogleProviderAndDurableOneTimeSessions(t *tes
 				t.Fatal("ambiguous exchange not shown explicitly")
 			}
 			request("user-a", "POST", "/integration/oauth-authorizations/callback", unknownCallback, 200)
-			request("user-a", "GET", "/integration/oauth-authorizations/"+unknown.ID, nil, 200)
+			request("user-a", "GET", "/integration/oauth-authorizations/"+unknown.SessionID, nil, 200)
 			issuerMu.Lock()
 			count = calls
 			issuerMu.Unlock()
@@ -322,7 +322,7 @@ func TestOAuthModuleAndSaaSHTTPUseGoogleProviderAndDurableOneTimeSessions(t *tes
 				t.Fatalf("account count=%s", accounts)
 			}
 			request("user-a", "POST", "/integration/connection-accounts/"+completed.Account.Key+"/revoke", map[string]string{"expected_updated_at": completed.Account.UpdatedAt}, 200)
-			restored := request("user-a", "GET", "/integration/oauth-authorizations/"+session.ID, nil, 200)
+			restored := request("user-a", "GET", "/integration/oauth-authorizations/"+session.SessionID, nil, 200)
 			if !bytes.Contains(restored, []byte(`"status":"revoked"`)) {
 				t.Fatal("session returned stale account state")
 			}

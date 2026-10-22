@@ -82,5 +82,5 @@ func (s *AccountReadService) ReadConnectionAccount(ctx context.Context, subject 
 	if result.Invocation.Status != "succeeded" || len(result.Response) > maximumAccountReadResponseBytes || len(result.Response) > 0 && !json.Valid(result.Response) {
 		return model.ConnectionAccountReadResult{}, fmt.Errorf("Integration account read result is invalid")
 	}
-	return model.ConnectionAccountReadResult{Source: current.Source, InvocationID: result.Invocation.ID, ReadAt: result.Invocation.CreatedAt, PayloadAvailable: len(result.Response) > 0, Payload: append(json.RawMessage(nil), result.Response...)}, nil
+	return model.ConnectionAccountReadResult{Source: current.Source, InvocationID: result.Invocation.InvocationID, ReadAt: result.Invocation.CreatedAt, PayloadAvailable: len(result.Response) > 0, Payload: append(json.RawMessage(nil), result.Response...)}, nil
 }

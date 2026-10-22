@@ -31,12 +31,12 @@ func TestProviderRunSnapshotAggregatesOnlyStateRunsAndCurrentRateWindow(t *testi
 		if !run.lease.IsZero() {
 			lease = run.lease.UnixMilli()
 		}
-		if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			id, "workspace-a", run.kind, "poll", "crm", "probe", id, "poll", 1, "", "", `{}`, run.status, "", 0, due, "", lease, 0, now.UnixMilli(), now.UnixMilli()); err != nil {
+		if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"workspace-a", run.kind, "poll", "crm", "probe", id, "poll", 1, "", "", `{}`, run.status, "", 0, due, "", lease, 0, now.UnixMilli(), now.UnixMilli()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_rate_limits (id,workspace_id,scope_kind,scope_key,window_started_at,used_count,updated_at) VALUES (?,?,?,?,?,?,?)`, "global", "_platform", "global", "all", now.Truncate(time.Minute).UnixMilli(), 432, now.UnixMilli()); err != nil {
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_rate_limits (workspace_id,scope_kind,scope_key,window_started_at,used_count,updated_at) VALUES (?,?,?,?,?,?)`, "_platform", "global", "all", now.Truncate(time.Minute).UnixMilli(), 432, now.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := store.providerRunSnapshot(t.Context(), now)
@@ -79,8 +79,8 @@ func TestProviderRunSnapshotAggregatesVerifiedGooglePushInboxWithoutExposingAcco
 			published = event.published.UnixMilli()
 		}
 		id := fmt.Sprintf("push-%d", index)
-		if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_inbox (id,workspace_id,connector_key,provider_key,ingress_connection_key,external_id,route_kind,route_hash,route_bucket,payload_json,status,routed_count,received_at,published_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			id, "platform", event.connector, event.provider, "push-ingress", id, "email", fmt.Sprintf("hash-%d", index), event.bucket, `{}`, event.status, 0, event.received.UnixMilli(), published, event.received.UnixMilli()); err != nil {
+		if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_inbox (workspace_id,connector_key,provider_key,ingress_connection_key,external_id,route_kind,route_hash,route_bucket,payload_json,status,routed_count,received_at,published_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"platform", event.connector, event.provider, "push-ingress", id, "email", fmt.Sprintf("hash-%d", index), event.bucket, `{}`, event.status, 0, event.received.UnixMilli(), published, event.received.UnixMilli()); err != nil {
 			t.Fatal(err)
 		}
 	}

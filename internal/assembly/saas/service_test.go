@@ -131,8 +131,8 @@ func TestServiceMatchesIntegrationSDKRemoteContract(t *testing.T) {
 		t.Fatal("SaaS binding does not expose provider-run monitoring")
 	}
 	now := time.Now().UTC().Add(-time.Minute).UnixMilli()
-	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"due-monitor-run", "workspace-a", "state", "poll", "crm", "probe", "monitor-connection", "poll", 1, "", "", `{}`, "ready", "", 0, now, "", int64(0), 0, now, now); err != nil {
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"workspace-a", "state", "poll", "crm", "probe", "monitor-connection", "poll", 1, "", "", `{}`, "ready", "", 0, now, "", int64(0), 0, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot, err := monitor.ProviderRunSnapshot(t.Context()); err != nil || snapshot.ReadyDue != 1 {

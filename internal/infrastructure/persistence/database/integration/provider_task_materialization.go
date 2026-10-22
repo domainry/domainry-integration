@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
@@ -13,8 +14,9 @@ import (
 )
 
 type materializedProviderTask struct {
-	id, connectorKey, providerKey, taskKey, status string
-	stateVersion                                   int
+	id                                         int64
+	connectorKey, providerKey, taskKey, status string
+	stateVersion                               int
 }
 
 // materializeProviderTasks is called in the same transaction as a Connection
@@ -93,11 +95,10 @@ func listMaterializedProviderTasks(ctx context.Context, database sqlhost.DBTX, d
 
 func upsertMaterializedProviderTask(ctx context.Context, database sqlhost.DBTX, dialect modulehost.Dialect, subjectLifecycle *SubjectLifecyclePersistence, connection connector.Connection, task connector.BackgroundTaskDescriptor, current materializedProviderTask, now time.Time) error {
 	nowMillis := now.UTC().UnixMilli()
-	if current.id == "" {
-		id := ownerID("provider_task_", connection.WorkspaceID, connection.Key+"\x00"+task.Key)
+	if current.id == 0 {
 		statement, args, err := query.NewInsertBuilder(dialect, providerRunTable).
-			Columns("id", "workspace_id", "run_kind", "run_key", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "operation_key", "contract_sha256", "payload_json", "status", "last_error_code", "attempt_count", "due_at", "lease_owner", "lease_expires_at", "fencing_token", "created_at", "updated_at").
-			Values(id, connection.WorkspaceID, providerRunKindState, task.Key, connection.ConnectorKey, connection.ProviderKey, connection.Key, task.Key, task.StateVersion, "", "", `{}`, "ready", "", 0, nowMillis, "", int64(0), 0, nowMillis, nowMillis).Build()
+			Columns("workspace_id", "run_kind", "run_key", "connector_key", "provider_key", "connection_key", "task_key", "state_version", "operation_key", "contract_sha256", "payload_json", "status", "last_error_code", "attempt_count", "due_at", "lease_owner", "lease_expires_at", "fencing_token", "created_at", "updated_at").
+			Values(connection.WorkspaceID, providerRunKindState, task.Key, connection.ConnectorKey, connection.ProviderKey, connection.Key, task.Key, task.StateVersion, "", "", `{}`, "ready", "", 0, nowMillis, "", int64(0), 0, nowMillis, nowMillis).Build()
 		if err != nil {
 			return err
 		}
@@ -112,7 +113,7 @@ func upsertMaterializedProviderTask(ctx context.Context, database sqlhost.DBTX, 
 		Set("state_version", task.StateVersion).Set("payload_json", `{}`).Set("progress_json", `{}`).Set("status", "ready").Set("due_at", nowMillis).
 		Set("last_error_code", "").Set("attempt_count", 0).Set("last_success_at", int64(0)).Set("lease_owner", "").Set("lease_expires_at", int64(0)).
 		SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).Set("updated_at", nowMillis).
-		Where(query.And(subjectRowsWriteAllowed(subjectLifecycle, dialect, connection.WorkspaceID, providerRunTable, current.id), query.Equal("run_kind", providerRunKindState), query.Equal("id", current.id))).Build()
+		Where(query.And(subjectRowsWriteAllowed(subjectLifecycle, dialect, connection.WorkspaceID, providerRunTable, strconv.FormatInt(current.id, 10)), query.Equal("run_kind", providerRunKindState), query.Equal("id", current.id))).Build()
 	if err != nil {
 		return err
 	}
@@ -121,7 +122,7 @@ func upsertMaterializedProviderTask(ctx context.Context, database sqlhost.DBTX, 
 		return err
 	}
 	if affected, _ := result.RowsAffected(); affected != 1 {
-		return fmt.Errorf("Integration Provider task %q changed while materializing", current.id)
+		return fmt.Errorf("Integration Provider task %d changed while materializing", current.id)
 	}
 	return nil
 }
@@ -154,11 +155,11 @@ func cancelProviderRunsForConnection(ctx context.Context, database sqlhost.DBTX,
 	return err
 }
 
-func cancelMaterializedProviderTask(ctx context.Context, database sqlhost.DBTX, dialect modulehost.Dialect, subjectLifecycle *SubjectLifecyclePersistence, workspaceID, connectionKey, id string, now time.Time) error {
+func cancelMaterializedProviderTask(ctx context.Context, database sqlhost.DBTX, dialect modulehost.Dialect, subjectLifecycle *SubjectLifecyclePersistence, workspaceID, connectionKey string, id int64, now time.Time) error {
 	statement, args, err := query.NewUpdateBuilder(dialect, providerRunTable).
 		Set("status", "cancelled").Set("due_at", int64(0)).Set("lease_owner", "").Set("lease_expires_at", int64(0)).
 		SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).Set("updated_at", now.UTC().UnixMilli()).
-		Where(query.And(subjectRowsWriteAllowed(subjectLifecycle, dialect, workspaceID, providerRunTable, id), query.Equal("run_kind", providerRunKindState), query.Equal("workspace_id", workspaceID), query.Equal("connection_key", connectionKey), query.Equal("id", id), query.NotEqual("status", "cancelled"))).Build()
+		Where(query.And(subjectRowsWriteAllowed(subjectLifecycle, dialect, workspaceID, providerRunTable, strconv.FormatInt(id, 10)), query.Equal("run_kind", providerRunKindState), query.Equal("workspace_id", workspaceID), query.Equal("connection_key", connectionKey), query.Equal("id", id), query.NotEqual("status", "cancelled"))).Build()
 	if err != nil {
 		return err
 	}

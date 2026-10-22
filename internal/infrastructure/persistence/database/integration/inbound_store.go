@@ -11,6 +11,7 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	"github.com/domainry/domainry-foundation/entityid"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 	"github.com/domainry/domainry-orm/query"
@@ -78,15 +79,15 @@ func (s *OperationsStore) AcceptWebhook(ctx context.Context, request integration
 }
 
 func (s *OperationsStore) acceptWebhookNonce(ctx context.Context, request integrationmodel.WebhookRequest, nonce string) error {
-	digest := sha256.Sum256([]byte(request.WorkspaceID + "\x00" + request.ConnectorKey + "\x00" + strings.TrimSpace(nonce)))
+	nonce = strings.TrimSpace(nonce)
 	now := request.ReceivedAt.UTC()
-	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_webhook_nonces").Columns("id", "workspace_id", "connector_key", "nonce", "request_timestamp", "created_at", "expires_at").Values("nonce:"+hex.EncodeToString(digest[:]), request.WorkspaceID, request.ConnectorKey, strings.TrimSpace(nonce), now.UnixMilli(), now.UnixMilli(), now.Add(15*time.Minute).UnixMilli()).Build()
+	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_webhook_nonces").Columns("workspace_id", "connector_key", "nonce", "request_timestamp", "created_at", "expires_at").Values(request.WorkspaceID, request.ConnectorKey, nonce, now.UnixMilli(), now.UnixMilli(), now.Add(15*time.Minute).UnixMilli()).Build()
 	if err != nil {
 		return err
 	}
 	if _, err := s.database.ExecContext(ctx, statement, args...); err != nil {
 		var existing string
-		lookup, lookupArgs, lookupErr := query.NewSelectBuilder(s.dialect, "_integration_webhook_nonces").Columns("id").Where(query.Equal("id", "nonce:"+hex.EncodeToString(digest[:]))).Limit(1).Build()
+		lookup, lookupArgs, lookupErr := query.NewSelectBuilder(s.dialect, "_integration_webhook_nonces").Columns("nonce").Where(query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("connector_key", request.ConnectorKey), query.Equal("nonce", nonce))).Limit(1).Build()
 		if lookupErr == nil {
 			lookupErr = s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&existing)
 		}
@@ -99,8 +100,10 @@ func (s *OperationsStore) acceptWebhookNonce(ctx context.Context, request integr
 }
 
 func (s *OperationsStore) acceptEvent(ctx context.Context, request integrationmodel.WebhookRequest, providerKey string, verified connector.VerifiedWebhook) (integrationmodel.Event, bool, error) {
-	digest := sha256.Sum256([]byte(request.WorkspaceID + "\x00" + providerKey + "\x00" + strings.TrimSpace(verified.ExternalID)))
-	id := "event:" + hex.EncodeToString(digest[:])
+	id, err := entityid.Derive("intevt", "integration.webhook-event", request.WorkspaceID, providerKey, verified.ExternalID)
+	if err != nil {
+		return integrationmodel.Event{}, false, err
+	}
 	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, request.WorkspaceID, subjectFenceReference{"row", "_integration_events", id}, subjectFenceReference{"connection", "", request.ConnectionKey}); err != nil {
 		return integrationmodel.Event{}, false, err
 	}
@@ -109,7 +112,7 @@ func (s *OperationsStore) acceptEvent(ctx context.Context, request integrationmo
 		return existing, false, nil
 	}
 	now := request.ReceivedAt.UTC()
-	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_events").Columns("id", "workspace_id", "provider", "event_type", "external_id", "status", "payload_json", "mapping_key", "target_type", "execution_json", "error", "attempt_count", "next_retry_at", "last_attempt_at", "lease_owner", "lease_expires_at", "fencing_token", "received_at", "updated_at").Values(id, request.WorkspaceID, providerKey, verified.EventType, verified.ExternalID, "received", string(verified.Payload), "", "", "{}", nil, 0, int64(0), int64(0), "", int64(0), 0, now.UnixMilli(), now.UnixMilli()).Build()
+	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_events").Columns("event_id", "workspace_id", "provider", "event_type", "external_id", "status", "payload_json", "mapping_key", "target_type", "execution_json", "error", "attempt_count", "next_retry_at", "last_attempt_at", "lease_owner", "lease_expires_at", "fencing_token", "received_at", "updated_at").Values(id, request.WorkspaceID, providerKey, verified.EventType, verified.ExternalID, "received", string(verified.Payload), "", "", "{}", nil, 0, int64(0), int64(0), "", int64(0), 0, now.UnixMilli(), now.UnixMilli()).Build()
 	if err != nil {
 		return integrationmodel.Event{}, false, err
 	}
@@ -163,7 +166,7 @@ func (s *OperationsStore) ListEvents(ctx context.Context, filter integrationmode
 }
 
 func (s *OperationsStore) GetEvent(ctx context.Context, workspaceID, id string) (integrationmodel.Event, error) {
-	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("id", strings.TrimSpace(id)))
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("event_id", strings.TrimSpace(id)))
 	if err != nil {
 		return integrationmodel.Event{}, err
 	}
@@ -185,7 +188,7 @@ func (s *OperationsStore) ReplayEvent(ctx context.Context, workspaceID, id strin
 		return integrationmodel.Event{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	where, err := scopedWhere(ctx, workspaceID, "", "", query.Equal("id", id))
+	where, err := scopedWhere(ctx, workspaceID, "", "", query.Equal("event_id", id))
 	if err != nil {
 		return integrationmodel.Event{}, err
 	}
@@ -220,7 +223,7 @@ func (s *OperationsStore) ReplayEvent(ctx context.Context, workspaceID, id strin
 }
 
 func eventColumns() []string {
-	return []string{"id", "workspace_id", "provider", "event_type", "external_id", "status", "payload_json", "execution_json", "error", "attempt_count", "next_retry_at", "last_attempt_at", "received_at", "updated_at"}
+	return []string{"event_id", "workspace_id", "provider", "event_type", "external_id", "status", "payload_json", "execution_json", "error", "attempt_count", "next_retry_at", "last_attempt_at", "received_at", "updated_at"}
 }
 
 func scanEvent(row rowScanner) (integrationmodel.Event, error) {
@@ -228,7 +231,7 @@ func scanEvent(row rowScanner) (integrationmodel.Event, error) {
 	var errorText sql.NullString
 	var payload, execution string
 	var nextRetryAt, lastAttemptAt, receivedAt, updatedAt int64
-	err := row.Scan(&value.ID, &value.WorkspaceID, &value.Provider, &value.EventType, &value.ExternalID, &value.Status, &payload, &execution, &errorText, &value.AttemptCount, &nextRetryAt, &lastAttemptAt, &receivedAt, &updatedAt)
+	err := row.Scan(&value.EventID, &value.WorkspaceID, &value.Provider, &value.EventType, &value.ExternalID, &value.Status, &payload, &execution, &errorText, &value.AttemptCount, &nextRetryAt, &lastAttemptAt, &receivedAt, &updatedAt)
 	if err != nil {
 		return value, err
 	}
@@ -282,7 +285,7 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 		input[key] = value
 	}
 	if mapping.TargetType == "workflow" {
-		input["integration_event_id"], input["integration_provider"] = event.ID, event.Provider
+		input["integration_event_id"], input["integration_provider"] = event.EventID, event.Provider
 		input["integration_event_type"], input["integration_external_id"] = event.EventType, event.ExternalID
 		input["integration_mapping_key"] = mapping.Key
 	}
@@ -352,11 +355,11 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 			return event, err
 		}
 	}
-	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, event.WorkspaceID, subjectFenceReference{"row", "_integration_events", event.ID}, subjectFenceReference{"subject", "", principal.ActorID}); err != nil {
+	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, event.WorkspaceID, subjectFenceReference{"row", "_integration_events", event.EventID}, subjectFenceReference{"subject", "", principal.ActorID}); err != nil {
 		return event, err
 	}
 	receipt, triggerErr := s.triggers.Trigger(ctx, integrationsdk.TriggerRequest{
-		EventID: event.ID, WorkspaceID: event.WorkspaceID, MappingKey: mapping.Key, MappingRevision: integrationEventMappingRevision(mapping), IdempotencyKey: event.ID + ":" + mapping.Key,
+		EventID: event.EventID, WorkspaceID: event.WorkspaceID, MappingKey: mapping.Key, MappingRevision: integrationEventMappingRevision(mapping), IdempotencyKey: event.EventID + ":" + mapping.Key,
 		Source: integrationsdk.TriggerSource{Provider: event.Provider, EventType: event.EventType, ExternalID: event.ExternalID, ReceivedAt: event.ReceivedAt},
 		Target: integrationsdk.TriggerTarget{
 			Type: mapping.TargetType, WorkflowKey: mapping.WorkflowKey, AutomationRuleKey: mapping.AutomationRuleKey, ObjectKey: objectKey, RecordID: recordID, ActionKey: actionKey,
@@ -365,7 +368,7 @@ func (s *OperationsStore) processEvent(ctx context.Context, event integrationmod
 	})
 	if triggerErr != nil {
 		if strings.TrimSpace(receipt.EventID) == "" {
-			receipt.EventID = event.ID
+			receipt.EventID = event.EventID
 		}
 		if strings.TrimSpace(receipt.MappingKey) == "" {
 			receipt.MappingKey = mapping.Key
@@ -428,18 +431,18 @@ func (s *OperationsStore) updateEventStatus(ctx context.Context, event integrati
 	} else {
 		builder = builder.Set("next_retry_at", int64(0))
 	}
-	where, err := scopedWhere(ctx, event.WorkspaceID, "", "", query.Equal("id", event.ID))
+	where, err := scopedWhere(ctx, event.WorkspaceID, "", "", query.Equal("event_id", event.EventID))
 	if err != nil {
 		return event, err
 	}
-	statement, args, err := builder.Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, event.WorkspaceID, "_integration_events", event.ID), where)).Build()
+	statement, args, err := builder.Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, event.WorkspaceID, "_integration_events", event.EventID), where)).Build()
 	if err != nil {
 		return event, err
 	}
 	if _, err := s.database.ExecContext(ctx, statement, args...); err != nil {
 		return event, err
 	}
-	return s.GetEvent(ctx, event.WorkspaceID, event.ID)
+	return s.GetEvent(ctx, event.WorkspaceID, event.EventID)
 }
 
 func integrationEventRetryDelay(attempt int) time.Duration {
@@ -461,11 +464,11 @@ func (s *OperationsStore) persistExecutionReceipt(ctx context.Context, event int
 		return err
 	}
 	now := time.Now().UTC().UnixMilli()
-	where, err := scopedWhere(ctx, event.WorkspaceID, "", "", query.Equal("id", event.ID))
+	where, err := scopedWhere(ctx, event.WorkspaceID, "", "", query.Equal("event_id", event.EventID))
 	if err != nil {
 		return err
 	}
-	statement, values, err := query.NewUpdateBuilder(s.dialect, "_integration_events").Set("mapping_key", mapping.Key).Set("target_type", mapping.TargetType).Set("execution_json", string(payload)).Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, event.WorkspaceID, "_integration_events", event.ID), where)).Build()
+	statement, values, err := query.NewUpdateBuilder(s.dialect, "_integration_events").Set("mapping_key", mapping.Key).Set("target_type", mapping.TargetType).Set("execution_json", string(payload)).Set("updated_at", now).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, event.WorkspaceID, "_integration_events", event.EventID), where)).Build()
 	if err != nil {
 		return err
 	}
@@ -478,7 +481,7 @@ func (s *OperationsStore) persistExecutionReceipt(ctx context.Context, event int
 		return err
 	}
 	if affected != 1 {
-		return fmt.Errorf("Integration event %q changed before execution receipt persistence", event.ID)
+		return fmt.Errorf("Integration event %q changed before execution receipt persistence", event.EventID)
 	}
 	return nil
 }

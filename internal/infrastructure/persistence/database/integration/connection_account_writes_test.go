@@ -403,7 +403,7 @@ func TestAccountWriteFailuresNeverEnterOrStarveLegacyReconciliation(t *testing.T
 	}
 	worker := NewWorkerStore(store.transactions, store.dialect, store.delivery, ops, "worker")
 	values, err := worker.failedInvocationsAcrossWorkspaces(t.Context(), 1, time.Now())
-	if err != nil || len(values) != 1 || values[0].ID != "call:legacy" {
+	if err != nil || len(values) != 1 || values[0].InvocationID != "call:legacy" {
 		t.Fatal("account writes entered/starved generic reconciliation", values, err)
 	}
 }

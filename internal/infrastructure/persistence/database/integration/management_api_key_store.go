@@ -162,8 +162,8 @@ func (s *ManagementStore) CreateAPIKey(ctx context.Context, workspaceID, actorID
 		prefix = prefix[:12]
 	}
 	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_secrets").Columns(
-		"id", "secret_key", "workspace_id", "credential_type", "kind", "status", "name", "description", "value_ref", "fingerprint", "display_prefix", "lookup_hash", "actor_id", "role_key", "scopes_json", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_used_at", "last_tested_at", "last_test_status", "last_test_error",
-	).Values(ownerID("api_key_", workspaceID, key), key, workspaceID, "api_key", "api_key", "active", input.Name, nil, nil, nil, prefix, tokenHash, input.ActorID, input.RoleKey, scopesJSON, actorID, timestampMillis(now), timestampMillis(now), int64(0), timestampMillis(input.ExpiresAt), int64(0), int64(0), int64(0), int64(0), "", "").Build()
+		"secret_key", "workspace_id", "credential_type", "kind", "status", "name", "description", "value_ref", "fingerprint", "display_prefix", "lookup_hash", "actor_id", "role_key", "scopes_json", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_used_at", "last_tested_at", "last_test_status", "last_test_error",
+	).Values(key, workspaceID, "api_key", "api_key", "active", input.Name, nil, nil, nil, prefix, tokenHash, input.ActorID, input.RoleKey, scopesJSON, actorID, timestampMillis(now), timestampMillis(now), int64(0), timestampMillis(input.ExpiresAt), int64(0), int64(0), int64(0), int64(0), "", "").Build()
 	if err != nil {
 		return integrationsdk.APIKeyCredential{}, err
 	}

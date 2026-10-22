@@ -2,15 +2,14 @@ package integration
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	"github.com/domainry/domainry-foundation/entityid"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
@@ -44,7 +43,10 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 			return integrationmodel.ProviderCallResult{}, err
 		}
 	}
-	invocationID := operationInvocationID(request.WorkspaceID, request.RequestID)
+	invocationID, err := operationInvocationID(request.WorkspaceID, request.RequestID)
+	if err != nil {
+		return integrationmodel.ProviderCallResult{}, err
+	}
 	if current, err := s.GetInvocation(ctx, request.WorkspaceID, invocationID); err == nil && current.Status == "succeeded" {
 		if request.PersistenceMode == integrationmodel.ProviderCallPersistenceSensitive {
 			return integrationmodel.ProviderCallResult{Invocation: current}, nil
@@ -108,7 +110,7 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 	}
 	metadata, _ := json.Marshal(metadataValue)
 	completedAt := time.Now().UTC()
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", completedAt.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, request.WorkspaceID, "_integration_invocations", invocationID), query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("id", invocationID)))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", status).Set("duration_ms", time.Since(started).Milliseconds()).Set("response_ref", responseRef).Set("error", errorText).Set("metadata_json", string(metadata)).Set("updated_at", completedAt.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, request.WorkspaceID, "_integration_invocations", invocationID), query.And(query.Equal("workspace_id", request.WorkspaceID), query.Equal("invocation_id", invocationID)))).Build()
 	if err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
@@ -224,7 +226,7 @@ func (s *OperationsStore) ListInvocations(ctx context.Context, filter integratio
 }
 
 func (s *OperationsStore) GetInvocation(ctx context.Context, workspaceID, id string) (integrationmodel.Invocation, error) {
-	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("id", strings.TrimSpace(id)))
+	where, err := scopedWhere(ctx, strings.TrimSpace(workspaceID), "", "", query.Equal("invocation_id", strings.TrimSpace(id)))
 	if err != nil {
 		return integrationmodel.Invocation{}, err
 	}
@@ -240,7 +242,7 @@ func (s *OperationsStore) GetInvocation(ctx context.Context, workspaceID, id str
 }
 
 func invocationColumns() []string {
-	return []string{"id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at"}
+	return []string{"invocation_id", "workspace_id", "connector_key", "provider_key", "connection_key", "operation", "status", "duration_ms", "request_ref", "response_ref", "error", "event_id", "object_key", "record_id", "workflow_execution_id", "metadata_json", "created_at", "updated_at"}
 }
 
 func scanInvocation(row rowScanner) (integrationmodel.Invocation, error) {
@@ -248,7 +250,7 @@ func scanInvocation(row rowScanner) (integrationmodel.Invocation, error) {
 	var providerKey, connectionKey, requestRef, responseRef, errorText, eventID, objectKey, recordID, workflowID sql.NullString
 	var metadataJSON string
 	var createdAt, updatedAt int64
-	err := row.Scan(&value.ID, &value.WorkspaceID, &value.ConnectorKey, &providerKey, &connectionKey, &value.Operation, &value.Status, &value.DurationMS, &requestRef, &responseRef, &errorText, &eventID, &objectKey, &recordID, &workflowID, &metadataJSON, &createdAt, &updatedAt)
+	err := row.Scan(&value.InvocationID, &value.WorkspaceID, &value.ConnectorKey, &providerKey, &connectionKey, &value.Operation, &value.Status, &value.DurationMS, &requestRef, &responseRef, &errorText, &eventID, &objectKey, &recordID, &workflowID, &metadataJSON, &createdAt, &updatedAt)
 	if err != nil {
 		return value, err
 	}
@@ -263,9 +265,8 @@ func scanInvocation(row rowScanner) (integrationmodel.Invocation, error) {
 	return value, nil
 }
 
-func operationInvocationID(workspaceID, requestID string) string {
-	digest := sha256.Sum256([]byte(strings.TrimSpace(workspaceID) + "\x00" + strings.TrimSpace(requestID)))
-	return "call:" + hex.EncodeToString(digest[:])
+func operationInvocationID(workspaceID, requestID string) (string, error) {
+	return entityid.Derive("intinv", "integration.provider-call", workspaceID, requestID)
 }
 
 func invocationResponse(metadata map[string]any) json.RawMessage {

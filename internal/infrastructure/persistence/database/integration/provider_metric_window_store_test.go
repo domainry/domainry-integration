@@ -52,11 +52,16 @@ func TestGoogleHTTP429EventsAggregateAcrossWorkerInstances(t *testing.T) {
 	for index := 0; index < 2; index++ {
 		id := fmt.Sprintf("run-%d", index)
 		worker := NewWorkerStore(database, dialect, nil, nil, fmt.Sprintf("worker-%d", index))
-		if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			id, "workspace-a", providerRunKindState, "poll", "crm", "probe", id, "poll", 1, "", "", `{}`, "processing", "", 0, now.UnixMilli(), worker.workerID, now.Add(time.Minute).UnixMilli(), 5, now.UnixMilli(), now.UnixMilli()); err != nil {
+		result, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"workspace-a", providerRunKindState, "poll", "crm", "probe", id, "poll", 1, "", "", `{}`, "processing", "", 0, now.UnixMilli(), worker.workerID, now.Add(time.Minute).UnixMilli(), 5, now.UnixMilli(), now.UnixMilli())
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := worker.failProviderTask(t.Context(), providerTaskCandidate{id: id, workspaceID: "workspace-a", fencingToken: 4}, connector.RetryableError("google.http_429", errors.New("private response")), now); err == nil {
+		runID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := worker.failProviderTask(t.Context(), providerTaskCandidate{id: runID, workspaceID: "workspace-a", fencingToken: 4}, connector.RetryableError("google.http_429", errors.New("private response")), now); err == nil {
 			t.Fatal("provider failure was swallowed")
 		}
 	}
@@ -72,11 +77,16 @@ func TestGoogleGmailRateLimit403EventsAreNotMislabelledAsHTTP429(t *testing.T) {
 	for index, code := range []string{"google.http_403.rate_limit_exceeded", "google.http_403.user_rate_limit_exceeded"} {
 		id := fmt.Sprintf("gmail-run-%d", index)
 		worker := NewWorkerStore(database, dialect, nil, nil, fmt.Sprintf("worker-%d", index))
-		if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			id, "workspace-a", providerRunKindState, "poll", "google_workspace", "google", id, "gmail_sync", 1, "", "", `{}`, "processing", "", 0, now.UnixMilli(), worker.workerID, now.Add(time.Minute).UnixMilli(), 5, now.UnixMilli(), now.UnixMilli()); err != nil {
+		result, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"workspace-a", providerRunKindState, "poll", "google_workspace", "google", id, "gmail_sync", 1, "", "", `{}`, "processing", "", 0, now.UnixMilli(), worker.workerID, now.Add(time.Minute).UnixMilli(), 5, now.UnixMilli(), now.UnixMilli())
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := worker.failProviderTask(t.Context(), providerTaskCandidate{id: id, workspaceID: "workspace-a", fencingToken: 4}, connector.RetryableError(code, errors.New("private response")), now); err == nil {
+		runID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := worker.failProviderTask(t.Context(), providerTaskCandidate{id: runID, workspaceID: "workspace-a", fencingToken: 4}, connector.RetryableError(code, errors.New("private response")), now); err == nil {
 			t.Fatal("Gmail rate-limit failure was swallowed")
 		}
 	}
@@ -98,11 +108,16 @@ func TestFeishuRateLimitEventsNormalizeCurrentAndLegacyProviderSignals(t *testin
 	for index, code := range []string{"feishu.rate_limit_exceeded", "feishu_calendar.rate_limit_exceeded", "feishu_calendar.oauth.rate_limit_exceeded"} {
 		id := fmt.Sprintf("feishu-run-%d", index)
 		worker := NewWorkerStore(database, dialect, nil, nil, fmt.Sprintf("worker-%d", index))
-		if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			id, "workspace-a", providerRunKindState, "poll", "appointment_scheduling", "feishu_calendar", id, "calendar_sync", 1, "", "", `{}`, "processing", "", 0, now.UnixMilli(), worker.workerID, now.Add(time.Minute).UnixMilli(), 5, now.UnixMilli(), now.UnixMilli()); err != nil {
+		result, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"workspace-a", providerRunKindState, "poll", "appointment_scheduling", "feishu_calendar", id, "calendar_sync", 1, "", "", `{}`, "processing", "", 0, now.UnixMilli(), worker.workerID, now.Add(time.Minute).UnixMilli(), 5, now.UnixMilli(), now.UnixMilli())
+		if err != nil {
 			t.Fatal(err)
 		}
-		if err := worker.failProviderTask(t.Context(), providerTaskCandidate{id: id, workspaceID: "workspace-a", fencingToken: 4}, connector.RetryableError(code, errors.New("private response")), now); err == nil {
+		runID, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := worker.failProviderTask(t.Context(), providerTaskCandidate{id: runID, workspaceID: "workspace-a", fencingToken: 4}, connector.RetryableError(code, errors.New("private response")), now); err == nil {
 			t.Fatal("Feishu rate-limit failure was swallowed")
 		}
 	}
@@ -122,7 +137,7 @@ func TestGmailHistoryEvidenceRequiresNoCoveringVerifiedPush(t *testing.T) {
 	database, dialect := webPushTestDatabase(t, "gmail-history-evidence")
 	now := time.Date(2026, 9, 29, 12, 34, 0, 0, time.UTC)
 	candidate := providerTaskCandidate{
-		id: "gmail-run", workspaceID: "workspace-a", connectorKey: "google_workspace", providerKey: "google",
+		id: 1, workspaceID: "workspace-a", connectorKey: "google_workspace", providerKey: "google",
 		connectionKey: "gmail-a", taskKey: "gmail_sync", wakeSequence: 1, fencingToken: 4,
 	}
 	if err := recordProviderHistoryObservations(t.Context(), database, dialect, candidate, []connector.BackgroundObservation{
@@ -131,8 +146,8 @@ func TestGmailHistoryEvidenceRequiresNoCoveringVerifiedPush(t *testing.T) {
 	}, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_wake_receipts (id,workspace_id,inbox_id,connector_key,provider_key,connection_key,task_key,wake_sequence,status,published_at,received_at,completed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"receipt", candidate.workspaceID, "inbox", candidate.connectorKey, candidate.providerKey, candidate.connectionKey, candidate.taskKey, 2, "pending", now.Add(-time.Minute).UnixMilli(), now.UnixMilli(), 0, now.UnixMilli(), now.UnixMilli()); err != nil {
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_wake_receipts (workspace_id,inbox_id,connector_key,provider_key,connection_key,task_key,wake_sequence,status,published_at,received_at,completed_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		candidate.workspaceID, int64(1), candidate.connectorKey, candidate.providerKey, candidate.connectionKey, candidate.taskKey, 2, "pending", now.Add(-time.Minute).UnixMilli(), now.UnixMilli(), 0, now.UnixMilli(), now.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	candidate.wakeSequence, candidate.fencingToken = 2, 5
@@ -192,8 +207,8 @@ func TestGoogleHTTP429WindowsCountRepeatedFailuresAndExpire(t *testing.T) {
 
 func TestGoogleHTTP429ForegroundOperationsAndDeliveriesAreCountedSeparately(t *testing.T) {
 	database, dialect := webPushTestDatabase(t, "provider-429-foreground")
-	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_connections (id,connection_key,workspace_id,connector_key,provider_key,name,status,config_json,secret_refs_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"connection-1", "primary", "workspace-a", "google_workspace", "google", "Gmail", "active", `{}`, `{}`, "admin", time.Now().UTC().UnixMilli(), time.Now().UTC().UnixMilli()); err != nil {
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_connections (connection_key,workspace_id,connector_key,provider_key,name,status,config_json,secret_refs_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		"primary", "workspace-a", "google_workspace", "google", "Gmail", "active", `{}`, `{}`, "admin", time.Now().UTC().UnixMilli(), time.Now().UTC().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	provider := &foreground429Provider{}
@@ -225,8 +240,8 @@ func TestGoogleHTTP429ForegroundOperationsAndDeliveriesAreCountedSeparately(t *t
 
 func TestGoogleGmailRateLimitForegroundOperationsAndDeliveriesAreCountedSeparately(t *testing.T) {
 	database, dialect := webPushTestDatabase(t, "provider-gmail-rate-limit-foreground")
-	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_connections (id,connection_key,workspace_id,connector_key,provider_key,name,status,config_json,secret_refs_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"connection-1", "primary", "workspace-a", "google_workspace", "google", "Gmail", "active", `{}`, `{}`, "admin", time.Now().UTC().UnixMilli(), time.Now().UTC().UnixMilli()); err != nil {
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_connections (connection_key,workspace_id,connector_key,provider_key,name,status,config_json,secret_refs_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		"primary", "workspace-a", "google_workspace", "google", "Gmail", "active", `{}`, `{}`, "admin", time.Now().UTC().UnixMilli(), time.Now().UTC().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	provider := &foreground429Provider{code: "google.http_403.user_rate_limit_exceeded"}
@@ -258,8 +273,8 @@ func TestGoogleGmailRateLimitForegroundOperationsAndDeliveriesAreCountedSeparate
 
 func TestFeishuRateLimitForegroundOperationsAndDeliveriesAreCountedSeparately(t *testing.T) {
 	database, dialect := webPushTestDatabase(t, "provider-feishu-rate-limit-foreground")
-	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_connections (id,connection_key,workspace_id,connector_key,provider_key,name,status,config_json,secret_refs_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"connection-1", "primary", "workspace-a", "feishu_collaboration", "feishu", "Feishu", "active", `{}`, `{}`, "admin", time.Now().UTC().UnixMilli(), time.Now().UTC().UnixMilli()); err != nil {
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_connections (connection_key,workspace_id,connector_key,provider_key,name,status,config_json,secret_refs_json,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		"primary", "workspace-a", "feishu_collaboration", "feishu", "Feishu", "active", `{}`, `{}`, "admin", time.Now().UTC().UnixMilli(), time.Now().UTC().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	provider := &foreground429Provider{code: "feishu.rate_limit_exceeded", connectorKey: "feishu_collaboration", providerKey: "feishu"}
@@ -293,20 +308,25 @@ func TestGoogleHTTP429MetricWriteFailureRollsBackProviderTaskFailure(t *testing.
 	database, dialect := webPushTestDatabase(t, "provider-429-atomic")
 	worker := NewWorkerStore(database, dialect, nil, nil, "worker")
 	now := time.Date(2026, 9, 27, 12, 34, 0, 0, time.UTC)
-	if _, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"run", "workspace-a", providerRunKindState, "poll", "crm", "probe", "primary", "poll", 1, "", "", `{}`, "processing", "", 0, now.UnixMilli(), worker.workerID, now.Add(time.Minute).UnixMilli(), 5, now.UnixMilli(), now.UnixMilli()); err != nil {
+	result, err := database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"workspace-a", providerRunKindState, "poll", "crm", "probe", "primary", "poll", 1, "", "", `{}`, "processing", "", 0, now.UnixMilli(), worker.workerID, now.Add(time.Minute).UnixMilli(), 5, now.UnixMilli(), now.UnixMilli())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := result.LastInsertId()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.ExecContext(t.Context(), `CREATE TRIGGER reject_provider_metric BEFORE INSERT ON _integration_provider_metric_windows BEGIN SELECT RAISE(ABORT, 'forced metric failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	providerErr := connector.RetryableError("google.http_429", errors.New("private response body"))
-	if err := worker.failProviderTask(t.Context(), providerTaskCandidate{id: "run", workspaceID: "workspace-a", fencingToken: 4}, providerErr, now); err == nil {
+	if err := worker.failProviderTask(t.Context(), providerTaskCandidate{id: runID, workspaceID: "workspace-a", fencingToken: 4}, providerErr, now); err == nil {
 		t.Fatal("metric failure was swallowed")
 	}
 	var status, errorCode string
 	var attempts int
-	if err := database.QueryRowContext(t.Context(), `SELECT status,last_error_code,attempt_count FROM _integration_provider_runs WHERE id='run'`).Scan(&status, &errorCode, &attempts); err != nil || status != "processing" || errorCode != "" || attempts != 0 {
+	if err := database.QueryRowContext(t.Context(), `SELECT status,last_error_code,attempt_count FROM _integration_provider_runs WHERE id=?`, runID).Scan(&status, &errorCode, &attempts); err != nil || status != "processing" || errorCode != "" || attempts != 0 {
 		t.Fatalf("provider failure committed without metric: status=%q code=%q attempts=%d err=%v", status, errorCode, attempts, err)
 	}
 }

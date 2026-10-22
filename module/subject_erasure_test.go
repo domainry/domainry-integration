@@ -117,7 +117,7 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 				for _, subject := range []string{"alice", "bob"} {
 					for _, workspace := range []string{"ws", "other"} {
 						id := table + "-" + workspace + "-" + subject
-						values := map[string]any{"workspace_id": workspace, "user_id": subject, "actor_id": subject, "connection_key": subject, "status": "failed", "secret_key": subject + "-token", "event_id": "event-" + subject, "lease_expires_at": "", "exchange_deadline": ""}
+						values := map[string]any{"workspace_id": workspace, "user_id": subject, "actor_id": subject, "connection_key": subject, "status": "failed", "secret_key": subject + "-token", "event_id": "event-" + workspace + "-" + subject, "lease_expires_at": "", "exchange_deadline": ""}
 						values["provider"] = "rotation_probe"
 						values["external_subject"] = "external-" + subject
 						for _, field := range []string{"session_json", "payload_json", "endpoint", "p256dh", "auth_secret", "verifier_ciphertext", "external_name", "name", "description"} {
@@ -139,7 +139,7 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 					t.Fatal(e)
 				}
 				if subject == "alice" {
-					managerInvocationID = result.Invocation.ID
+					managerInvocationID = result.Invocation.InvocationID
 				}
 			}
 			for _, subject := range []string{"alice", "bob"} {
@@ -148,11 +148,11 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 				if e != nil {
 					t.Fatal(e)
 				}
-				webhookIDs[subject] = receipt.Event.ID
+				webhookIDs[subject] = receipt.Event.EventID
 			}
-			// The sourced event ID is a real Integration ID, not a payload search.
-			eventID := "_integration_events-ws-alice"
-			var aliceAPIKeyID string
+			// The sourced event ID is a real Integration business ID, not a payload search.
+			eventID := "event-ws-alice"
+			var aliceAPIKeyID int64
 			if err = db.QueryRow("SELECT id FROM _integration_secrets WHERE workspace_id='ws' AND credential_type='api_key' AND actor_id='alice'").Scan(&aliceAPIKeyID); err != nil {
 				t.Fatal(err)
 			}
@@ -181,13 +181,41 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 			if strings.Contains(string(plan), "@private.example") || strings.Contains(string(plan), "rotated-credential") {
 				t.Fatal("private payload copied into plan", string(plan))
 			}
-			if !strings.Contains(string(plan), webhookIDs["alice"]) || strings.Contains(string(plan), webhookIDs["bob"]) {
+			var planned struct {
+				Rows []struct {
+					Table string `json:"table"`
+					ID    int64  `json:"id"`
+				} `json:"rows"`
+			}
+			if err = json.Unmarshal(plan, &planned); err != nil {
+				t.Fatal(err)
+			}
+			hasRow := func(table string, id int64) bool {
+				for _, row := range planned.Rows {
+					if row.Table == table && row.ID == id {
+						return true
+					}
+				}
+				return false
+			}
+			var aliceWebhookRowID, bobWebhookRowID int64
+			if err = db.QueryRow("SELECT id FROM _integration_events WHERE event_id=?", webhookIDs["alice"]).Scan(&aliceWebhookRowID); err != nil {
+				t.Fatal(err)
+			}
+			if err = db.QueryRow("SELECT id FROM _integration_events WHERE event_id=?", webhookIDs["bob"]).Scan(&bobWebhookRowID); err != nil {
+				t.Fatal(err)
+			}
+			if !hasRow("_integration_events", aliceWebhookRowID) || hasRow("_integration_events", bobWebhookRowID) {
 				t.Fatal("verified external actor event provenance not scoped")
 			}
-			if !strings.Contains(string(plan), managerInvocationID) {
+			var managerInvocationRowID int64
+			if err = db.QueryRow("SELECT id FROM _integration_invocations WHERE invocation_id=?", managerInvocationID).Scan(&managerInvocationRowID); err != nil {
+				t.Fatal(err)
+			}
+			if !hasRow("_integration_invocations", managerInvocationRowID) {
 				t.Fatal("manager/shared connection invocation missed source member")
 			}
-			if !strings.Contains(string(plan), aliceAPIKeyID) {
+			if !hasRow("_integration_secrets", aliceAPIKeyID) {
 				t.Fatal("typed API-key credential missed subject erasure plan")
 			}
 			changed := request
@@ -247,11 +275,7 @@ func TestSubjectErasureOwnerRollbackRetryIsolationAndFencing(t *testing.T) {
 			if _, err = binding.(sdk.OperationsBinding).Operations().Call(trusted, sdk.ProviderCallRequest{RequestID: "manager-after", WorkspaceID: "ws", ActorID: "operator", ConnectorKey: "crm", ConnectionKey: "shared", Operation: "lookup", Payload: json.RawMessage(`{"email":"alice@private.example"}`), Source: sdk.InvocationSource{ExecutionID: "later", ObjectKey: "member_profile", RecordID: "profile-alice"}}); err == nil {
 				t.Fatal("manager recreated erased member invocation")
 			}
-			var decoded struct{ Rows []struct{ Table, ID string } }
-			if err = json.Unmarshal(plan, &decoded); err != nil {
-				t.Fatal(err)
-			}
-			for _, row := range decoded.Rows {
+			for _, row := range planned.Rows {
 				raw := integrationSubjectRowJSON(t, host, row.Table, row.ID)
 				for _, private := range []string{"alice@private.example", "cHJpdmF0ZSBjc3Y=", "rotated-credential"} {
 					if strings.Contains(raw, private) {
@@ -325,7 +349,10 @@ func seedIntegrationSubjectRow(t *testing.T, host *rotationHost, table, id strin
 			value = v
 		}
 		if name == "id" {
-			value = id
+			// Every Integration table owns an auto-increment BIGINT physical ID.
+			// The fixture only supplies source/business columns and lets the database
+			// allocate the row locator exactly as production does.
+			continue
 		}
 		columns = append(columns, name)
 		values = append(values, value)
@@ -341,7 +368,7 @@ func seedIntegrationSubjectRow(t *testing.T, host *rotationHost, table, id strin
 	}
 	execIntegration(t, host.db, stmt, args...)
 }
-func integrationSubjectRowJSON(t *testing.T, host *rotationHost, table, id string) string {
+func integrationSubjectRowJSON(t *testing.T, host *rotationHost, table string, id int64) string {
 	t.Helper()
 	stmt, args, err := query.NewSelectBuilder(host.dialect, table).Projections(query.Project(query.AllColumns())).Where(query.Equal("id", id)).Build()
 	if err != nil {
@@ -383,9 +410,9 @@ func integrationPeerSnapshot(t *testing.T, host *rotationHost) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ids := []string{}
+		ids := []int64{}
 		for rows.Next() {
-			var id string
+			var id int64
 			if err = rows.Scan(&id); err != nil {
 				t.Fatal(err)
 			}
@@ -394,7 +421,7 @@ func integrationPeerSnapshot(t *testing.T, host *rotationHost) string {
 		rows.Close()
 		for _, id := range ids {
 			raw := integrationSubjectRowJSON(t, host, table, id)
-			if strings.Contains(id, "bob") || strings.Contains(id, "other") || strings.Contains(raw, "\"other\"") || strings.Contains(raw, "\"bob\"") || strings.Contains(raw, "bob-token") || strings.Contains(raw, "shared-token") || strings.Contains(raw, "shared@private.example") || strings.Contains(raw, "bob@private.example") {
+			if strings.Contains(raw, "\"other\"") || strings.Contains(raw, "\"bob\"") || strings.Contains(raw, "bob-token") || strings.Contains(raw, "shared-token") || strings.Contains(raw, "shared@private.example") || strings.Contains(raw, "bob@private.example") {
 				all = append(all, table+raw)
 			}
 		}

@@ -72,7 +72,7 @@ func (s *ManagementStore) requireScopedCandidate(ctx context.Context, table, key
 	if err != nil {
 		return err
 	}
-	var id string
+	var id int64
 	if err := s.database.QueryRowContext(ctx, statement, args...).Scan(&id); err == sql.ErrNoRows {
 		return fmt.Errorf("Integration resource was not found")
 	} else if err != nil {
@@ -258,21 +258,20 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}
-	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_connections").Columns("id").Where(where).Limit(1).Build()
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, "_integration_connections").Columns("connection_key").Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.Connection{}, err
 	}
-	var id string
-	lookupErr := s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&id)
+	var existingKey string
+	lookupErr := s.database.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&existingKey)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return integrationsdk.Connection{}, lookupErr
 	}
 	if lookupErr == sql.ErrNoRows {
-		id = ownerID("connection_", workspaceID, key)
 		actorID, _ = scopeOwner(ctx, actorID)
 		statement, args, buildErr := query.NewInsertBuilder(s.dialect, "_integration_connections").Columns(
-			"id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at",
-		).Values(id, key, workspaceID, input.ConnectorKey, input.ProviderKey, input.Name, input.Status, configJSON, refsJSON, actorID, timestampMillis(now), timestampMillis(now)).Build()
+			"connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at",
+		).Values(key, workspaceID, input.ConnectorKey, input.ProviderKey, input.Name, input.Status, configJSON, refsJSON, actorID, timestampMillis(now), timestampMillis(now)).Build()
 		if buildErr != nil {
 			return integrationsdk.Connection{}, buildErr
 		}
@@ -283,7 +282,7 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_connections").
 			Set("connector_key", input.ConnectorKey).Set("provider_key", input.ProviderKey).Set("name", input.Name).
 			Set("status", input.Status).Set("config_json", configJSON).Set("secret_refs_json", refsJSON).Set("updated_at", timestampMillis(now)).
-			Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_connections", id), where)).Build()
+			Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_connections", ownerID("connection_", workspaceID, key)), where)).Build()
 		if buildErr != nil {
 			return integrationsdk.Connection{}, buildErr
 		}

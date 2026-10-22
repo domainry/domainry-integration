@@ -136,7 +136,7 @@ func (s *SecretResolver) applySecretUpdates(ctx context.Context, workspaceID str
 
 type currentProviderSecret struct {
 	preparedProviderSecretUpdate
-	materialID, fingerprint, updatedAt string
+	fingerprint, updatedAt string
 }
 
 func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspaceID string, prepared []preparedProviderSecretUpdate) error {
@@ -158,15 +158,15 @@ func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspa
 		if item.expected != nil && (item.expected.Fingerprint != fingerprint.String || item.expected.UpdatedAt != timestampString(updatedAt)) {
 			return fmt.Errorf("%w: %s", errProviderSecretChanged, item.fieldKey)
 		}
-		materialStatement, materialArgs, err := query.NewSelectBuilder(s.dialect, "_integration_secret_materials").Columns("id").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey))).Limit(1).Build()
+		materialStatement, materialArgs, err := query.NewSelectBuilder(s.dialect, "_integration_secret_materials").Columns("secret_key").Where(query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey))).Limit(1).Build()
 		if err != nil {
 			return err
 		}
-		var materialID string
-		if err := s.database.QueryRowContext(ctx, materialStatement, materialArgs...).Scan(&materialID); err != nil {
+		var materialKey string
+		if err := s.database.QueryRowContext(ctx, materialStatement, materialArgs...).Scan(&materialKey); err != nil {
 			return fmt.Errorf("read Integration Provider secret material %q: %w", item.secretKey, err)
 		}
-		current = append(current, currentProviderSecret{preparedProviderSecretUpdate: item, materialID: materialID, fingerprint: fingerprint.String, updatedAt: timestampString(updatedAt)})
+		current = append(current, currentProviderSecret{preparedProviderSecretUpdate: item, fingerprint: fingerprint.String, updatedAt: timestampString(updatedAt)})
 	}
 	now := time.Now().UTC()
 	for _, item := range current {
@@ -188,7 +188,7 @@ func (s *SecretResolver) applyPreparedSecretUpdates(ctx context.Context, workspa
 		if affected, _ := result.RowsAffected(); affected != 1 {
 			return fmt.Errorf("%w: %s", errProviderSecretChanged, item.fieldKey)
 		}
-		statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", item.ciphertext).Set("updated_at", updatedAt).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_secret_materials", item.materialID), query.And(query.Equal("id", item.materialID), query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey)))).Build()
+		statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_secret_materials").Set("ciphertext", item.ciphertext).Set("updated_at", updatedAt).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, workspaceID, "_integration_secret_materials", ownerID("secret_material_", workspaceID, item.secretKey)), query.And(query.Equal("workspace_id", workspaceID), query.Equal("secret_key", item.secretKey)))).Build()
 		if err != nil {
 			return err
 		}

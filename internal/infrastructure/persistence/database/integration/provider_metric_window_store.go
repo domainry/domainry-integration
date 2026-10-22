@@ -97,10 +97,9 @@ func recordProviderMetricValue(ctx context.Context, database sqlhost.DBTX, diale
 	window := now.UTC().Truncate(providerMetricWindowSize).UnixMilli()
 	hash := sha256.Sum256([]byte(eventID))
 	shard := int64(hash[0] % providerMetricShards)
-	id := ownerID("provider_metric_", "_platform", fmt.Sprintf("%s:%d:%d", metricKey, window, shard))
 	insert, args, err := query.NewInsertBuilder(dialect, providerMetricWindowTable).
-		Columns("id", "workspace_id", "metric_key", "shard", "window_started_at", "event_count", "updated_at").
-		Values(id, "_platform", metricKey, shard, window, int64(0), now.UTC().UnixMilli()).
+		Columns("workspace_id", "metric_key", "shard", "window_started_at", "event_count", "updated_at").
+		Values("_platform", metricKey, shard, window, int64(0), now.UTC().UnixMilli()).
 		OnConflictDoNothing("metric_key", "window_started_at", "shard").Build()
 	if err != nil {
 		return err

@@ -29,7 +29,7 @@ func (s *OperationsStore) FinishAccountWrite(ctx context.Context, claim model.Ac
 		return model.ConnectionAccountWriteResult{}, err
 	}
 	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", outcome.Status).Set("metadata_json", string(raw)).Set("updated_at", time.Now().UTC().UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, claim.Subject.WorkspaceID, "_integration_invocations", claim.InvocationID), query.And(
-		query.Equal("workspace_id", claim.Subject.WorkspaceID), query.Equal("id", claim.InvocationID), query.Equal("status", "running"), query.Equal("metadata_json", string(initial)),
+		query.Equal("workspace_id", claim.Subject.WorkspaceID), query.Equal("invocation_id", claim.InvocationID), query.Equal("status", "running"), query.Equal("metadata_json", string(initial)),
 	))).Build()
 	if err != nil {
 		return model.ConnectionAccountWriteResult{}, err
@@ -71,7 +71,7 @@ func (s *OperationsStore) ResolveAccountWrite(ctx context.Context, claim model.A
 		return model.ConnectionAccountWriteResult{}, err
 	}
 	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_invocations").Set("status", outcome.Status).Set("metadata_json", string(raw)).Set("updated_at", time.Now().UTC().UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, claim.Subject.WorkspaceID, "_integration_invocations", claim.InvocationID), query.And(
-		query.Equal("workspace_id", claim.Subject.WorkspaceID), query.Equal("id", claim.InvocationID), query.Or(query.Equal("status", "running"), query.Equal("status", model.AccountWriteUncertain)),
+		query.Equal("workspace_id", claim.Subject.WorkspaceID), query.Equal("invocation_id", claim.InvocationID), query.Or(query.Equal("status", "running"), query.Equal("status", model.AccountWriteUncertain)),
 	))).Build()
 	if err != nil {
 		return model.ConnectionAccountWriteResult{}, err
@@ -105,7 +105,7 @@ func accountWriteEvidence(claim model.AccountWriteClaim) accountWriteMetadata {
 
 func (s *OperationsStore) ReadAccountWrite(ctx context.Context, claim model.AccountWriteClaim) (model.ConnectionAccountWriteResult, error) {
 	out := model.ConnectionAccountWriteResult{Source: claim.Request.ExpectedSource, Status: model.AccountWriteNotFound}
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status", "metadata_json", "updated_at").Where(query.And(query.Equal("workspace_id", claim.Subject.WorkspaceID), query.Equal("id", claim.InvocationID))).Limit(1).Build()
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns("status", "metadata_json", "updated_at").Where(query.And(query.Equal("workspace_id", claim.Subject.WorkspaceID), query.Equal("invocation_id", claim.InvocationID))).Limit(1).Build()
 	if err != nil {
 		return out, err
 	}

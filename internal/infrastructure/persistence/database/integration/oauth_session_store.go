@@ -11,6 +11,7 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	"github.com/domainry/domainry-foundation/entityid"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 	"github.com/domainry/domainry-orm/query"
@@ -122,7 +123,7 @@ func (s *ManagementStore) StartOAuthAuthorization(ctx context.Context, subject i
 	if !ok {
 		return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth provider is unavailable")
 	}
-	id, err := randomOwnerToken("oauth_")
+	id, err := entityid.New("oauthsess")
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, err
 	}
@@ -143,13 +144,13 @@ func (s *ManagementStore) StartOAuthAuthorization(ctx context.Context, subject i
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth session encryption failed")
 	}
-	value := oauthSessionRecord{Session: integrationsdk.OAuthAuthorizationSession{ID: id, Status: "pending", ApplicationKey: app.Key, Scope: input.Scope, RequestedScopes: append([]string(nil), input.Scopes...), ExpiresAt: time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339Nano)}, Name: strings.TrimSpace(input.Name)}
+	value := oauthSessionRecord{Session: integrationsdk.OAuthAuthorizationSession{SessionID: id, Status: "pending", ApplicationKey: app.Key, Scope: input.Scope, RequestedScopes: append([]string(nil), input.Scopes...), ExpiresAt: time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339Nano)}, Name: strings.TrimSpace(input.Name)}
 	raw, err := marshalOAuthSession(value)
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, err
 	}
 	now := ownerNow()
-	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_oauth_sessions").Columns("id", "workspace_id", "user_id", "application_key", "application_revision", "state_hash", "status", "session_json", "verifier_ciphertext", "expires_at", "exchange_deadline", "created_at", "updated_at").Values(id, subject.WorkspaceID, subject.UserID, app.Key, timestampMillis(app.UpdatedAt), oauthHash(state), "pending", string(raw), ciphertext, timestampMillis(value.Session.ExpiresAt), int64(0), timestampMillis(now), timestampMillis(now)).Build()
+	statement, args, err := query.NewInsertBuilder(s.dialect, "_integration_oauth_sessions").Columns("session_id", "workspace_id", "user_id", "application_key", "application_revision", "state_hash", "status", "session_json", "verifier_ciphertext", "expires_at", "exchange_deadline", "created_at", "updated_at").Values(id, subject.WorkspaceID, subject.UserID, app.Key, timestampMillis(app.UpdatedAt), oauthHash(state), "pending", string(raw), ciphertext, timestampMillis(value.Session.ExpiresAt), int64(0), timestampMillis(now), timestampMillis(now)).Build()
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, err
 	}
@@ -164,7 +165,7 @@ func (s *ManagementStore) updateOAuthSession(ctx context.Context, subject integr
 	if err != nil {
 		return err
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_oauth_sessions").Set("status", record.Session.Status).Set("session_json", string(raw)).Set("verifier_ciphertext", "").Set("exchange_deadline", timestampMillis(record.ExchangeDeadline)).Set("updated_at", timestampMillis(ownerNow())).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, subject.WorkspaceID, "_integration_oauth_sessions", record.Session.ID), query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("user_id", subject.UserID), query.Equal("id", record.Session.ID), query.Equal("status", previous)))).Build()
+	statement, args, err := query.NewUpdateBuilder(s.dialect, "_integration_oauth_sessions").Set("status", record.Session.Status).Set("session_json", string(raw)).Set("verifier_ciphertext", "").Set("exchange_deadline", timestampMillis(record.ExchangeDeadline)).Set("updated_at", timestampMillis(ownerNow())).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, subject.WorkspaceID, "_integration_oauth_sessions", record.Session.SessionID), query.And(query.Equal("workspace_id", subject.WorkspaceID), query.Equal("user_id", subject.UserID), query.Equal("session_id", record.Session.SessionID), query.Equal("status", previous)))).Build()
 	if err != nil {
 		return err
 	}
@@ -185,7 +186,7 @@ func (s *ManagementStore) GetOAuthAuthorization(ctx context.Context, subject int
 	if err = requireConnectionAccountSubjectScope(ctx, subject); err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, err
 	}
-	record, err := s.readOAuthSession(ctx, subject, query.Equal("id", strings.TrimSpace(id)))
+	record, err := s.readOAuthSession(ctx, subject, query.Equal("session_id", strings.TrimSpace(id)))
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, err
 	}
@@ -237,7 +238,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, err
 	}
-	session, err := s.GetOAuthAuthorization(ctx, subject, record.Session.ID)
+	session, err := s.GetOAuthAuthorization(ctx, subject, record.Session.SessionID)
 	if err != nil {
 		return session, err
 	}
@@ -266,7 +267,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth application credentials are unavailable")
 	}
-	verifier, err := s.cipher.DecryptSecretMaterial(ctx, subject.WorkspaceID, record.Session.ID, record.VerifierCiphertext)
+	verifier, err := s.cipher.DecryptSecretMaterial(ctx, subject.WorkspaceID, record.Session.SessionID, record.VerifierCiphertext)
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth verifier is unavailable")
 	}
@@ -302,8 +303,8 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 	// probe before credentials are persisted: without it, repeated OAuth grants
 	// cannot be distinguished from different upstream accounts.
 	var providerAccountDetails json.RawMessage
-	key := "account_" + record.Session.ID
-	credentialKey := record.Session.ID
+	key := "account_" + record.Session.SessionID
+	credentialKey := record.Session.SessionID
 	accountProbe, accountProbeEnabled := provider.(interface{ ProviderAccountProbeEnabled() bool })
 	if tester, ok := provider.(connector.ConnectionTester); ok && accountProbeEnabled && accountProbe.ProviderAccountProbeEnabled() {
 		probeConnection := connector.Connection{
@@ -357,7 +358,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 	// credentials are referenced once per workspace so rotations take effect for
 	// every account without copying the client secret into every Connection.
 	err = s.withTransaction(completion, func(tx *ManagementStore) error {
-		current, e := tx.readOAuthSession(completion, subject, query.Equal("id", record.Session.ID))
+		current, e := tx.readOAuthSession(completion, subject, query.Equal("session_id", record.Session.SessionID))
 		if e != nil || current.Session.Status != "exchanging" {
 			return fmt.Errorf("Integration OAuth session changed")
 		}
@@ -419,7 +420,7 @@ func (s *ManagementStore) CompleteOAuthAuthorization(ctx context.Context, subjec
 	if err != nil {
 		return integrationsdk.OAuthAuthorizationSession{}, fmt.Errorf("Integration OAuth credentials could not be committed; inspect session before starting a new authorization")
 	}
-	return s.GetOAuthAuthorization(completion, subject, record.Session.ID)
+	return s.GetOAuthAuthorization(completion, subject, record.Session.SessionID)
 }
 
 var _ integrationsdk.OAuthAuthorizations = (*ManagementStore)(nil)

@@ -2,9 +2,7 @@ package integration
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -56,13 +54,13 @@ func (s *RequirementsStore) SynchronizeConnections(ctx context.Context, requirem
 
 func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requirement integrationmodel.ConnectionRequirement, provider connector.Adapter, providerAvailable bool, config map[string]any) error {
 	queryValue, args, err := query.NewSelectBuilder(s.dialect, "_integration_connections").
-		Columns("id", "name", "status", "config_json", "secret_refs_json", "created_by").
+		Columns("name", "status", "config_json", "secret_refs_json", "created_by").
 		Where(query.And(query.Equal("workspace_id", requirement.WorkspaceID), query.Equal("connection_key", requirement.Key))).Limit(1).Build()
 	if err != nil {
 		return fmt.Errorf("build Integration connection requirement lookup: %w", err)
 	}
-	var id, name, status, configJSON, secretRefsJSON, createdBy string
-	lookupErr := s.database.QueryRowContext(ctx, queryValue, args...).Scan(&id, &name, &status, &configJSON, &secretRefsJSON, &createdBy)
+	var name, status, configJSON, secretRefsJSON, createdBy string
+	lookupErr := s.database.QueryRowContext(ctx, queryValue, args...).Scan(&name, &status, &configJSON, &secretRefsJSON, &createdBy)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
 		return fmt.Errorf("lookup Integration connection requirement: %w", lookupErr)
 	}
@@ -112,7 +110,7 @@ func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requireme
 		update, updateArgs, buildErr := query.NewUpdateBuilder(s.dialect, "_integration_connections").
 			Set("connector_key", requirement.ConnectorKey).Set("provider_key", requirement.ProviderKey).
 			Set("name", requirement.Name).Set("status", requirement.Status).Set("config_json", string(payload)).Set("updated_at", now).
-			Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, requirement.WorkspaceID, "_integration_connections", id), query.Equal("id", id))).Build()
+			Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, requirement.WorkspaceID, "_integration_connections", ownerID("connection_", requirement.WorkspaceID, requirement.Key)), query.And(query.Equal("workspace_id", requirement.WorkspaceID), query.Equal("connection_key", requirement.Key)))).Build()
 		if buildErr != nil {
 			return fmt.Errorf("build Integration connection requirement update: %w", buildErr)
 		}
@@ -121,11 +119,9 @@ func (s *RequirementsStore) synchronizeConnection(ctx context.Context, requireme
 		}
 		return nil
 	}
-	hash := sha256.Sum256([]byte(requirement.WorkspaceID + "\x00" + requirement.Key))
-	id = "manifest_" + hex.EncodeToString(hash[:16])
 	insert, insertArgs, err := query.NewInsertBuilder(s.dialect, "_integration_connections").
-		Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
-		Values(id, requirement.Key, requirement.WorkspaceID, requirement.ConnectorKey, requirement.ProviderKey, requirement.Name, requirement.Status, string(payload), `{}`, "manifest", now, now).Build()
+		Columns("connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").
+		Values(requirement.Key, requirement.WorkspaceID, requirement.ConnectorKey, requirement.ProviderKey, requirement.Name, requirement.Status, string(payload), `{}`, "manifest", now, now).Build()
 	if err != nil {
 		return fmt.Errorf("build Integration connection requirement insert: %w", err)
 	}

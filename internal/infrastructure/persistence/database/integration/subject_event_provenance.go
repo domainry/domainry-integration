@@ -94,7 +94,7 @@ func (s *SubjectLifecycleStore) subjectEvents(ctx context.Context, tx *sql.Tx, r
 	for _, id := range ids {
 		seen[id] = true
 	}
-	stmt, args, err = query.NewWorkspaceSelectBuilder(s.dialect, "_integration_events", r.WorkspaceID).Columns("id", "provider", "event_type", "payload_json").Build()
+	stmt, args, err = query.NewWorkspaceSelectBuilder(s.dialect, "_integration_events", r.WorkspaceID).Columns("event_id", "provider", "event_type", "payload_json").Build()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -106,7 +106,7 @@ func (s *SubjectLifecycleStore) subjectEvents(ctx context.Context, tx *sql.Tx, r
 	for rows.Next() {
 		var event model.Event
 		var raw string
-		if err = rows.Scan(&event.ID, &event.Provider, &event.EventType, &raw); err != nil {
+		if err = rows.Scan(&event.EventID, &event.Provider, &event.EventType, &raw); err != nil {
 			return nil, nil, err
 		}
 		event.Payload = json.RawMessage(raw)
@@ -149,9 +149,9 @@ func (s *SubjectLifecycleStore) subjectEvents(ctx context.Context, tx *sql.Tx, r
 			}
 			break
 		}
-		if covered && !seen[event.ID] {
-			seen[event.ID] = true
-			ids = append(ids, event.ID)
+		if covered && !seen[event.EventID] {
+			seen[event.EventID] = true
+			ids = append(ids, event.EventID)
 			if len(ids) > 10000 {
 				return nil, nil, fmt.Errorf("Integration subject events exceed limit")
 			}

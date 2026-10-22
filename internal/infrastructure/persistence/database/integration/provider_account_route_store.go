@@ -186,10 +186,9 @@ func (s *ManagementStore) replaceProviderAccountRoutes(ctx context.Context, test
 	for _, route := range probe.Routes {
 		digest := providerAccountRouteDigest(current.ConnectorKey, current.ProviderKey, route.Kind, route.Value)
 		hash := hex.EncodeToString(digest[:])
-		id := ownerID("provider_account_route_", current.WorkspaceID, current.Key+"\x00"+route.Kind+"\x00"+hash)
 		insert, values, buildErr := query.NewInsertBuilder(s.dialect, providerAccountRouteTable).
-			Columns("id", "workspace_id", "connection_key", "connector_key", "provider_key", "subject_hash", "route_kind", "route_hash", "route_bucket", "status", "created_at", "updated_at").
-			Values(id, current.WorkspaceID, current.Key, current.ConnectorKey, current.ProviderKey, subjectHash, route.Kind, hash, int(digest[0]), providerAccountRouteStatus(current.Status), now, now).Build()
+			Columns("workspace_id", "connection_key", "connector_key", "provider_key", "subject_hash", "route_kind", "route_hash", "route_bucket", "status", "created_at", "updated_at").
+			Values(current.WorkspaceID, current.Key, current.ConnectorKey, current.ProviderKey, subjectHash, route.Kind, hash, int(digest[0]), providerAccountRouteStatus(current.Status), now, now).Build()
 		if buildErr != nil {
 			return buildErr
 		}

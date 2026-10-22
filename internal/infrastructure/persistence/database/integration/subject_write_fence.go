@@ -22,7 +22,7 @@ const (
 )
 
 func sharedSubjectErasureRequestIDs(dialect modulehost.Dialect, workspace, subject string) *query.SelectBuilder {
-	return query.NewWorkspaceSelectBuilder(dialect, sharedSubjectRequestsTable, workspace).Columns("id").Where(query.And(
+	return query.NewWorkspaceSelectBuilder(dialect, sharedSubjectRequestsTable, workspace).Columns("request_id").Where(query.And(
 		query.NotEqual("request_type", "external_erasure"),
 		query.Equal("kind", "erase"),
 		query.Equal("resolved_identity", subject),

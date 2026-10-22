@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/domainry/domainry-integration-sdk/modulehost"
@@ -44,10 +45,9 @@ func providerTaskRateScopes(candidate providerTaskCandidate) []providerRateScope
 
 func consumeProviderRate(ctx context.Context, database sqlhost.DBTX, dialect modulehost.Dialect, scope providerRateScope, now time.Time) (bool, error) {
 	window := now.UTC().Truncate(time.Minute).UnixMilli()
-	id := ownerID("provider_rate_", scope.kind, scope.key)
 	insert, args, err := query.NewInsertBuilder(dialect, providerRateLimitTable).
-		Columns("id", "workspace_id", "scope_kind", "scope_key", "window_started_at", "used_count", "updated_at").
-		Values(id, scope.workspaceID, scope.kind, scope.key, window, 0, now.UTC().UnixMilli()).
+		Columns("workspace_id", "scope_kind", "scope_key", "window_started_at", "used_count", "updated_at").
+		Values(scope.workspaceID, scope.kind, scope.key, window, 0, now.UTC().UnixMilli()).
 		OnConflictDoNothing("scope_kind", "scope_key").Build()
 	if err != nil {
 		return false, err
@@ -73,10 +73,9 @@ func consumeProviderRate(ctx context.Context, database sqlhost.DBTX, dialect mod
 }
 
 func acquireProviderConnectionLease(ctx context.Context, database sqlhost.DBTX, dialect modulehost.Dialect, candidate providerTaskCandidate, leaseOwner string, now time.Time) (bool, error) {
-	id := ownerID("provider_connection_lease_", candidate.workspaceID, candidate.connectionKey)
 	insert, args, err := query.NewInsertBuilder(dialect, providerConnectionLeaseTable).
-		Columns("id", "workspace_id", "connection_key", "lease_owner", "lease_expires_at", "fencing_token", "updated_at").
-		Values(id, candidate.workspaceID, candidate.connectionKey, "", int64(0), int64(0), now.UTC().UnixMilli()).
+		Columns("workspace_id", "connection_key", "lease_owner", "lease_expires_at", "fencing_token", "updated_at").
+		Values(candidate.workspaceID, candidate.connectionKey, "", int64(0), int64(0), now.UTC().UnixMilli()).
 		OnConflictDoNothing("workspace_id", "connection_key").Build()
 	if err != nil {
 		return false, err
@@ -114,7 +113,7 @@ func (s *WorkerStore) acquireProviderTask(ctx context.Context, candidate provide
 			return "", false, nil
 		}
 	}
-	leaseOwner := ownerID("provider_lease_owner_", s.workerID, candidate.id)
+	leaseOwner := ownerID("provider_lease_owner_", s.workerID, strconv.FormatInt(candidate.id, 10))
 	acquired, err := acquireProviderConnectionLease(ctx, tx, s.dialect, candidate, leaseOwner, now)
 	if err != nil || !acquired {
 		return "", false, err

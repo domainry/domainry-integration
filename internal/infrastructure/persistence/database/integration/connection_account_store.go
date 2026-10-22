@@ -369,16 +369,15 @@ func (s *ManagementStore) RegisterConnectionAccount(ctx context.Context, workspa
 	}
 	now := ownerNow()
 	where := query.And(query.Equal("workspace_id", workspaceID), query.Equal("connection_key", key))
-	lookup, args, err := query.NewSelectBuilder(s.dialect, "_integration_connection_accounts").Columns("id").Where(where).Limit(1).Build()
+	lookup, args, err := query.NewSelectBuilder(s.dialect, "_integration_connection_accounts").Columns("connection_key").Where(where).Limit(1).Build()
 	if err != nil {
 		return integrationsdk.ConnectionAccount{}, err
 	}
-	var id string
-	lookupErr := s.database.QueryRowContext(ctx, lookup, args...).Scan(&id)
+	var existingKey string
+	lookupErr := s.database.QueryRowContext(ctx, lookup, args...).Scan(&existingKey)
 	switch lookupErr {
 	case sql.ErrNoRows:
-		id = ownerID("connection_account_", workspaceID, key)
-		statement, values, buildErr := query.NewInsertBuilder(s.dialect, "_integration_connection_accounts").Columns("id", "workspace_id", "connection_key", "scope", "owner_user_id", "created_by", "created_at", "updated_at").Values(id, workspaceID, key, input.Scope, input.OwnerUserID, actorID, timestampMillis(now), timestampMillis(now)).Build()
+		statement, values, buildErr := query.NewInsertBuilder(s.dialect, "_integration_connection_accounts").Columns("workspace_id", "connection_key", "scope", "owner_user_id", "created_by", "created_at", "updated_at").Values(workspaceID, key, input.Scope, input.OwnerUserID, actorID, timestampMillis(now), timestampMillis(now)).Build()
 		if buildErr != nil {
 			return integrationsdk.ConnectionAccount{}, buildErr
 		}
@@ -439,12 +438,12 @@ func (s *ManagementStore) syncConnectionAccountSecrets(ctx context.Context, conn
 		return err
 	}
 	accountWhere := query.And(query.Equal("workspace_id", connection.WorkspaceID), query.Equal("connection_key", connection.Key))
-	lookup, args, err := query.NewSelectBuilder(s.dialect, "_integration_connection_accounts").Columns("id").Where(accountWhere).Limit(1).Build()
+	lookup, args, err := query.NewSelectBuilder(s.dialect, "_integration_connection_accounts").Columns("connection_key").Where(accountWhere).Limit(1).Build()
 	if err != nil {
 		return err
 	}
-	var accountID string
-	if err = s.database.QueryRowContext(ctx, lookup, args...).Scan(&accountID); err == sql.ErrNoRows {
+	var accountKey string
+	if err = s.database.QueryRowContext(ctx, lookup, args...).Scan(&accountKey); err == sql.ErrNoRows {
 		return nil
 	} else if err != nil {
 		return err

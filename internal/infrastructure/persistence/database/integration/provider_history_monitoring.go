@@ -48,7 +48,7 @@ func recordProviderHistoryObservations(ctx context.Context, database sqlhost.DBT
 		default:
 			continue
 		}
-		eventID := candidate.id + ":" + strconv.FormatInt(candidate.fencingToken+1, 10) + ":" + observation.Key
+		eventID := strconv.FormatInt(candidate.id, 10) + ":" + strconv.FormatInt(candidate.fencingToken+1, 10) + ":" + observation.Key
 		if err := recordProviderMetricValue(ctx, database, dialect, metricKey, eventID, observation.Value, now); err != nil {
 			return fmt.Errorf("record Integration Provider history observation %s: %w", observation.Key, err)
 		}
@@ -66,7 +66,7 @@ func hasCoveringGooglePushReceipt(ctx context.Context, database sqlhost.DBTX, di
 	if err != nil {
 		return false, err
 	}
-	var id string
+	var id int64
 	err = database.QueryRowContext(ctx, statement, args...).Scan(&id)
 	if err == sql.ErrNoRows {
 		return false, nil

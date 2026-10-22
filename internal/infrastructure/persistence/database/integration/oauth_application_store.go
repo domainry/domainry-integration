@@ -134,7 +134,7 @@ func (s *ManagementStore) UpsertOAuthApplication(ctx context.Context, workspace,
 	raw, _ := json.Marshal(value)
 	var statement string
 	if lookupErr == sql.ErrNoRows {
-		statement, args, err = query.NewInsertBuilder(s.dialect, "_integration_oauth_applications").Columns("id", "workspace_id", "application_key", "application_json", "client_ciphertext", "updated_at").Values(ownerID("oauth_application_", workspace, key), workspace, key, string(raw), ciphertext, timestampMillis(value.UpdatedAt)).Build()
+		statement, args, err = query.NewInsertBuilder(s.dialect, "_integration_oauth_applications").Columns("workspace_id", "application_key", "application_json", "client_ciphertext", "updated_at").Values(workspace, key, string(raw), ciphertext, timestampMillis(value.UpdatedAt)).Build()
 	} else {
 		statement, args, err = query.NewUpdateBuilder(s.dialect, "_integration_oauth_applications").Set("application_json", string(raw)).Set("client_ciphertext", ciphertext).Set("updated_at", timestampMillis(value.UpdatedAt)).Where(query.And(where, query.Equal("updated_at", revisionMillis))).Build()
 	}

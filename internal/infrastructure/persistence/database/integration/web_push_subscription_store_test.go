@@ -32,14 +32,14 @@ func TestWebPushReadinessUsesIntegrationOwnedConnectionAndSecretState(t *testing
 			}
 		}
 	}
-	connection, args, err := query.NewInsertBuilder(dialect, "_integration_connections").Columns("id", "connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("push-connection", "push", "workspace-a", "notification", "web_push", "Push", "verified", `{"vapid_public_key":"public-vapid-key"}`, `{"vapid_private_key":"secret:vapid-private"}`, "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z")).Build()
+	connection, args, err := query.NewInsertBuilder(dialect, "_integration_connections").Columns("connection_key", "workspace_id", "connector_key", "provider_key", "name", "status", "config_json", "secret_refs_json", "created_by", "created_at", "updated_at").Values("push", "workspace-a", "notification", "web_push", "Push", "verified", `{"vapid_public_key":"public-vapid-key"}`, `{"vapid_private_key":"secret:vapid-private"}`, "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z")).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.ExecContext(t.Context(), connection, args...); err != nil {
 		t.Fatal(err)
 	}
-	secret, args, err := query.NewInsertBuilder(dialect, "_integration_secrets").Columns("id", "secret_key", "workspace_id", "credential_type", "kind", "status", "description", "value_ref", "fingerprint", "scopes_json", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_used_at", "last_tested_at", "last_test_status", "last_test_error").Values("secret-1", "vapid-private", "workspace-a", "secret", "private_key", "active", nil, nil, nil, "[]", "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z"), int64(0), int64(0), int64(0), int64(0), int64(0), int64(0), "", "").Build()
+	secret, args, err := query.NewInsertBuilder(dialect, "_integration_secrets").Columns("secret_key", "workspace_id", "credential_type", "kind", "status", "description", "value_ref", "fingerprint", "scopes_json", "created_by", "created_at", "updated_at", "disabled_at", "expires_at", "rotated_at", "revoked_at", "last_used_at", "last_tested_at", "last_test_status", "last_test_error").Values("vapid-private", "workspace-a", "secret", "private_key", "active", nil, nil, nil, "[]", "admin", timestampMillis("2026-01-01T00:00:00Z"), timestampMillis("2026-01-01T00:00:00Z"), int64(0), int64(0), int64(0), int64(0), int64(0), int64(0), "", "").Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,11 +60,13 @@ func TestWebPushOwnerScopeCannotReadOrMutateAnotherUser(t *testing.T) {
 	database, dialect := webPushTestDatabase(t, "integration-web-push-scope")
 	store := NewWebPushSubscriptionStore(database, dialect)
 	input := integrationmodel.WebPushSubscriptionInput{Endpoint: "https://push.example/a", P256DH: "public-key", Auth: "auth-secret"}
-	if _, err := store.Upsert(t.Context(), "workspace-a", "user-a", "browser-a", input); err != nil {
+	createdA, err := store.Upsert(t.Context(), "workspace-a", "user-a", "browser-a", input)
+	if err != nil {
 		t.Fatal(err)
 	}
 	input.Endpoint = "https://push.example/b"
-	if _, err := store.Upsert(t.Context(), "workspace-a", "user-b", "browser-b", input); err != nil {
+	createdB, err := store.Upsert(t.Context(), "workspace-a", "user-b", "browser-b", input)
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,10 +74,10 @@ func TestWebPushOwnerScopeCannotReadOrMutateAnotherUser(t *testing.T) {
 		WorkspaceID: "workspace-a", PermissionKey: "integration.web_push_subscriptions.list", ActorID: "user-a", AllowedUserIDs: []string{"user-a"},
 	})
 	values, err := store.List(ownerContext, "workspace-a", "ignored-caller-user")
-	if err != nil || len(values) != 1 || values[0].ID != "browser-a" {
+	if err != nil || len(values) != 1 || values[0].SubscriptionID != createdA.SubscriptionID {
 		t.Fatalf("owner values=%#v err=%v", values, err)
 	}
-	if _, err := store.Revoke(ownerContext, "workspace-a", "user-a", "browser-b"); err == nil {
+	if _, err := store.Revoke(ownerContext, "workspace-a", "user-a", createdB.SubscriptionID); err == nil {
 		t.Fatal("owner scope revoked another user's subscription")
 	}
 
@@ -100,7 +102,7 @@ func TestWebPushCleanupRollsBackWholeCandidateSet(t *testing.T) {
 	expired := time.Now().UTC().Add(-time.Hour).UnixMilli()
 	for _, id := range []string{"browser-a", "browser-b"} {
 		statement, args, err := query.NewInsertBuilder(dialect, "_integration_web_push_subscriptions").
-			Columns("id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").
+			Columns("subscription_id", "workspace_id", "user_id", "endpoint_hash", "endpoint", "p256dh", "auth_secret", "status", "expires_at", "created_at", "updated_at", "revoked_at").
 			Values(id, "workspace-a", "user-a", "hash-"+id, "https://push.example/"+id, "key", "secret", "active", expired, expired, expired, int64(0)).Build()
 		if err != nil {
 			t.Fatal(err)
@@ -109,7 +111,7 @@ func TestWebPushCleanupRollsBackWholeCandidateSet(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := database.ExecContext(t.Context(), `CREATE TRIGGER fail_second_cleanup BEFORE UPDATE ON _integration_web_push_subscriptions WHEN OLD.id = 'browser-b' AND NEW.status = 'expired' BEGIN SELECT RAISE(ABORT, 'forced cleanup failure'); END`); err != nil {
+	if _, err := database.ExecContext(t.Context(), `CREATE TRIGGER fail_second_cleanup BEFORE UPDATE ON _integration_web_push_subscriptions WHEN OLD.endpoint_hash = 'hash-browser-b' AND NEW.status = 'expired' BEGIN SELECT RAISE(ABORT, 'forced cleanup failure'); END`); err != nil {
 		t.Fatal(err)
 	}
 	allContext := integrationmodel.WithAccessScope(context.Background(), integrationmodel.AccessScope{
@@ -185,17 +187,17 @@ func TestWebPushSubscriptionsAreIntegrationOwnedAndEraseMaterialOnRevoke(t *test
 		t.Fatalf("created=%#v err=%v", created, err)
 	}
 	listed, err := store.List(t.Context(), "workspace-a", "user-a")
-	if err != nil || len(listed) != 1 || listed[0].ID != "browser-a" {
+	if err != nil || len(listed) != 1 || listed[0].SubscriptionID != created.SubscriptionID {
 		t.Fatalf("listed=%#v err=%v", listed, err)
 	}
 	if other, err := store.List(t.Context(), "workspace-a", "user-b"); err != nil || len(other) != 0 {
 		t.Fatalf("other=%#v err=%v", other, err)
 	}
-	revoked, err := store.Revoke(t.Context(), "workspace-a", "user-a", "browser-a")
+	revoked, err := store.Revoke(t.Context(), "workspace-a", "user-a", created.SubscriptionID)
 	if err != nil || revoked.Status != "revoked" {
 		t.Fatalf("revoked=%#v err=%v", revoked, err)
 	}
-	material, found, err := store.material(t.Context(), "workspace-a", "browser-a")
+	material, found, err := store.material(t.Context(), "workspace-a", created.SubscriptionID)
 	if err != nil || !found || material.Endpoint != "" || material.P256DH != "" || material.Auth != "" {
 		t.Fatalf("material=%#v found=%v err=%v", material, found, err)
 	}

@@ -12,7 +12,7 @@ const (
 )
 
 type Invocation struct {
-	ID                  string         `json:"id"`
+	InvocationID        string         `json:"invocation_id"`
 	WorkspaceID         string         `json:"workspace_id,omitempty"`
 	ConnectorKey        string         `json:"connector_key"`
 	ProviderKey         string         `json:"provider_key,omitempty"`
@@ -89,7 +89,7 @@ type ProviderCallResult struct {
 }
 
 type Event struct {
-	ID            string                   `json:"id"`
+	EventID       string                   `json:"event_id"`
 	WorkspaceID   string                   `json:"workspace_id,omitempty"`
 	ConnectorKey  string                   `json:"connector_key,omitempty"`
 	ConnectionKey string                   `json:"connection_key,omitempty"`

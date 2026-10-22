@@ -95,7 +95,7 @@ func (s *Store) publishLocked(definition metadatasdk.Definition) {
 	definition.Payload = append([]byte(nil), definition.Payload...)
 	s.values[key] = definition
 	s.versions[versionID] = metadatasdk.DefinitionVersion{
-		ID: versionID, Owner: definition.Owner, ResourceType: definition.ResourceType, ResourceKey: definition.ResourceKey,
+		VersionID: versionID, Owner: definition.Owner, ResourceType: definition.ResourceType, ResourceKey: definition.ResourceKey,
 		SchemaVersion: definition.SchemaVersion, SchemaHash: definition.SchemaHash, Payload: append([]byte(nil), definition.Payload...), CreatedAt: now,
 	}
 }

@@ -78,8 +78,13 @@ func TestSchemaOwnershipMatchesCanonicalFinalDDL(t *testing.T) {
 		for index, column := range table.PrimaryKey {
 			quoted[index] = `"` + column + `"`
 		}
-		if primaryKey := "PRIMARY KEY (" + strings.Join(quoted, ", ") + ")"; !strings.Contains(create, primaryKey) {
+		primaryKey := "PRIMARY KEY (" + strings.Join(quoted, ", ") + ")"
+		inlinePrimaryKey := len(table.PrimaryKey) == 1 && table.PrimaryKey[0] == "id" && strings.Contains(create, `"id" INTEGER PRIMARY KEY AUTOINCREMENT`)
+		if !strings.Contains(create, primaryKey) && !inlinePrimaryKey {
 			t.Fatalf("Integration table %s physical primary key does not match %v: %s", table.Name, table.PrimaryKey, create)
+		}
+		if table.Kind == schemaownership.KindEntity && !strings.Contains(create, `UNIQUE ("`+table.EntityIDColumn+`")`) {
+			t.Fatalf("Integration entity table %s has no unique business ID %s: %s", table.Name, table.EntityIDColumn, create)
 		}
 	}
 	joined := strings.Join(migrations[0].Statements, "\n")

@@ -39,15 +39,15 @@ type DeliveryReceipt struct {
 }
 
 type WebPushSubscription struct {
-	ID           string `json:"id"`
-	WorkspaceID  string `json:"workspace_id,omitempty"`
-	UserID       string `json:"user_id"`
-	EndpointHash string `json:"endpoint_hash"`
-	Status       string `json:"status"`
-	ExpiresAt    string `json:"expires_at,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-	RevokedAt    string `json:"revoked_at,omitempty"`
+	SubscriptionID string `json:"subscription_id"`
+	WorkspaceID    string `json:"workspace_id,omitempty"`
+	UserID         string `json:"user_id"`
+	EndpointHash   string `json:"endpoint_hash"`
+	Status         string `json:"status"`
+	ExpiresAt      string `json:"expires_at,omitempty"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
+	RevokedAt      string `json:"revoked_at,omitempty"`
 }
 
 type WebPushSubscriptionInput struct {

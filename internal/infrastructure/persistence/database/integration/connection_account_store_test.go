@@ -31,14 +31,14 @@ func TestConnectionAccountBackgroundProjectionIsOwnerScopedAndSecretFree(t *test
 	createAccountConnection(t, store, "personal-b", "token-b", "user-b", integrationsdk.ConnectionAccountScopePersonal)
 	now := time.Now().UTC().UnixMilli()
 	for _, connectionKey := range []string{"personal-a", "personal-b"} {
-		_, err := store.database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			"run-"+connectionKey, "workspace-a", providerRunKindState, "gmail_sync", "crm", "probe", connectionKey, "gmail_sync", 1, "", "", `{"secret":"never expose"}`, "failed", "provider.retryable", 2, now, "worker-secret", int64(0), 0, now, now)
+		_, err := store.database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"workspace-a", providerRunKindState, "gmail_sync", "crm", "probe", connectionKey, "gmail_sync", 1, "", "", `{"secret":"never expose"}`, "failed", "provider.retryable", 2, now, "worker-secret", int64(0), 0, now, now)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"obsolete-run", "workspace-a", providerRunKindState, "old_sync", "crm", "probe", "personal-a", "old_sync", 1, "", "", `{}`, "cancelled", "", 0, int64(0), "", int64(0), 0, now, now); err != nil {
+	if _, err := store.database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"workspace-a", providerRunKindState, "old_sync", "crm", "probe", "personal-a", "old_sync", 1, "", "", `{}`, "cancelled", "", 0, int64(0), "", int64(0), 0, now, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.database.ExecContext(t.Context(), "UPDATE _integration_provider_runs SET last_success_at=?,progress_json=? WHERE workspace_id=? AND run_kind=? AND connection_key=?", now-60_000, `{"phase":"bootstrap.inbox","unit":"message","completed_units":40,"initialization_complete":false}`, "workspace-a", providerRunKindState, "personal-a"); err != nil {
@@ -103,8 +103,8 @@ func TestConnectionAccountBackgroundRetryWakesOnlyOwnedFailedRun(t *testing.T) {
 	now := time.Now().UTC().UnixMilli()
 	previousSuccess := now - 3_600_000
 	for _, item := range []struct{ connection, status string }{{"personal-a", "failed"}, {"personal-b", "dead_letter"}} {
-		_, err := store.database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (id,workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,last_success_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			"run-"+item.connection, "workspace-a", providerRunKindState, "gmail_sync", "crm", "probe", item.connection, "gmail_sync", 1, "", "", `{}`, item.status, "provider.failed", 2, now, previousSuccess, "", int64(0), 0, now, now)
+		_, err := store.database.ExecContext(t.Context(), `INSERT INTO _integration_provider_runs (workspace_id,run_kind,run_key,connector_key,provider_key,connection_key,task_key,state_version,operation_key,contract_sha256,payload_json,status,last_error_code,attempt_count,due_at,last_success_at,lease_owner,lease_expires_at,fencing_token,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			"workspace-a", providerRunKindState, "gmail_sync", "crm", "probe", item.connection, "gmail_sync", 1, "", "", `{}`, item.status, "provider.failed", 2, now, previousSuccess, "", int64(0), 0, now, now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +130,7 @@ func TestConnectionAccountBackgroundRetryWakesOnlyOwnedFailedRun(t *testing.T) {
 	var wakeSequence int64
 	var lastSuccessAt int64
 	var dueAt int64
-	if err := store.database.QueryRowContext(t.Context(), "SELECT status,wake_sequence,last_success_at,due_at FROM _integration_provider_runs WHERE workspace_id=? AND id=?", "workspace-a", "run-personal-a").Scan(&status, &wakeSequence, &lastSuccessAt, &dueAt); err != nil {
+	if err := store.database.QueryRowContext(t.Context(), "SELECT status,wake_sequence,last_success_at,due_at FROM _integration_provider_runs WHERE workspace_id=? AND run_kind=? AND connection_key=? AND task_key=?", "workspace-a", providerRunKindState, "personal-a", "gmail_sync").Scan(&status, &wakeSequence, &lastSuccessAt, &dueAt); err != nil {
 		t.Fatal(err)
 	}
 	if status != "ready" || wakeSequence != 1 || lastSuccessAt != previousSuccess || dueAt < now {

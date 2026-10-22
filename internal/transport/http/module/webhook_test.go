@@ -25,7 +25,7 @@ func (*webhookOperationsStub) GetInvocation(context.Context, string, string) (in
 }
 func (stub *webhookOperationsStub) AcceptWebhook(_ context.Context, request integrationsdk.WebhookRequest) (integrationsdk.WebhookReceipt, error) {
 	stub.received = request
-	return integrationsdk.WebhookReceipt{Event: integrationsdk.Event{ID: "event-1", Status: "ignored"}}, nil
+	return integrationsdk.WebhookReceipt{Event: integrationsdk.Event{EventID: "event-1", Status: "ignored"}}, nil
 }
 func (*webhookOperationsStub) ListEvents(context.Context, integrationsdk.EventQuery) ([]integrationsdk.Event, error) {
 	return nil, nil

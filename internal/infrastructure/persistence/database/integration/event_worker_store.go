@@ -19,7 +19,7 @@ func (s *OperationsStore) ProcessDueEvents(ctx context.Context, workerID string,
 	now := time.Now().UTC()
 	nowMillis := now.UnixMilli()
 	due, args, err := query.NewSelectBuilder(s.dialect, "_integration_events").
-		Columns("id", "workspace_id", "status", "fencing_token").
+		Columns("event_id", "workspace_id", "status", "fencing_token").
 		Where(query.Or(
 			query.And(query.In("status", "received", "failed"), query.Or(query.Equal("next_retry_at", int64(0)), query.LessThanOrEqual("next_retry_at", nowMillis))),
 			query.And(query.Equal("status", "processing"), query.Or(query.Equal("lease_expires_at", int64(0)), query.LessThanOrEqual("lease_expires_at", nowMillis))),
@@ -56,7 +56,7 @@ func (s *OperationsStore) ProcessDueEvents(ctx context.Context, workerID string,
 		claim, claimArgs, err := query.NewUpdateBuilder(s.dialect, "_integration_events").
 			Set("status", "processing").Set("lease_owner", workerID).Set("lease_expires_at", now.Add(30*time.Second).UnixMilli()).
 			Set("fencing_token", candidate.fencingToken+1).Set("updated_at", nowMillis).
-			Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, "_integration_events", candidate.id), query.And(query.Equal("id", candidate.id), query.Equal("workspace_id", candidate.workspaceID), query.Equal("status", candidate.status), query.Equal("fencing_token", candidate.fencingToken)))).Build()
+			Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, "_integration_events", candidate.id), query.And(query.Equal("event_id", candidate.id), query.Equal("workspace_id", candidate.workspaceID), query.Equal("status", candidate.status), query.Equal("fencing_token", candidate.fencingToken)))).Build()
 		if err != nil {
 			return processed, err
 		}

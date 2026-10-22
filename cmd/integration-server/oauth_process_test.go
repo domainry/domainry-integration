@@ -140,7 +140,7 @@ func TestStandaloneOAuthConfigurationAndSessionSurviveProcessRestart(t *testing.
 	if err != nil || len(options) != 2 {
 		t.Fatalf("configured applications did not survive: %v", err)
 	}
-	stored, err := auth.GetOAuthAuthorization(t.Context(), subject, session.ID)
+	stored, err := auth.GetOAuthAuthorization(t.Context(), subject, session.SessionID)
 	if err != nil || stored.Status != "pending" || stored.AuthorizationURL != "" {
 		t.Fatalf("safe session restore: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestStandaloneOAuthConfigurationAndSessionSurviveProcessRestart(t *testing.
 	stop()
 	start()
 	auth = binding.(integrationsdk.OAuthAuthorizationsBinding).OAuthAuthorizations()
-	stored, err = auth.GetOAuthAuthorization(t.Context(), subject, session.ID)
+	stored, err = auth.GetOAuthAuthorization(t.Context(), subject, session.SessionID)
 	if err != nil || stored.Status != "rejected" {
 		t.Fatalf("terminal receipt lost: %v", err)
 	}
