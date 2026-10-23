@@ -29,9 +29,9 @@ func observeGooglePush(ctx context.Context, database sqlhost.DBTX, dialect modul
 	timed := query.And(query.GreaterThan("published_at", int64(0)), query.LessThanOrEqualExpressions(query.Column("published_at"), query.Column("received_at")))
 	statement, args, err := query.NewSelectBuilder(dialect, providerInboxTable).Projections(
 		query.Project(query.CountAll()),
-		query.Project(query.Coalesce(query.Sum(query.CaseWhen(query.Equal("status", "unmatched"), int64(1)).Else(int64(0))), query.Value(int64(0)))),
-		query.Project(query.Coalesce(query.Sum(query.CaseWhen(timed, int64(1)).Else(int64(0))), query.Value(int64(0)))),
-		query.Project(query.Coalesce(query.Sum(query.CaseWhen(query.And(timed, query.GreaterThanOrEqualValue(delay, googlePushDelayThreshold.Milliseconds())), int64(1)).Else(int64(0))), query.Value(int64(0)))),
+		query.Project(query.Coalesce(query.Sum(query.CaseWhen(query.Equal("status", "unmatched"), sqlIntegerValue(dialect, 1)).Else(sqlIntegerValue(dialect, 0))), query.Value(int64(0)))),
+		query.Project(query.Coalesce(query.Sum(query.CaseWhen(timed, sqlIntegerValue(dialect, 1)).Else(sqlIntegerValue(dialect, 0))), query.Value(int64(0)))),
+		query.Project(query.Coalesce(query.Sum(query.CaseWhen(query.And(timed, query.GreaterThanOrEqualValue(delay, googlePushDelayThreshold.Milliseconds())), sqlIntegerValue(dialect, 1)).Else(sqlIntegerValue(dialect, 0))), query.Value(int64(0)))),
 		query.Project(query.Max(query.CaseWhen(timed, delay))),
 	).Where(predicate).Build()
 	if err != nil {

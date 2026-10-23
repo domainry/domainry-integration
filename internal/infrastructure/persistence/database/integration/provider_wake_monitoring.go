@@ -23,8 +23,8 @@ func observeGoogleSyncCompletion(ctx context.Context, database sqlhost.DBTX, dia
 	timed := query.And(query.GreaterThan("published_at", int64(0)), query.LessThanOrEqualExpressions(query.Column("published_at"), query.Column("completed_at")))
 	statement, args, err := query.NewSelectBuilder(dialect, providerWakeReceiptTable).Projections(
 		query.Project(query.CountAll()),
-		query.Project(query.Coalesce(query.Sum(query.CaseWhen(timed, int64(1)).Else(int64(0))), query.Value(int64(0)))),
-		query.Project(query.Coalesce(query.Sum(query.CaseWhen(query.And(timed, query.GreaterThanOrEqualValue(delay, googleSyncDelayThreshold.Milliseconds())), int64(1)).Else(int64(0))), query.Value(int64(0)))),
+		query.Project(query.Coalesce(query.Sum(query.CaseWhen(timed, sqlIntegerValue(dialect, 1)).Else(sqlIntegerValue(dialect, 0))), query.Value(int64(0)))),
+		query.Project(query.Coalesce(query.Sum(query.CaseWhen(query.And(timed, query.GreaterThanOrEqualValue(delay, googleSyncDelayThreshold.Milliseconds())), sqlIntegerValue(dialect, 1)).Else(sqlIntegerValue(dialect, 0))), query.Value(int64(0)))),
 		query.Project(query.Max(query.CaseWhen(timed, delay))),
 	).Where(completedPredicate).Build()
 	if err != nil {
@@ -49,7 +49,7 @@ func observeGoogleSyncCompletion(ctx context.Context, database sqlhost.DBTX, dia
 	)
 	statement, args, err = query.NewSelectBuilder(dialect, providerWakeReceiptTable).Projections(
 		query.Project(query.CountAll()),
-		query.Project(query.Coalesce(query.Sum(query.CaseWhen(query.LessThanOrEqual("received_at", now.Add(-googleSyncDelayThreshold).UnixMilli()), int64(1)).Else(int64(0))), query.Value(int64(0)))),
+		query.Project(query.Coalesce(query.Sum(query.CaseWhen(query.LessThanOrEqual("received_at", now.Add(-googleSyncDelayThreshold).UnixMilli()), sqlIntegerValue(dialect, 1)).Else(sqlIntegerValue(dialect, 0))), query.Value(int64(0)))),
 		query.Project(query.Min(query.Column("received_at"))),
 	).Where(pendingPredicate).Build()
 	if err != nil {

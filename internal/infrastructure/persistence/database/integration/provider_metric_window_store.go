@@ -173,7 +173,7 @@ func readProviderMetricEvents(ctx context.Context, database sqlhost.DBTX, dialec
 	first := window - 11*providerMetricWindowSize.Milliseconds()
 	statement, args, err := query.NewSelectBuilder(dialect, providerMetricWindowTable).
 		Projections(
-			query.Project(query.Coalesce(query.Sum(query.CaseWhen(query.Equal("window_started_at", window), query.Column("event_count")).Else(int64(0))), query.Value(int64(0)))),
+			query.Project(query.Coalesce(query.Sum(query.CaseWhen(query.Equal("window_started_at", window), query.Column("event_count")).Else(sqlIntegerValue(dialect, 0))), query.Value(int64(0)))),
 			query.Project(query.Coalesce(query.Sum(query.Column("event_count")), query.Value(int64(0)))),
 		).
 		Where(query.And(query.Equal("metric_key", metricKey), query.GreaterThanOrEqual("window_started_at", first), query.LessThanOrEqual("window_started_at", window))).Build()

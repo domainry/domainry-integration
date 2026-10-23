@@ -390,7 +390,7 @@ func (s *WorkerStore) commitProviderTaskResult(ctx context.Context, candidate pr
 		return err
 	}
 	update, args, err := query.NewUpdateBuilder(s.dialect, providerRunTable).Set("payload_json", string(result.State)).Set("progress_json", progressJSON).Set("status", "ready").
-		SetExpression("due_at", query.CaseWhen(newWake, now.UnixMilli()).Else(dueAt.UTC().UnixMilli())).
+		SetExpression("due_at", query.CaseWhen(newWake, sqlIntegerValue(s.dialect, now.UnixMilli())).Else(sqlIntegerValue(s.dialect, dueAt.UTC().UnixMilli()))).
 		Set("last_error_code", "").Set("attempt_count", 0).Set("last_success_at", now.UnixMilli()).Set("lease_owner", "").Set("lease_expires_at", int64(0)).Set("updated_at", now.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, providerRunTable, strconv.FormatInt(candidate.id, 10)), query.And(query.Equal("run_kind", providerRunKindState), query.Equal("id", candidate.id), query.Equal("lease_owner", s.workerID), query.Equal("fencing_token", candidate.fencingToken+1)))).Build()
 	if err != nil {
 		return err
@@ -506,9 +506,9 @@ func (s *WorkerStore) failProviderTask(ctx context.Context, candidate providerTa
 	newWake := query.GreaterThan("wake_sequence", candidate.wakeSequence)
 	statement, args, err := query.NewUpdateBuilder(s.dialect, providerRunTable).
 		SetExpression("status", query.CaseWhen(newWake, "ready").Else(status)).
-		SetExpression("due_at", query.CaseWhen(newWake, now.UnixMilli()).Else(dueAt)).
+		SetExpression("due_at", query.CaseWhen(newWake, sqlIntegerValue(s.dialect, now.UnixMilli())).Else(sqlIntegerValue(s.dialect, dueAt))).
 		Set("last_error_code", errorCode).
-		SetExpression("attempt_count", query.CaseWhen(newWake, 0).Else(attempt)).
+		SetExpression("attempt_count", query.CaseWhen(newWake, sqlIntegerValue(s.dialect, 0)).Else(sqlIntegerValue(s.dialect, int64(attempt)))).
 		Set("lease_owner", "").Set("lease_expires_at", int64(0)).Set("updated_at", now.UnixMilli()).Where(query.And(subjectRowsWriteAllowed(s.subjectLifecycle, s.dialect, candidate.workspaceID, providerRunTable, strconv.FormatInt(candidate.id, 10)), query.And(query.Equal("run_kind", providerRunKindState), query.Equal("id", candidate.id), query.Equal("lease_owner", s.workerID), query.Equal("fencing_token", candidate.fencingToken+1)))).Build()
 	if err != nil {
 		return err

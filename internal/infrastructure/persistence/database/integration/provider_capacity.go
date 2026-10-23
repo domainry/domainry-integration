@@ -57,8 +57,8 @@ func consumeProviderRate(ctx context.Context, database sqlhost.DBTX, dialect mod
 	}
 	expired := query.LessThan("window_started_at", window)
 	update, args, err := query.NewUpdateBuilder(dialect, providerRateLimitTable).
-		SetExpression("window_started_at", query.CaseWhen(expired, window).Else(query.Column("window_started_at"))).
-		SetExpression("used_count", query.CaseWhen(expired, int64(1)).Else(query.Add(query.Column("used_count"), query.Value(1)))).
+		SetExpression("window_started_at", query.CaseWhen(expired, sqlIntegerValue(dialect, window)).Else(query.Column("window_started_at"))).
+		SetExpression("used_count", query.CaseWhen(expired, sqlIntegerValue(dialect, 1)).Else(query.Add(query.Column("used_count"), query.Value(1)))).
 		Set("updated_at", now.UTC().UnixMilli()).
 		Where(query.And(query.Equal("scope_kind", scope.kind), query.Equal("scope_key", scope.key), query.Or(expired, query.LessThan("used_count", scope.limit)))).Build()
 	if err != nil {
