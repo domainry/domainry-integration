@@ -13,6 +13,7 @@ import (
 	"time"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	"github.com/domainry/domainry-foundation/telemetry"
 )
 
 const (
@@ -25,10 +26,11 @@ const (
 type WorkAccounts struct{ client *http.Client }
 
 func NewWorkAccounts() *WorkAccounts {
-	return &WorkAccounts{client: &http.Client{
+	client := &http.Client{
 		Timeout:       35 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}}
+	}
+	return &WorkAccounts{client: telemetry.InstrumentHTTPClientWithOptions(client, "domainry.integration.work_accounts", telemetry.HTTPClientInstrumentationOptions{DisableDiagnosticContent: true})}
 }
 
 func allowedURL(raw string) (*url.URL, error) {
@@ -129,6 +131,7 @@ func (t *WorkAccounts) RoundTripHTTP(ctx context.Context, input connector.HTTPRe
 	if int64(len(body)) > maximumRequestBytes {
 		return connector.HTTPResponse{}, invalid
 	}
+	ctx = telemetry.WithHTTPClientOperation(ctx, "integration.work_accounts.request")
 	request, err := http.NewRequestWithContext(ctx, input.Method, u.String(), bytes.NewReader(body))
 	if err != nil {
 		return connector.HTTPResponse{}, invalid

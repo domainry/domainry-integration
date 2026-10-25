@@ -21,6 +21,7 @@ import (
 	shareddefinition "github.com/domainry/domainry-foundation/definition"
 	"github.com/domainry/domainry-foundation/logging"
 	"github.com/domainry/domainry-foundation/processhost"
+	"github.com/domainry/domainry-foundation/telemetry"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
 	saasassembly "github.com/domainry/domainry-integration/internal/assembly/saas"
@@ -79,7 +80,7 @@ func run() (runErr error) {
 		path = "integration.db"
 	}
 	startupFailure = logging.Failure{Stage: "database_initialize", Dependency: "integration_database"}
-	database, err := sql.Open("sqlite", path)
+	database, err := telemetry.OpenObservedSQL("sqlite", path, "runtime", nil)
 	if err != nil {
 		return fmt.Errorf("open Integration database: %w", err)
 	}

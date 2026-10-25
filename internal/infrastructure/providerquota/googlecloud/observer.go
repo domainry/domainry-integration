@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/domainry/domainry-foundation/telemetry"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -112,6 +113,7 @@ func New(ctx context.Context, config Config) (*Observer, error) {
 		copy.Timeout = timeout
 		client = &copy
 	}
+	client = telemetry.InstrumentHTTPClientWithOptions(client, "domainry.integration.google_quota", telemetry.HTTPClientInstrumentationOptions{DisableDiagnosticContent: true})
 	return &Observer{projectID: projectID, services: services, baseURL: baseURL, client: client}, nil
 }
 
@@ -367,7 +369,8 @@ func (o *Observer) listTimeSeries(ctx context.Context, service, metricType strin
 		if pageToken != "" {
 			query.Set("pageToken", pageToken)
 		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+query.Encode(), nil)
+		requestContext := telemetry.WithHTTPClientOperation(ctx, "integration.google_quota.list_time_series")
+		request, err := http.NewRequestWithContext(requestContext, http.MethodGet, endpoint+"?"+query.Encode(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("build Google Monitoring quota request: %w", err)
 		}

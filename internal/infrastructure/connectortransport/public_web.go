@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	connector "github.com/domainry/domainry-connector-sdk"
+	"github.com/domainry/domainry-foundation/telemetry"
 )
 
 // PublicWeb owns the deployment's proxy network policy. It never fetches a
@@ -43,7 +44,8 @@ func NewPublicWeb(origin string) (*PublicWeb, error) {
 			return nil, invalid
 		}
 	}
-	return &PublicWeb{origin: strings.TrimSuffix(u.String(), "/"), client: &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	client := &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &PublicWeb{origin: strings.TrimSuffix(u.String(), "/"), client: telemetry.InstrumentHTTPClient(client, "domainry.integration.public_web")}, nil
 }
 
 func (*PublicWeb) ExecuteSQL(context.Context, connector.SQLRequest) (connector.SQLResult, error) {
@@ -79,6 +81,7 @@ func (t *PublicWeb) RoundTripHTTP(ctx context.Context, input connector.HTTPReque
 		}
 		headers.Set("Authorization", values[0])
 	}
+	ctx = telemetry.WithHTTPClientOperation(ctx, "integration.public_web.request")
 	request, err := http.NewRequestWithContext(ctx, input.Method, input.URL, bytes.NewReader(input.Body))
 	if err != nil {
 		return connector.HTTPResponse{}, invalid
