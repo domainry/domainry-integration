@@ -46,17 +46,19 @@ type ProviderCallRequest struct {
 	Source InvocationSource `json:"source,omitempty"`
 	// ReadExpectation is set only by owner-side account-read orchestration.
 	// JSON callers cannot supply or override this pre-I/O consistency guard.
-	ReadExpectation   *ProviderReadExpectation `json:"-"`
-	RequestID         string                   `json:"request_id"`
-	WorkspaceID       string                   `json:"workspace_id"`
-	ConnectorKey      string                   `json:"connector_key"`
-	ConnectionKey     string                   `json:"connection_key,omitempty"`
-	Operation         string                   `json:"operation"`
-	Payload           json.RawMessage          `json:"payload"`
-	PersistenceMode   string                   `json:"persistence_mode,omitempty"`
-	MaskedDestination string                   `json:"masked_destination,omitempty"`
-	ActorID           string                   `json:"actor_id,omitempty"`
-	RoleKey           string                   `json:"role_key,omitempty"`
+	ReadExpectation    *ProviderReadExpectation `json:"-"`
+	RequestID          string                   `json:"request_id"`
+	WorkspaceID        string                   `json:"workspace_id"`
+	ConnectorKey       string                   `json:"connector_key"`
+	ConnectionKey      string                   `json:"connection_key,omitempty"`
+	Operation          string                   `json:"operation"`
+	Payload            json.RawMessage          `json:"payload"`
+	Content            *ProviderCallContent     `json:"content,omitempty"`
+	ExpectedConnection *ProviderCallTarget      `json:"expected_connection,omitempty"`
+	PersistenceMode    string                   `json:"persistence_mode,omitempty"`
+	MaskedDestination  string                   `json:"masked_destination,omitempty"`
+	ActorID            string                   `json:"actor_id,omitempty"`
+	RoleKey            string                   `json:"role_key,omitempty"`
 }
 
 type InvocationSource struct {

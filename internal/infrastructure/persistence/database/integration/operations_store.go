@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -33,6 +34,10 @@ func NewOperationsStore(database modulehost.Database, dialect modulehost.Dialect
 }
 
 func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.ProviderCallRequest) (integrationmodel.ProviderCallResult, error) {
+	if err := request.ValidateContent(); err != nil {
+		return integrationmodel.ProviderCallResult{}, err
+	}
+	request = freezeProviderContentRequest(request)
 	if request.Source.RecordID != "" {
 		if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, request.WorkspaceID, subjectFenceReference{"resource", request.Source.ObjectKey, request.Source.RecordID}); err != nil {
 			return integrationmodel.ProviderCallResult{}, err
@@ -47,11 +52,16 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 	if err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
-	if current, err := s.GetInvocation(ctx, request.WorkspaceID, invocationID); err == nil && current.Status == "succeeded" {
-		if request.PersistenceMode == integrationmodel.ProviderCallPersistenceSensitive {
-			return integrationmodel.ProviderCallResult{Invocation: current}, nil
+	if current, err := s.GetInvocation(ctx, request.WorkspaceID, invocationID); err == nil {
+		if !sameGuardedProviderRequest(request, current) {
+			return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration guarded invocation identity conflicts")
 		}
-		return integrationmodel.ProviderCallResult{Invocation: current, Response: invocationResponse(current.Metadata)}, nil
+		if current.Status == "succeeded" {
+			if request.PersistenceMode == integrationmodel.ProviderCallPersistenceSensitive {
+				return integrationmodel.ProviderCallResult{Invocation: current}, nil
+			}
+			return integrationmodel.ProviderCallResult{Invocation: current, Response: invocationResponse(current.Metadata)}, nil
+		}
 	}
 	connection, err := s.delivery.connection(ctx, integrationmodel.DeliveryRequest{WorkspaceID: request.WorkspaceID, ConnectorKey: request.ConnectorKey, ConnectionKey: request.ConnectionKey})
 	if err != nil {
@@ -68,6 +78,9 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 	if operation.Mode != connector.ModeCall {
 		return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration operation %s is not a synchronous call", request.Operation)
 	}
+	if !providerTargetMatches(request.ExpectedConnection, connection, operation) {
+		return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration provider target changed before execution")
+	}
 	if expected := request.ReadExpectation; expected != nil {
 		if expected.ConnectionUpdatedAt == "" || expected.ConnectionUpdatedAt != connection.UpdatedAt || expected.ProviderKey != connection.ProviderKey || expected.ContractSHA256 != operation.ContractSHA256 || operation.Reliability.Effect != connector.EffectRead {
 			return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration account read target changed before execution")
@@ -77,17 +90,28 @@ func (s *OperationsStore) Call(ctx context.Context, request integrationmodel.Pro
 	if err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
+	if request.ExpectedConnection != nil {
+		current, err := s.delivery.connection(ctx, integrationmodel.DeliveryRequest{WorkspaceID: request.WorkspaceID, ConnectorKey: request.ConnectorKey, ConnectionKey: request.ConnectionKey})
+		if err != nil || !providerTargetMatches(request.ExpectedConnection, current, operation) {
+			return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration provider target changed during preparation")
+		}
+	}
 	deliveryRequest := integrationmodel.DeliveryRequest{MessageID: request.RequestID, DeduplicationKey: request.RequestID, WorkspaceID: request.WorkspaceID, ConnectorKey: request.ConnectorKey, ConnectionKey: request.ConnectionKey, Operation: request.Operation, Payload: request.Payload}
 	if err := s.prepareProviderInvocation(ctx, invocationID, deliveryRequest, connection, request); err != nil {
 		return integrationmodel.ProviderCallResult{}, err
 	}
 	started := time.Now()
-	result, callErr := provider.Call(ctx, connector.CallRequest{
+	callRequest := connector.CallRequest{
 		ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, OperationKey: request.Operation,
 		ContractSHA256: operation.ContractSHA256, Mode: operation.Mode, Connection: connector.Connection{Key: connection.Key, WorkspaceID: connection.WorkspaceID, ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, Name: "", Status: connection.Status, Config: connection.Config, SecretRefs: connection.SecretRefs},
 		Payload: request.Payload, RequestRef: request.RequestID, Secrets: resolvedSecrets.Values,
 		Principal: connector.Principal{UserID: request.ActorID, RoleKey: request.RoleKey, WorkspaceID: request.WorkspaceID, RequestID: request.RequestID, IsAuthenticated: strings.TrimSpace(request.ActorID) != ""},
-	})
+	}
+	if content := request.Content; content != nil {
+		callRequest.Content, callRequest.ContentLength = bytes.NewReader(content.Data), int64(len(content.Data))
+		callRequest.ContentSHA256, callRequest.ContentType = content.SHA256, content.ContentType
+	}
+	result, callErr := provider.Call(ctx, callRequest)
 	callErr = s.delivery.persistProviderSecretUpdates(ctx, request.WorkspaceID, connection.SecretRefs, resolvedSecrets.Versions, result.SecretUpdates, callErr)
 	status, errorText := "succeeded", ""
 	if callErr != nil {
@@ -174,7 +198,7 @@ func (s *OperationsStore) prepareProviderInvocation(ctx context.Context, invocat
 }
 
 func sensitiveInvocationMetadata(request integrationmodel.ProviderCallRequest) map[string]any {
-	return map[string]any{
+	value := map[string]any{
 		"kind":                "operation-v1",
 		"actor_id":            request.ActorID,
 		"source":              request.Source,
@@ -182,6 +206,10 @@ func sensitiveInvocationMetadata(request integrationmodel.ProviderCallRequest) m
 		"payload_persistence": integrationmodel.ProviderCallPersistenceSensitive,
 		"masked_destination":  strings.TrimSpace(request.MaskedDestination),
 	}
+	if identity := request.GuardedCallSHA256(); identity != "" {
+		value[guardedCallIdentityKey] = identity
+	}
+	return value
 }
 
 func (s *OperationsStore) ListInvocations(ctx context.Context, filter integrationmodel.InvocationQuery) ([]integrationmodel.Invocation, error) {

@@ -89,6 +89,9 @@ func (s *Service) Call(ctx context.Context, value integrationmodel.ProviderCallR
 	if value.PersistenceMode == integrationmodel.ProviderCallPersistenceSensitive && strings.TrimSpace(value.MaskedDestination) == "" {
 		return integrationmodel.ProviderCallResult{}, fmt.Errorf("Integration sensitive provider call masked destination is required")
 	}
+	if err := value.ValidateContent(); err != nil {
+		return integrationmodel.ProviderCallResult{}, err
+	}
 	return s.operations.Call(ctx, value)
 }
 func (s *Service) ListInvocations(ctx context.Context, query integrationmodel.InvocationQuery) ([]integrationmodel.Invocation, error) {

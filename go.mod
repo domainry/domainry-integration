@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/domainry/domainry-foundation v0.2.21
 	github.com/domainry/domainry-identity-sdk v0.1.45
-	github.com/domainry/domainry-integration-sdk v0.1.28
+	github.com/domainry/domainry-integration-sdk v0.1.29
 	github.com/domainry/domainry-metadata-sdk v0.1.20
 	github.com/domainry/domainry-orm v0.1.34
 	go.uber.org/zap v1.27.1
