@@ -30,6 +30,11 @@ type ManagementStore struct {
 	delivery         *DeliveryStore
 	subjectLifecycle *SubjectLifecyclePersistence
 	providerQuota    ProviderQuotaObserver
+	providerStreams  providerStreamChangeNotifier
+}
+
+type providerStreamChangeNotifier interface {
+	NotifyProviderStreamChange(workspaceID, connectionKey string)
 }
 
 // ProviderQuotaObserver supplies installation-owned official provider quota
@@ -44,6 +49,19 @@ func NewManagementStore(database modulehost.Database, dialect modulehost.Dialect
 
 func (s *ManagementStore) ConfigureProviderQuotaObserver(observer ProviderQuotaObserver) {
 	s.providerQuota = observer
+}
+
+func (s *ManagementStore) ConfigureProviderStreamChangeNotifier(notifier providerStreamChangeNotifier) {
+	s.providerStreams = notifier
+}
+
+func (s *ManagementStore) notifyProviderStreamChanges(workspaceID string, connectionKeys ...string) {
+	if s.providerStreams == nil {
+		return
+	}
+	for _, connectionKey := range connectionKeys {
+		s.providerStreams.NotifyProviderStreamChange(strings.TrimSpace(workspaceID), strings.TrimSpace(connectionKey))
+	}
 }
 
 func (s *ManagementStore) withTransaction(ctx context.Context, operation func(*ManagementStore) error) error {
@@ -203,6 +221,9 @@ func (s *ManagementStore) UpsertConnection(ctx context.Context, workspaceID, key
 			value, operationErr = store.UpsertConnection(ctx, workspaceID, key, actorID, input)
 			return operationErr
 		})
+		if err == nil {
+			s.notifyProviderStreamChanges(workspaceID, key)
+		}
 		return value, err
 	}
 	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, workspaceID, subjectFenceReference{"connection", "", key}, subjectFenceReference{"subject", "", actorID}); err != nil {
@@ -311,7 +332,11 @@ func (s *ManagementStore) DeleteConnection(ctx context.Context, workspaceID, key
 		return err
 	}
 	if s.transactions != nil {
-		return s.withTransaction(ctx, func(store *ManagementStore) error { return store.DeleteConnection(ctx, workspaceID, key) })
+		err := s.withTransaction(ctx, func(store *ManagementStore) error { return store.DeleteConnection(ctx, workspaceID, key) })
+		if err == nil {
+			s.notifyProviderStreamChanges(workspaceID, key)
+		}
+		return err
 	}
 	if err := s.requireScopedCandidate(ctx, "_integration_connections", "connection_key", workspaceID, key); err != nil {
 		return err
@@ -369,6 +394,9 @@ func (s *ManagementStore) SetConnectionStatus(ctx context.Context, workspaceID, 
 			value, operationErr = store.SetConnectionStatus(ctx, workspaceID, key, status, "")
 			return operationErr
 		})
+		if err == nil {
+			s.notifyProviderStreamChanges(workspaceID, key)
+		}
 		return value, err
 	}
 	status, err := requiredOwnerValue("connection status", status)

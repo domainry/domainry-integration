@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-orm/query"
@@ -83,11 +84,19 @@ func (s *ManagementStore) UpsertSecret(ctx context.Context, workspaceID, key, ac
 	}
 	if s.transactions != nil {
 		var value integrationsdk.Secret
+		var affected []string
 		err := s.withTransaction(ctx, func(store *ManagementStore) error {
 			var operationErr error
 			value, operationErr = store.UpsertSecret(ctx, workspaceID, key, actorID, input)
+			if operationErr != nil {
+				return operationErr
+			}
+			affected, operationErr = restartProviderStreamsReferencingSecret(ctx, store.database, store.dialect, store.subjectLifecycle, workspaceID, key, time.Now().UTC())
 			return operationErr
 		})
+		if err == nil {
+			s.notifyProviderStreamChanges(workspaceID, affected...)
+		}
 		return value, err
 	}
 	if err := guardSubjectWrite(ctx, s.database, s.dialect, s.subjectLifecycle, workspaceID, subjectFenceReference{"secret", "", key}, subjectFenceReference{"subject", "", actorID}); err != nil {
@@ -198,11 +207,19 @@ func (s *ManagementStore) TransitionSecret(ctx context.Context, workspaceID, key
 	}
 	if s.transactions != nil {
 		var value integrationsdk.Secret
+		var affected []string
 		err := s.withTransaction(ctx, func(store *ManagementStore) error {
 			var operationErr error
 			value, operationErr = store.TransitionSecret(ctx, workspaceID, key, transition, "")
+			if operationErr != nil {
+				return operationErr
+			}
+			affected, operationErr = restartProviderStreamsReferencingSecret(ctx, store.database, store.dialect, store.subjectLifecycle, workspaceID, key, time.Now().UTC())
 			return operationErr
 		})
+		if err == nil {
+			s.notifyProviderStreamChanges(workspaceID, affected...)
+		}
 		return value, err
 	}
 	if _, err := s.getSecret(ctx, workspaceID, key); err != nil {
@@ -249,6 +266,7 @@ func (s *ManagementStore) RotateSecret(ctx context.Context, workspaceID, key, ac
 		return integrationsdk.Secret{}, err
 	}
 	var value integrationsdk.Secret
+	var affected []string
 	err := s.withTransaction(ctx, func(store *ManagementStore) error {
 		var operationErr error
 		value, operationErr = store.UpsertSecret(ctx, workspaceID, key, actorID, input)
@@ -256,7 +274,14 @@ func (s *ManagementStore) RotateSecret(ctx context.Context, workspaceID, key, ac
 			return operationErr
 		}
 		value, operationErr = store.TransitionSecret(ctx, workspaceID, value.Key, "rotate", actorID)
+		if operationErr != nil {
+			return operationErr
+		}
+		affected, operationErr = restartProviderStreamsReferencingSecret(ctx, store.database, store.dialect, store.subjectLifecycle, workspaceID, key, time.Now().UTC())
 		return operationErr
 	})
+	if err == nil {
+		s.notifyProviderStreamChanges(workspaceID, affected...)
+	}
 	return value, err
 }

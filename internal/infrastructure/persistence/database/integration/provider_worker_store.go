@@ -24,6 +24,7 @@ const (
 	providerRunTable      = "_integration_provider_runs"
 	providerRunKindState  = "state"
 	providerRunKindCommit = "commit"
+	providerRunKindStream = "stream"
 
 	// Provider I/O is independent across connections. Keep the execution pool
 	// bounded so one process can overlap vendor latency without creating an
@@ -45,10 +46,13 @@ type WorkerStore struct {
 	schedulerCursor   string
 	metricCleanupMu   sync.Mutex
 	metricCleanupAt   time.Time
+	streamMu          sync.Mutex
+	streamWake        chan struct{}
+	streamSessions    map[int64]providerStreamSession
 }
 
 func NewWorkerStore(database modulehost.Database, dialect modulehost.Dialect, delivery *DeliveryStore, operations *OperationsStore, workerID string, subjectLifecycle ...*SubjectLifecyclePersistence) *WorkerStore {
-	return &WorkerStore{database: database, dialect: dialect, delivery: delivery, operations: operations, workerID: strings.TrimSpace(workerID) + ":integration", subjectLifecycle: subjectLifecyclePersistence(subjectLifecycle)}
+	return &WorkerStore{database: database, dialect: dialect, delivery: delivery, operations: operations, workerID: strings.TrimSpace(workerID) + ":integration", subjectLifecycle: subjectLifecyclePersistence(subjectLifecycle), streamWake: make(chan struct{}, 1), streamSessions: map[int64]providerStreamSession{}}
 }
 
 // SetEventWorkNotifier is assembly-time wiring, before workers are started.
@@ -826,6 +830,13 @@ func (s *WorkerStore) ProcessDueCredentialExpirations(ctx context.Context, limit
 			return processed, err
 		}
 		if affected, _ := result.RowsAffected(); affected == 1 {
+			connections, restartErr := restartProviderStreamsReferencingSecret(ctx, s.database, s.dialect, s.subjectLifecycle, value.workspaceID, value.key, s.now())
+			if restartErr != nil {
+				return processed, restartErr
+			}
+			for _, connectionKey := range connections {
+				s.NotifyProviderStreamChange(value.workspaceID, connectionKey)
+			}
 			processed++
 		}
 	}

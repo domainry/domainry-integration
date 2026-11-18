@@ -66,7 +66,7 @@ func materializeProviderTasks(ctx context.Context, database sqlhost.DBTX, dialec
 			return err
 		}
 	}
-	return nil
+	return materializeProviderStreams(ctx, database, dialect, providers, subjectLifecycle, connection, now)
 }
 
 func listMaterializedProviderTasks(ctx context.Context, database sqlhost.DBTX, dialect modulehost.Dialect, workspaceID, connectionKey string) (map[string]materializedProviderTask, error) {
@@ -138,7 +138,7 @@ func cancelProviderRunsForConnection(ctx context.Context, database sqlhost.DBTX,
 		Where(query.And(
 			subjectRowsWriteAllowed(subjectLifecycle, dialect, workspaceID, providerRunTable, ""),
 			query.Equal("workspace_id", workspaceID), query.Equal("connection_key", connectionKey),
-			query.In("run_kind", providerRunKindState, providerRunKindCommit), query.NotIn("status", "cancelled", "succeeded"),
+			query.In("run_kind", providerRunKindState, providerRunKindCommit, providerRunKindStream), query.NotIn("status", "cancelled", "succeeded"),
 		)).Build()
 	if err != nil {
 		return err

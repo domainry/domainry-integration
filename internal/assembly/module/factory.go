@@ -121,6 +121,7 @@ func OpenHosted(ctx context.Context, application integrationsdk.ApplicationRef, 
 		operations,
 	)
 	management := integrationpersistence.NewManagementStore(host.Database(), host.Dialect(), host.SecretCipher(), delivery, subjectLifecyclePersistence)
+	management.ConfigureProviderStreamChangeNotifier(workers)
 	if strings.TrimSpace(options.GoogleQuotaProjectID) != "" {
 		quotaObserver, quotaErr := googlequota.New(ctx, googlequota.Config{
 			ProjectID: options.GoogleQuotaProjectID, Services: options.GoogleQuotaServices,
