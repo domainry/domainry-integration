@@ -166,6 +166,15 @@ func SynchronizeEventMappingDefinitions(ctx context.Context, definitions metadat
 				SourceKind: "manifest_requirement", SourceID: workspaceID, PublishedBy: "integration_requirements",
 			})
 		}
+		revisionPayload, err := json.Marshal(snapshot.Definitions)
+		if err != nil {
+			return fmt.Errorf("encode Integration event mapping revision for workspace %q: %w", workspaceID, err)
+		}
+		revision := sha256.Sum256(revisionPayload)
+		snapshot.SchemaVersion = integrationEventMappingSchemaVersion + "-" + hex.EncodeToString(revision[:16])
+		for index := range snapshot.Definitions {
+			snapshot.Definitions[index].SchemaVersion = snapshot.SchemaVersion
+		}
 		if err := definitions.ReplaceSourceSnapshot(ctx, snapshot); err != nil {
 			return fmt.Errorf("replace Integration event mappings for workspace %q: %w", workspaceID, err)
 		}
