@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -191,7 +192,9 @@ func (h *handler) listInvocations(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "auth.principal_required")
 		return
 	}
-	values, err := h.operations.ListInvocations(r.Context(), integrationsdk.InvocationQuery{WorkspaceID: p.WorkspaceID, ConnectorKey: r.URL.Query().Get("connector_key"), ConnectionKey: r.URL.Query().Get("connection_key"), Operation: r.URL.Query().Get("operation"), Status: r.URL.Query().Get("status"), CreatedFrom: r.URL.Query().Get("created_from")})
+	params := r.URL.Query()
+	limit, _ := strconv.Atoi(params.Get("limit"))
+	values, err := h.operations.ListInvocations(r.Context(), integrationsdk.InvocationQuery{WorkspaceID: p.WorkspaceID, ConnectorKey: params.Get("connector_key"), ConnectionKey: params.Get("connection_key"), Operation: params.Get("operation"), Status: params.Get("status"), CreatedFrom: params.Get("created_from"), Limit: limit})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "backend.integration.invocation_list_failed")
 		return

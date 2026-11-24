@@ -706,7 +706,7 @@ func (s *WorkerStore) failedInvocationsAcrossWorkspaces(ctx context.Context, lim
 	// Account writes have their own receipt lifecycle and never enter automatic
 	// provider reconciliation, even if a future registry changes its policy.
 	// Filter before LIMIT so failed account writes cannot starve legacy work.
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns(invocationColumns()...).Where(query.And(query.NotLike("invocation_id", "account-write:%"), query.Or(
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns(invocationColumns()...).Where(query.And(query.NotLike("invocation_id", "account-write:%"), query.NotEqual("operation", connectionTestOperation), query.Or(
 		query.Equal("status", "failed"), query.And(query.Equal("status", "reconciling"), query.LessThanOrEqual("updated_at", now.Add(-time.Minute).UnixMilli())),
 	))).OrderBy(query.Ascending("updated_at")).Limit(limit * 4).Build()
 	if err != nil {

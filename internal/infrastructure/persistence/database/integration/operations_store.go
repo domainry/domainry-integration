@@ -221,6 +221,11 @@ func (s *OperationsStore) ListInvocations(ctx context.Context, filter integratio
 		return nil, err
 	}
 	predicates := []query.Predicate{where}
+	// Explicit management probes have their own history. Keep unfiltered
+	// business invocation lists and health calculations independent of them.
+	if strings.TrimSpace(filter.Operation) == "" {
+		predicates = append(predicates, query.NotEqual("operation", connectionTestOperation))
+	}
 	for column, value := range map[string]string{"connector_key": filter.ConnectorKey, "connection_key": filter.ConnectionKey, "operation": filter.Operation, "status": filter.Status} {
 		if value = strings.TrimSpace(value); value != "" {
 			predicates = append(predicates, query.Equal(column, value))
@@ -233,7 +238,7 @@ func (s *OperationsStore) ListInvocations(ctx context.Context, filter integratio
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns(invocationColumns()...).Where(query.And(predicates...)).OrderBy(query.Descending("created_at")).Limit(limit).Build()
+	statement, args, err := query.NewSelectBuilder(s.dialect, "_integration_invocations").Columns(invocationColumns()...).Where(query.And(predicates...)).OrderBy(query.Descending("created_at"), query.Descending("id")).Limit(limit).Build()
 	if err != nil {
 		return nil, err
 	}

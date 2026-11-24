@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	connector "github.com/domainry/domainry-connector-sdk"
 	integrationsdk "github.com/domainry/domainry-integration-sdk"
 	"github.com/domainry/domainry-integration-sdk/modulehost"
+	integrationmodel "github.com/domainry/domainry-integration/internal/domain/integration/model"
 	"github.com/domainry/domainry-orm/query"
 	"github.com/domainry/domainry-orm/sqlhost"
 )
@@ -459,6 +461,28 @@ func (s *ManagementStore) TestConnection(ctx context.Context, workspaceID, key s
 	if err != nil {
 		return integrationsdk.ConnectionTestResult{}, err
 	}
+	receiptID, err := randomOwnerToken("connection_test_")
+	if err != nil {
+		return integrationsdk.ConnectionTestResult{}, err
+	}
+	started := time.Now().UTC()
+	result, probeErr := s.runConnectionTest(ctx, connection, receiptID)
+	scope, _ := integrationmodel.AccessScopeFromContext(ctx)
+	// Personal account probes are not part of workspace management history.
+	if scope.PermissionKey == integrationsdk.ActionIntegrationConnectionAccountsTest {
+		return result, probeErr
+	}
+	if result.Receipt.Status == "" {
+		result.Receipt = integrationsdk.DeliveryReceipt{MessageID: receiptID, Status: integrationsdk.DeliveryStatusFailed}
+	}
+	if err := s.recordConnectionTest(ctx, connection, result.Receipt, started, probeErr); err != nil {
+		return result, errors.Join(probeErr, err)
+	}
+	return result, probeErr
+}
+
+func (s *ManagementStore) runConnectionTest(ctx context.Context, connection integrationsdk.Connection, receiptID string) (integrationsdk.ConnectionTestResult, error) {
+	workspaceID := connection.WorkspaceID
 	if s.delivery == nil {
 		return integrationsdk.ConnectionTestResult{}, fmt.Errorf("Integration delivery is unavailable")
 	}
@@ -479,7 +503,7 @@ func (s *ManagementStore) TestConnection(ctx context.Context, workspaceID, key s
 	}
 	resolvedSecrets, err := s.delivery.resolveProviderSecrets(ctx, workspaceID, connection.SecretRefs)
 	if err != nil {
-		return integrationsdk.ConnectionTestResult{Connection: connection, Operation: "test_connection"}, err
+		return integrationsdk.ConnectionTestResult{Connection: connection, Operation: connectionTestOperation}, err
 	}
 	result, err := tester.TestConnection(ctx, connector.TestConnectionRequest{
 		ConnectorKey: connection.ConnectorKey, ProviderKey: connection.ProviderKey, Connection: providerConnection,
@@ -493,8 +517,8 @@ func (s *ManagementStore) TestConnection(ctx context.Context, workspaceID, key s
 	if err != nil || !result.Connected {
 		status = integrationsdk.DeliveryStatusFailed
 	}
-	receipt := integrationsdk.DeliveryReceipt{MessageID: ownerID("connection_test_", workspaceID, key+"\x00"+ownerNow()), Status: status}
-	value := integrationsdk.ConnectionTestResult{Connection: connection, Operation: "test_connection", Response: append(json.RawMessage(nil), result.Details...), Receipt: receipt}
+	receipt := integrationsdk.DeliveryReceipt{MessageID: receiptID, Status: status}
+	value := integrationsdk.ConnectionTestResult{Connection: connection, Operation: connectionTestOperation, Response: append(json.RawMessage(nil), result.Details...), Receipt: receipt}
 	completedAt := time.Now().UTC()
 	if code, ok := connector.ProviderErrorCodeOf(err); ok {
 		if code == "google.http_429" {
