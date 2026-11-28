@@ -420,17 +420,7 @@ func (s *OperationsStore) eventMapping(ctx context.Context, event integrationmod
 
 func (s *OperationsStore) updateEventStatus(ctx context.Context, event integrationmodel.Event, status, errorText string) (integrationmodel.Event, error) {
 	now := time.Now().UTC()
-	builder := query.NewUpdateBuilder(s.dialect, "_integration_events").Set("status", status).Set("error", errorText).Set("last_attempt_at", now.UnixMilli()).Set("lease_owner", "").Set("lease_expires_at", int64(0)).Set("updated_at", now.UnixMilli())
-	if status == "failed" {
-		attempt := event.AttemptCount + 1
-		if attempt >= 5 {
-			builder = builder.Set("status", "dead_letter").Set("attempt_count", attempt).Set("next_retry_at", int64(0))
-		} else {
-			builder = builder.Set("attempt_count", attempt).Set("next_retry_at", now.Add(integrationEventRetryDelay(attempt)).UnixMilli())
-		}
-	} else {
-		builder = builder.Set("next_retry_at", int64(0))
-	}
+	builder := s.eventStatusMutation(event, status, errorText, now)
 	where, err := scopedWhere(ctx, event.WorkspaceID, "", "", query.Equal("event_id", event.EventID))
 	if err != nil {
 		return event, err
@@ -443,6 +433,25 @@ func (s *OperationsStore) updateEventStatus(ctx context.Context, event integrati
 		return event, err
 	}
 	return s.GetEvent(ctx, event.WorkspaceID, event.EventID)
+}
+
+func (s *OperationsStore) eventStatusMutation(event integrationmodel.Event, status, errorText string, now time.Time) *query.UpdateBuilder {
+	finalStatus := status
+	attempt := event.AttemptCount
+	nextRetryAt := int64(0)
+	if status == "failed" {
+		attempt++
+		if attempt >= 5 {
+			finalStatus = "dead_letter"
+		} else {
+			nextRetryAt = now.Add(integrationEventRetryDelay(attempt)).UnixMilli()
+		}
+	}
+	builder := query.NewUpdateBuilder(s.dialect, "_integration_events").Set("status", finalStatus).Set("error", errorText).Set("last_attempt_at", now.UnixMilli()).Set("lease_owner", "").Set("lease_expires_at", int64(0)).Set("updated_at", now.UnixMilli()).Set("next_retry_at", nextRetryAt)
+	if status == "failed" {
+		builder = builder.Set("attempt_count", attempt)
+	}
+	return builder
 }
 
 func integrationEventRetryDelay(attempt int) time.Duration {
